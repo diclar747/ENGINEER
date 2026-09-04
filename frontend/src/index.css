@@ -1,0 +1,128 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/*
+ * Theme tokens. :root = LIGHT (default). .dark = DARK — and the dark values are
+ * the exact original hard-coded palette, so switching to dark reproduces the
+ * previous look 1:1. Components use the semantic Tailwind colors (bg-app,
+ * bg-card, border-line, text-fg, text-fg-muted, …) defined in tailwind.config.js.
+ */
+:root {
+  color-scheme: light;
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+  --safe-top: env(safe-area-inset-top, 0px);
+
+  --c-app: 247 249 252;      /* page background            */
+  --c-card: 255 255 255;     /* cards / raised surfaces     */
+  --c-panel: 241 245 249;    /* inset panels (slate-100)    */
+  --c-muted: 241 245 249;    /* muted fills (slate-100)     */
+  --c-line: 226 232 240;     /* borders / dividers (slate-200) */
+  --c-fg: 15 23 42;          /* primary text (slate-900)    */
+  --c-fg-soft: 51 65 85;     /* secondary text (slate-700)  */
+  --c-fg-muted: 100 116 139; /* muted text (slate-500)      */
+  --c-fg-faint: 148 163 184; /* faint text (slate-400)      */
+
+  --glow-a: rgba(13, 148, 136, 0.10);
+  --glow-b: rgba(2, 132, 199, 0.07);
+  --scroll-track: #eef2f7;
+  --scroll-thumb: #cbd5e1;
+}
+
+.dark {
+  color-scheme: dark;
+
+  --c-app: 8 14 26;          /* #080e1a */
+  --c-card: 12 22 40;        /* #0c1628 */
+  --c-panel: 8 19 37;        /* #081325 */
+  --c-muted: 30 41 59;       /* slate-800 */
+  --c-line: 30 41 59;        /* slate-800 */
+  --c-fg: 241 245 249;       /* slate-100 */
+  --c-fg-soft: 203 213 225;  /* slate-300 */
+  --c-fg-muted: 148 163 184; /* slate-400 */
+  --c-fg-faint: 100 116 139; /* slate-500 */
+
+  --glow-a: rgba(13, 148, 136, 0.08);
+  --glow-b: rgba(2, 132, 199, 0.06);
+  --scroll-track: #080e1a;
+  --scroll-thumb: #1e293b;
+}
+
+html,
+body,
+#root {
+  min-height: 100%;
+  touch-action: manipulation;
+}
+
+body {
+  @apply bg-app text-fg font-sans antialiased;
+  background-image:
+    radial-gradient(at 10% 10%, var(--glow-a) 0px, transparent 50%),
+    radial-gradient(at 90% 90%, var(--glow-b) 0px, transparent 50%);
+  background-attachment: fixed;
+  transition: background-color 0.2s ease, color 0.2s ease;
+}
+
+/* Safe-area insets helper */
+.pb-safe {
+  padding-bottom: calc(1rem + var(--safe-bottom));
+}
+
+.pt-safe {
+  padding-top: calc(0.5rem + var(--safe-top));
+}
+
+/* Thin modern health scrollbars */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--scroll-thumb) var(--scroll-track);
+  -webkit-tap-highlight-color: transparent;
+}
+
+*::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+*::-webkit-scrollbar-track {
+  background: var(--scroll-track);
+}
+
+*::-webkit-scrollbar-thumb {
+  background-color: var(--scroll-thumb);
+  border-radius: 9999px;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background-color: #0d9488;
+}
+
+/* Remove number input spinners */
+input[type='number']::-webkit-outer-spin-button,
+input[type='number']::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+/* Glass card utility */
+.glass-card {
+  @apply bg-card/80 backdrop-blur-md border border-line shadow-card-soft;
+}
+
+.glass-card-hover {
+  @apply transition-all duration-200 hover:border-teal-500/30 hover:shadow-health-glow;
+}
+
+/* Health Badge styles */
+.badge-health {
+  @apply px-2.5 py-1 rounded-full bg-teal-500/10 border border-teal-500/25 text-teal-600 dark:text-teal-300 text-xs font-semibold;
+}
+
+.badge-vital {
+  @apply px-2.5 py-1 rounded-full bg-rose-500/15 border border-rose-500/30 text-rose-600 dark:text-rose-300 text-xs font-bold;
+}
+
+.badge-info {
+  @apply px-2.5 py-1 rounded-full bg-sky-500/10 border border-sky-500/25 text-sky-600 dark:text-sky-300 text-xs font-medium;
+}

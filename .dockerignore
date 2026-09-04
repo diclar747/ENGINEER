@@ -1,0 +1,18 @@
+# Root build context is only used for the backend image (root Dockerfile).
+.git
+**/node_modules
+**/dist
+**/build
+**/.git
+**/.env
+!**/.env.example
+**/auth_info_baileys
+**/uploads
+**/exports
+**/.tess-cache
+**/.vite
+frontend
+docs
+.github
+*.md
+*.log

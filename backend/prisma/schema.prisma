@@ -1,0 +1,301 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Language {
+  ES
+  GN
+}
+
+enum UserStatus {
+  PENDING_PAYMENT
+  ACTIVE
+  EXPIRED
+  CANCELLED
+  PURGED
+}
+
+enum StudyType {
+  LABORATORY
+  XRAY
+  TOMOGRAPHY
+  PRESCRIPTION
+  CARDIOLOGY
+  OTHER
+}
+
+enum PlanType {
+  MONTHLY
+  ANNUAL
+}
+
+enum CountryCode {
+  PARAGUAY
+  BRASIL
+  OTHER
+}
+
+enum PaymentGateway {
+  MERCADOPAGO
+  TIGO_MONEY
+  PIX
+  BANCARD
+  BANK_TRANSFER
+  WINSAP
+}
+
+enum PaymentStatus {
+  PENDING
+  PAID
+  EXPIRED
+  FAILED
+}
+
+enum ScanMode {
+  EMERGENCY_NO_PIN
+  CONSULTATION_PIN
+}
+
+enum NotificationStage {
+  NONE
+  D_MINUS_5
+  D_0
+  D_PLUS_3
+  D_PLUS_4_CANCELLED
+  PURGED
+}
+
+model User {
+  id                    String              @id @default(uuid())
+  phoneNumber           String              @unique
+  // Full WhatsApp JID last seen for this user (e.g. "5959xxxxxxx@s.whatsapp.net" or,
+  // for WhatsApp's newer privacy-routed contacts, "<lid>@lid"). `phoneNumber` alone is
+  // not always enough to reach a user back — some contacts are only addressable via
+  // their @lid identifier. Null until their first inbound WhatsApp message.
+  whatsappJid           String?
+  language              Language            @default(ES)
+  fullName              String?
+  ciNumber              String?
+  ciFrontUrl            String?
+  ciBackUrl             String?
+  dateOfBirth           String?             // DD/MM/YYYY, extracted from the CI photo
+  birthPlace            String?             // extracted from the CI photo
+  sex                   String?             // "M" / "F", extracted from the CI photo
+  bloodType             String?             // e.g. "O+", "A-", "AB+"
+  emergencyConditions   String?             // JSON array string: ["Diabetes", "Epilepsia"]
+  severeAllergies       String?             // e.g. "Penicilina, Maní"
+  contraindicatedMeds   String?             // e.g. "Ibuprofeno, Anticoagulantes"
+  address               String?
+  email                 String?
+  photoUrl              String?
+  
+  // Zero-Knowledge Security
+  pinHash               String?             // Verification hash of 4-digit PIN
+  encryptionSalt        String?             // Salt for client-side PBKDF2/AES-256-GCM derivation
+  encryptedMedicalBlob  String?             // Encrypted JSON with private consultation history
+  webVaultInitialized   Boolean             @default(false) // true once the blob was (re)encrypted client-side on first web login
+  
+  // Public Emergency Identification
+  emergencyToken        String              @unique @default(uuid())
+  
+  // WhatsApp Bot State Engine
+  onboardingState       String              @default("UNREGISTERED") // REGISTERING_WELCOME, REGISTERING_CI, etc.
+  onboardingData        String?             // Temporary JSON buffer during conversational registration
+  
+  status                UserStatus          @default(PENDING_PAYMENT)
+
+  failedPinAttempts     Int                 @default(0)
+  pinLockedUntil        DateTime?
+  
+  organizationId        String?
+  organization          Organization?       @relation(fields: [organizationId], references: [id])
+  
+  emergencyContacts     EmergencyContact[]
+  medicalStudies        MedicalStudy[]
+  subscriptions         Subscription[]
+  paymentOrders         PaymentOrder[]
+  auditLogs             ScanAuditLog[]
+  pushSubscriptions     PushSubscription[]
+
+  createdAt             DateTime            @default(now())
+  updatedAt             DateTime            @updatedAt
+}
+
+model EmergencyContact {
+  id           String   @id @default(uuid())
+  userId       String
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  fullName     String
+  phoneNumber  String
+  relationship String?  // e.g. "Madre", "Esposa", "Familiar"
+  isPrimary    Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+}
+
+model MedicalStudy {
+  id                String    @id @default(uuid())
+  userId            String
+  user              User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  title             String
+  studyType         StudyType @default(OTHER)
+  studyDate         DateTime?
+  fileUrl           String
+  ocrRawText        String?   @db.Text
+  aiSummary         String?   @db.Text
+  encryptedMetadata String?   @db.Text // Zero knowledge encrypted annotations
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+}
+
+model Subscription {
+  id                String            @id @default(uuid())
+  userId            String
+  user              User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  plan              PlanType          @default(ANNUAL)
+  country           CountryCode       @default(PARAGUAY)
+  currency          String            @default("PYG") // PYG, BRL, USD
+  amount            Float
+  status            UserStatus        @default(PENDING_PAYMENT)
+  startDate         DateTime          @default(now())
+  expiryDate        DateTime
+  lastNotification  NotificationStage @default(NONE)
+  finePending       Boolean           @default(false)
+  fineAmount        Float             @default(0)
+  createdAt         DateTime          @default(now())
+  updatedAt         DateTime          @updatedAt
+  paymentOrders     PaymentOrder[]
+}
+
+model PaymentOrder {
+  id              String         @id @default(uuid())
+  userId          String
+  user            User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  subscriptionId  String?
+  subscription    Subscription?  @relation(fields: [subscriptionId], references: [id])
+  gateway         PaymentGateway @default(MERCADOPAGO)
+  paymentMethod   String         // ALIAS, PIX, LINK, QR, CARD
+  referenceCode   String         @unique
+  pixPayload      String?        @db.Text  // PIX "copia e cola" (BR Code, valid CRC16)
+  pixQrImage      String?        @db.Text  // data:image/png;base64 QR of the payload
+  aliasInfo       String?        // Paraguay SIPAP / Alias Bancario
+  paymentLink     String?
+  gatewayRef      String?        // external transaction id from the PSP / Bancard process_id
+  amount          Float
+  currency        String
+  status          PaymentStatus  @default(PENDING)
+  expiresAt       DateTime?
+  paidAt          DateTime?
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+}
+
+model ScanAuditLog {
+  id                    String   @id @default(uuid())
+  userId                String
+  user                  User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  scannedAt             DateTime @default(now())
+  ipAddress             String?
+  userAgent             String?
+  mode                  ScanMode @default(EMERGENCY_NO_PIN)
+  city                  String?
+  country               String?
+  lat                   Float?
+  lng                   Float?
+  alertSentViaWhatsApp  Boolean  @default(false)
+}
+
+model Organization {
+  id            String   @id @default(uuid())
+  name          String
+  slug          String   @unique
+  logoUrl       String?
+  primaryColor  String?  @default("#E11D48")
+  customMessage String?
+  users         User[]
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+}
+
+enum OtpPurpose {
+  LOGIN
+  PROFILE_CHANGE
+}
+
+/// One-time codes delivered over WhatsApp (Baileys) for phone-number verified login.
+model OtpCode {
+  id          String     @id @default(uuid())
+  phoneNumber String
+  codeHash    String     // bcrypt hash of the 6-digit code — never stored in clear
+  purpose     OtpPurpose @default(LOGIN)
+  attempts    Int        @default(0)
+  consumedAt  DateTime?
+  expiresAt   DateTime
+  createdAt   DateTime   @default(now())
+
+  @@index([phoneNumber, purpose])
+}
+
+enum EmailStatus {
+  SENT
+  FAILED
+  LOGGED
+}
+
+/// Audit trail of every transactional email (invoice, vault backup link, etc.).
+model EmailLog {
+  id        String      @id @default(uuid())
+  to        String
+  subject   String
+  template  String
+  status    EmailStatus @default(LOGGED)
+  error     String?
+  createdAt DateTime    @default(now())
+
+  @@index([to])
+}
+
+/// Web Push (VAPID) subscription created when a visitor opts in to browser notifications.
+model PushSubscription {
+  id        String   @id @default(uuid())
+  userId    String?
+  user      User?    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  endpoint  String   @unique
+  p256dh    String
+  auth      String
+  userAgent String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId])
+}
+
+
+model AppSetting {
+  key       String   @id
+  value     String   @db.Text
+  updatedAt DateTime @updatedAt
+}
+
+model MedicalConditionOption {
+  id        String   @id @default(uuid())
+  code      String   @unique
+  labelEs   String
+  labelGn   String
+  sortOrder Int      @default(0)
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model BotMessage {
+  key       String   @id
+  textEs    String   @db.Text
+  textGn    String   @db.Text
+  updatedAt DateTime @updatedAt
+}

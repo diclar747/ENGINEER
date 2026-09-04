@@ -1,0 +1,20 @@
+# Dependencies & build output
+node_modules/
+dist/
+build/
+*.tsbuildinfo
+
+# Secrets — real .env files never get committed, only the .example templates
+.env
+.env.*
+!.env.example
+
+# Runtime data that lives in Docker volumes, not the repo
+backend/auth_info_baileys/
+backend/uploads/
+backend/.tess-cache/
+
+# Misc
+*.log
+.DS_Store
+.vscode/

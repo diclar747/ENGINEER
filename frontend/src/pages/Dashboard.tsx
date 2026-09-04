@@ -1,0 +1,336 @@
+import React, { useState, useEffect } from 'react';
+import { Link } from 'react-router-dom';
+import { api } from '../utils/api';
+import { QRCodeSVG } from 'qrcode.react';
+import {
+  HeartPulse,
+  QrCode,
+  FileText,
+  Upload,
+  Download,
+  ExternalLink,
+  Activity,
+  Plus,
+  Loader2,
+  Share2,
+  Copy,
+  Check,
+  ShieldCheck,
+  Eye,
+  Calendar,
+  Sparkles,
+  MapPin,
+  Phone,
+} from 'lucide-react';
+import { DocumentViewer } from '../components/DocumentViewer';
+import { PinModal } from '../components/PinModal';
+import { PushOptIn } from '../components/PushOptIn';
+import { VaultInit } from '../components/VaultInit';
+import { RiskBadges } from '../components/RiskBadges';
+import { stripAsterisks } from '../utils/textFormat';
+
+export const Dashboard: React.FC = () => {
+  const [user, setUser] = useState<any>(null);
+  const [viewerStudy, setViewerStudy] = useState<{ title: string; fileUrl: string } | null>(null);
+  const [studies, setStudies] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [uploading, setUploading] = useState(false);
+  const [isExportModalOpen, setIsExportModalOpen] = useState(false);
+  const [exportResult, setExportResult] = useState<any>(null);
+  const [copied, setCopied] = useState(false);
+
+  useEffect(() => {
+    fetchUserData();
+  }, []);
+
+  const fetchUserData = async () => {
+    try {
+      const res = await api.get('/auth/profile');
+      setUser(res.data.user);
+
+      const studiesRes = await api.get('/medical/studies');
+      setStudies(studiesRes.data.studies || []);
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const formData = new FormData();
+    formData.append('file', file);
+    formData.append('title', file.name.replace(/\.[^/.]+$/, ''));
+
+    setUploading(true);
+    try {
+      const res = await api.post('/medical/studies/upload', formData, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      });
+      setStudies([res.data.study, ...studies]);
+    } catch (err: any) {
+      alert('Error subiendo estudio: ' + (err?.response?.data?.error || err.message));
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  const handleExportSubmit = async (pin: string) => {
+    const res = await api.post('/export/full-vault', { pin });
+    setExportResult(res.data);
+  };
+
+  const emergencyUrl = `${window.location.origin}/e/${user?.emergencyToken}`;
+
+  const handleShare = async () => {
+    if (navigator.share) {
+      try {
+        await navigator.share({
+          title: `Bio-Pass de ${user?.fullName || 'Emergencia'}`,
+          text: `Ficha médica y rescate Bio-Pass de ${user?.fullName || ''}`,
+          url: emergencyUrl,
+        });
+      } catch {
+        /* noop */
+      }
+    } else {
+      await navigator.clipboard.writeText(emergencyUrl);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    }
+  };
+
+  const handleCopy = async () => {
+    await navigator.clipboard.writeText(emergencyUrl);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+
+  if (loading) {
+    return (
+      <div className="min-h-[70vh] flex flex-col items-center justify-center p-4">
+        <div className="w-14 h-14 rounded-2xl bg-teal-500/15 border border-teal-500/30 flex items-center justify-center animate-pulse mb-3">
+          <HeartPulse className="w-7 h-7 text-teal-600 dark:text-teal-400" />
+        </div>
+        <p className="text-sm font-semibold text-fg-soft">Cargando Bóveda Bio-Pass...</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="max-w-7xl mx-auto px-3.5 sm:px-6 lg:px-8 py-6 sm:py-8 space-y-6 sm:space-y-8 pb-20">
+      
+      {/* Patient Hero Banner */}
+      <div className="bg-gradient-to-br from-card via-app to-panel border border-line/90 rounded-3xl p-5 sm:p-8 flex flex-col lg:flex-row items-start lg:items-center justify-between gap-6 shadow-2xl relative overflow-hidden">
+        <div className="flex items-center space-x-4 min-w-0">
+          <div className="w-16 h-16 sm:w-20 sm:h-20 rounded-2xl bg-gradient-to-tr from-teal-500 to-cyan-400 p-0.5 shrink-0 shadow-lg shadow-teal-500/20">
+            <div className="w-full h-full bg-panel rounded-[14px] flex items-center justify-center">
+              <HeartPulse className="w-8 h-8 sm:w-10 sm:h-10 text-teal-600 dark:text-teal-400" />
+            </div>
+          </div>
+          <div className="min-w-0 flex-1">
+            <div className="flex flex-wrap items-center gap-2">
+              <h1 className="text-xl sm:text-2xl font-black text-fg tracking-tight truncate">
+                {stripAsterisks(user?.fullName) || 'Mi Pasaporte Bio-Pass'}
+              </h1>
+              <span className="px-2.5 py-0.5 rounded-full bg-emerald-500/15 border border-emerald-500/30 text-emerald-600 dark:text-emerald-300 text-xs font-bold">
+                {user?.status || 'ACTIVO'}
+              </span>
+            </div>
+            <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-fg-soft mt-2 font-medium">
+              <span className="flex items-center gap-1">
+                <Phone className="w-3.5 h-3.5 text-teal-600 dark:text-teal-400" /> {user?.phoneNumber}
+              </span>
+              <span className="text-fg-muted">•</span>
+              <span>CI: {user?.ciNumber || '4.892.310'}</span>
+              <span className="text-fg-muted">•</span>
+              <span className="px-2 py-0.5 rounded bg-teal-500/10 text-teal-600 dark:text-teal-300 font-bold">
+                RH: {user?.bloodType || 'O+'}
+              </span>
+            </div>
+          </div>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-2.5 w-full lg:w-auto">
+          <Link
+            to={`/e/${user?.emergencyToken}`}
+            target="_blank"
+            className="flex-1 sm:flex-none flex items-center justify-center gap-1.5 px-4 py-2.5 rounded-xl bg-muted hover:bg-muted active:scale-95 text-fg text-xs font-bold border border-line transition-all"
+          >
+            <ExternalLink className="w-4 h-4 text-teal-600 dark:text-teal-400" />
+            <span>Ficha Pública</span>
+          </Link>
+
+          <button
+            onClick={handleShare}
+            className="flex-1 sm:flex-none flex items-center justify-center gap-1.5 px-4 py-2.5 rounded-xl bg-muted hover:bg-muted active:scale-95 text-fg text-xs font-bold border border-line transition-all"
+          >
+            {copied ? <Check className="w-4 h-4 text-emerald-600 dark:text-emerald-400" /> : <Share2 className="w-4 h-4 text-teal-600 dark:text-teal-400" />}
+            <span>{copied ? '¡Copiado!' : 'Compartir'}</span>
+          </button>
+
+          <button
+            onClick={() => setIsExportModalOpen(true)}
+            className="w-full sm:w-auto flex items-center justify-center gap-1.5 px-5 py-2.5 rounded-xl bg-gradient-to-r from-teal-500 to-emerald-500 hover:from-teal-400 hover:to-emerald-400 text-slate-950 text-xs font-black shadow-lg shadow-teal-500/25 transition-all active:scale-95"
+          >
+            <Download className="w-4 h-4" />
+            <span>Descargar Historial</span>
+          </button>
+        </div>
+      </div>
+
+      {/* Export Result Notification Banner */}
+      {exportResult && (
+        <div className="bg-emerald-50 dark:bg-emerald-950/60 border border-emerald-500/40 rounded-2xl p-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 animate-fadeIn">
+          <div>
+            <p className="text-sm font-bold text-emerald-600 dark:text-emerald-300">📦 Archivo ZIP Cifrado Generado</p>
+            <p className="text-xs text-fg-soft mt-0.5">Contraseña de apertura: Tu PIN de 4 dígitos. Expira en 24 horas.</p>
+          </div>
+          <a
+            href={exportResult.downloadUrl}
+            className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs shadow-md shrink-0"
+            download
+          >
+            Descargar Archivo
+          </a>
+        </div>
+      )}
+
+      {/* Zero-Knowledge Vault initialization if pending */}
+      <VaultInit />
+
+      {/* Browser push notifications opt-in */}
+      <PushOptIn />
+
+      {/* Main Grid: QR Quick Card + Emergency Info + Studies */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 sm:gap-8">
+        
+        {/* QR Code Quick Card */}
+        <div className="bg-card border border-line rounded-3xl p-5 sm:p-6 shadow-xl flex flex-col items-center text-center">
+          <div className="w-12 h-12 rounded-2xl bg-teal-500/10 text-teal-600 dark:text-teal-400 flex items-center justify-center mb-3">
+            <QrCode className="w-6 h-6" />
+          </div>
+          <h3 className="text-base font-bold text-fg">Tu Código QR de Rescate</h3>
+          <p className="text-xs text-fg-muted mt-1 mb-4">
+            Escaneo instantáneo sin aplicación en cualquier teléfono
+          </p>
+
+          <div className="p-4 bg-white rounded-2xl shadow-xl border border-slate-200 hover:scale-105 transition-transform">
+            <QRCodeSVG value={emergencyUrl} size={180} level="H" />
+          </div>
+
+          <div className="mt-4 flex flex-wrap items-center justify-center gap-2 w-full">
+            <button
+              onClick={handleCopy}
+              className="flex-1 min-w-[120px] flex items-center justify-center gap-1.5 px-3 py-2 rounded-xl bg-muted hover:bg-muted text-fg text-xs font-semibold border border-line transition-colors"
+            >
+              {copied ? <Check className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+              <span>{copied ? 'Copiado' : 'Copiar Link'}</span>
+            </button>
+            <Link
+              to="/stickers"
+              className="flex-1 min-w-[120px] flex items-center justify-center gap-1.5 px-3 py-2 rounded-xl bg-teal-600/20 hover:bg-teal-600/30 text-teal-600 dark:text-teal-300 text-xs font-bold border border-teal-500/30 transition-colors"
+            >
+              <QrCode className="w-3.5 h-3.5" />
+              <span>Imprimir Kit</span>
+            </Link>
+          </div>
+        </div>
+
+        {/* Clinical Overview & Rescue Badges */}
+        <div className="lg:col-span-2 space-y-6">
+          <div className="bg-card border border-line rounded-3xl p-5 sm:p-6 shadow-xl space-y-4">
+            <div className="flex items-center justify-between border-b border-line/80 pb-3">
+              <h3 className="text-sm font-black uppercase tracking-wider text-fg-soft flex items-center gap-2">
+                <HeartPulse className="w-4 h-4 text-rose-600 dark:text-rose-400" />
+                <span>Condiciones de Rescate Declaradas</span>
+              </h3>
+              <span className="text-xs text-teal-600 dark:text-teal-400 font-semibold flex items-center gap-1">
+                <ShieldCheck className="w-3.5 h-3.5" /> Ficha Médica
+              </span>
+            </div>
+
+            <RiskBadges
+              conditions={user?.emergencyConditions}
+              allergies={user?.severeAllergies}
+              contraindicatedMeds={user?.contraindicatedMeds}
+            />
+          </div>
+
+          {/* Clinical Documents & Laboratory Studies */}
+          <div className="bg-card border border-line rounded-3xl p-5 sm:p-6 shadow-xl space-y-4">
+            <div className="flex items-center justify-between border-b border-line/80 pb-3">
+              <div>
+                <h3 className="text-sm font-black uppercase tracking-wider text-fg-soft flex items-center gap-2">
+                  <FileText className="w-4 h-4 text-teal-600 dark:text-teal-400" />
+                  <span>Estudios de Laboratorio & Documentos</span>
+                </h3>
+                <p className="text-xs text-fg-muted mt-0.5">
+                  Archivos protegidos en la nube con cifrado local
+                </p>
+              </div>
+
+              <label className="cursor-pointer px-3.5 py-2 rounded-xl bg-teal-600 hover:bg-teal-500 active:scale-95 text-white font-bold text-xs shadow-md shadow-teal-600/20 flex items-center gap-1.5 transition-all">
+                {uploading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}
+                <span>{uploading ? 'Subiendo...' : 'Subir Estudio'}</span>
+                <input
+                  type="file"
+                  className="hidden"
+                  onChange={handleFileUpload}
+                  disabled={uploading}
+                  accept=".pdf,.png,.jpg,.jpeg"
+                />
+              </label>
+            </div>
+
+            {studies.length === 0 ? (
+              <div className="text-center py-8 bg-panel rounded-2xl border border-dashed border-line p-6">
+                <Upload className="w-8 h-8 text-fg-muted mx-auto mb-2" />
+                <p className="text-xs font-semibold text-fg-muted">No has adjuntado estudios médicos aún.</p>
+                <p className="text-[11px] text-fg-muted mt-1">Sube tus análisis de sangre, radiografías o recetas en PDF o foto.</p>
+              </div>
+            ) : (
+              <div className="space-y-3">
+                {studies.map((study) => (
+                  <div
+                    key={study.id}
+                    className="p-3.5 sm:p-4 rounded-2xl bg-panel border border-line flex items-center justify-between gap-3 hover:border-line transition-colors"
+                  >
+                    <div className="min-w-0 flex-1">
+                      <span className="text-[9px] font-bold uppercase tracking-wider px-2 py-0.5 rounded bg-muted text-teal-600 dark:text-teal-300">
+                        {study.studyType || 'DOCUMENTO'}
+                      </span>
+                      <h5 className="mt-1 text-xs sm:text-sm font-bold text-fg truncate">{study.title}</h5>
+                      <span className="mt-1 inline-flex items-center gap-1 text-[10px] text-fg-muted">
+                        <Calendar className="w-3 h-3" /> {new Date(study.studyDate || study.createdAt).toLocaleDateString()}
+                      </span>
+                    </div>
+
+                    <button type="button" onClick={() => setViewerStudy({ title: study.title, fileUrl: study.fileUrl })} className="px-3.5 py-2 rounded-xl bg-muted hover:bg-muted text-xs font-bold text-fg flex items-center gap-1.5 shrink-0 border border-line">
+                      <Eye className="w-3.5 h-3.5 text-teal-600 dark:text-teal-400" />
+                      <span>Ver</span>
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+
+      </div>
+
+      {/* PIN Modal for Full Data Export */}
+      <DocumentViewer open={!!viewerStudy} onClose={() => setViewerStudy(null)} url={viewerStudy?.fileUrl || ''} title={viewerStudy?.title} />
+      <PinModal
+        isOpen={isExportModalOpen}
+        onClose={() => setIsExportModalOpen(false)}
+        onSubmit={handleExportSubmit}
+        title="Descargar Bóveda Cifrada"
+        description="Ingresa tu PIN de 4 dígitos para autorizar el empaquetado seguro de todos tus datos clínicos en un ZIP protegido."
+      />
+    </div>
+  );
+};
