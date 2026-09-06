@@ -24,6 +24,7 @@ import {
   Sparkles,
 } from 'lucide-react';
 import { DocumentViewer } from '../components/DocumentViewer';
+import { StudiesList } from '../components/StudiesList';
 
 export const EmergencyView: React.FC = () => {
   const { token } = useParams<{ token: string }>();
@@ -346,42 +347,12 @@ export const EmergencyView: React.FC = () => {
             )}
 
             {/* Medical Studies in Cloud */}
-            <div>
-              <h4 className="text-xs font-black uppercase tracking-wider text-fg-muted mb-3 flex items-center gap-1.5">
-                <FileText className="w-4 h-4 text-teal-600 dark:text-teal-400" />
-                <span>Estudios en la Nube ({medicalStudies.length})</span>
-              </h4>
-
-              {medicalStudies.length === 0 ? (
-                <p className="text-xs text-fg-muted italic">No hay estudios médicos adjuntos.</p>
-              ) : (
-                <div className="space-y-3">
-                  {medicalStudies.map((study) => (
-                    <div
-                      key={study.id}
-                      className="p-3.5 sm:p-4 rounded-2xl bg-panel border border-line flex items-center justify-between gap-3"
-                    >
-                      <div className="min-w-0 flex-1">
-                        <span className="text-[9px] font-bold uppercase tracking-wider px-2 py-0.5 rounded bg-muted text-teal-600 dark:text-teal-300">
-                          {study.studyType || 'LABORATORIO'}
-                        </span>
-                        <h5 className="mt-1 text-xs sm:text-sm font-bold text-fg truncate">{study.title}</h5>
-                        {study.aiSummary && (
-                          <p className="mt-0.5 text-xs text-fg-muted line-clamp-2">{study.aiSummary}</p>
-                        )}
-                        <span className="mt-1.5 inline-flex items-center gap-1 text-[10px] text-fg-muted">
-                          <Calendar className="w-3 h-3" /> {new Date(study.studyDate || study.createdAt).toLocaleDateString()}
-                        </span>
-                      </div>
-                      <button type="button" onClick={() => setViewerStudy({ title: study.title, fileUrl: study.fileUrl })} className="px-3.5 py-2 rounded-xl bg-muted hover:bg-muted text-xs font-bold text-fg flex items-center gap-1.5 shrink-0 border border-line">
-                      <Eye className="w-3.5 h-3.5 text-teal-600 dark:text-teal-400" />
-                      <span>Ver</span>
-                    </button>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
+            <StudiesList
+              studies={medicalStudies}
+              onView={(s) => setViewerStudy(s)}
+              title={`Estudios en la Nube (${medicalStudies.length})`}
+              subtitle="Historial clínico descifrado — solo para el profesional autorizado"
+            />
           </div>
         )}
 
