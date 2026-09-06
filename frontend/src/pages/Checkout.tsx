@@ -104,9 +104,12 @@ export const Checkout: React.FC = () => {
   // completa en la pantalla de Bancard (escaneando el QR con el teléfono o abriendo el link);
   // al terminar, Bancard vuelve al return_url y el webhook activa la cuenta — el polling de
   // esta página refleja el PAID.
-  const [bancard, setBancard] = useState<{ redirectUrl: string; qr: string | null } | null>(null);
+  const [bancard, setBancard] = useState<{ processId: string; redirectUrl: string; qr: string | null; baseUrl: string } | null>(null);
   const [bancardErr, setBancardErr] = useState(false);
   const bancardAsked = useRef(false);
+  const iframeMounted = useRef(false);
+
+  // 1) Pedimos una sesión FRESCA de Bancard (process_id nuevo, así no está vencido).
   useEffect(() => {
     if (order?.gateway !== 'BANCARD' || order?.status === 'PAID' || bancardAsked.current) return;
     bancardAsked.current = true;
@@ -114,10 +117,37 @@ export const Checkout: React.FC = () => {
       .post(`/payments/${encodeURIComponent(ref)}/bancard-session`)
       .then((r) => {
         if (r.data?.status === 'PAID') { fetchOrder(); return; }
-        setBancard({ redirectUrl: r.data.redirectUrl, qr: r.data.qr || null });
+        setBancard({ processId: r.data.processId, redirectUrl: r.data.redirectUrl, qr: r.data.qr || null, baseUrl: r.data.bancardBaseUrl });
       })
       .catch(() => setBancardErr(true));
   }, [order?.gateway, order?.status, ref, fetchOrder]);
+
+  // 2) Con el process_id fresco, montamos el iframe de Bancard (dibuja su form de tarjeta + su QR
+  //    real adentro). Al completar, Bancard navega la ventana al return_url.
+  useEffect(() => {
+    if (!bancard?.processId || !bancard?.baseUrl || iframeMounted.current) return;
+    iframeMounted.current = true;
+    const styles = {
+      'form-background-color': '#ffffff', 'button-background-color': '#0d9488',
+      'button-text-color': '#ffffff', 'button-border-color': '#0d9488',
+      'input-background-color': '#ffffff', 'input-text-color': '#111111', 'input-placeholder-color': '#9ca3af',
+    };
+    const render = () => {
+      try { window.Bancard?.Checkout?.createForm('bancard-container', bancard.processId, styles); }
+      catch (e) { console.error('[bancard] createForm', e); }
+    };
+    const src = `${bancard.baseUrl}/checkout/javascript/dist/bancard-checkout-4.0.0.js`;
+    if (window.Bancard?.Checkout) render();
+    else if (!document.querySelector(`script[src="${src}"]`)) {
+      const s = document.createElement('script');
+      s.src = src; s.async = true; s.onload = render;
+      document.head.appendChild(s);
+    } else {
+      const iv = window.setInterval(() => { if (window.Bancard?.Checkout) { window.clearInterval(iv); render(); } }, 200);
+      window.setTimeout(() => window.clearInterval(iv), 10000);
+    }
+    return () => { try { window.Bancard?.Checkout?.destroy?.(); } catch { /* noop */ } iframeMounted.current = false; };
+  }, [bancard?.processId, bancard?.baseUrl]);
 
   if (loading) {
     return (
@@ -208,10 +238,10 @@ export const Checkout: React.FC = () => {
           {/* Bancard — QR + link a la pantalla de pago (tarjeta / QR). El iframe embebido no está
               habilitado para este comercio; el QR abre la pantalla de Bancard en el teléfono. */}
           {order.gateway === 'BANCARD' && (
-            <div className="rounded-3xl border border-line bg-card p-6 space-y-4 shadow-xl">
+            <div className="rounded-3xl border border-line bg-card p-5 space-y-3 shadow-xl">
               <h3 className="text-sm font-bold text-fg flex items-center gap-2">
                 <CreditCard className="w-4 h-4 text-teal-600 dark:text-teal-400" />
-                <span>Pagar con Bancard (tarjeta o QR)</span>
+                <span>Pagar con Bancard — tarjeta o QR</span>
               </h3>
               {!bancard && !bancardErr && (
                 <p className="text-xs text-fg-muted flex items-center gap-2"><Loader2 className="w-4 h-4 animate-spin" />Generando pago seguro…</p>
@@ -221,26 +251,16 @@ export const Checkout: React.FC = () => {
               )}
               {bancard && (
                 <>
-                  {bancard.qr && (
-                    <div className="bg-white p-3 rounded-2xl w-fit mx-auto shadow-md">
-                      <img src={bancard.qr} alt="QR de pago Bancard" className="w-56 h-56" />
+                  {/* Bancard dibuja acá su propio formulario de tarjeta + su QR real de pago */}
+                  <div id="bancard-container" className="min-h-[420px] w-full rounded-xl overflow-hidden bg-white" />
+                  <details className="text-xs text-fg-muted">
+                    <summary className="cursor-pointer font-semibold">¿No cargó el formulario? Abrilo en tu teléfono</summary>
+                    <div className="mt-2 flex flex-col items-center gap-2">
+                      {bancard.qr && <img src={bancard.qr} alt="Abrir pago en el teléfono" className="w-40 h-40 bg-white p-2 rounded-xl" />}
+                      <a href={bancard.redirectUrl} target="_blank" rel="noreferrer" className="px-4 py-2 rounded-xl bg-muted text-fg-soft font-bold">Abrir pantalla de pago ↗</a>
                     </div>
-                  )}
-                  <p className="text-xs text-fg-soft text-center">
-                    Escaneá el QR con la cámara de tu teléfono, o tocá el botón para abrir la pantalla de pago de Bancard.
-                  </p>
-                  <a
-                    href={bancard.redirectUrl}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="flex items-center justify-center gap-2 w-full py-4 rounded-2xl bg-gradient-to-r from-teal-500 to-emerald-500 hover:from-teal-400 hover:to-emerald-400 text-slate-950 font-black shadow-lg shadow-teal-500/25 transition-all"
-                  >
-                    <CreditCard className="w-5 h-5" />
-                    <span>Abrir pantalla de pago de Bancard</span>
-                  </a>
-                  <p className="text-[11px] text-fg-muted text-center">
-                    Al terminar el pago, esta página se actualiza sola. Si tardás y el QR expira, recargá para generar uno nuevo.
-                  </p>
+                  </details>
+                  <p className="text-[11px] text-fg-muted">Al terminar el pago, esta página se actualiza sola.</p>
                 </>
               )}
             </div>
