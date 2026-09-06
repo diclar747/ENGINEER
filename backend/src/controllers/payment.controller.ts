@@ -220,6 +220,22 @@ export class PaymentController {
     if (!order || order.gateway !== 'BANCARD') { res.status(404).json({ error: 'Orden no encontrada.' }); return; }
     if (order.status === 'PAID') { res.json({ status: 'PAID' }); return; }
     if (!BancardService.enabled) { res.status(400).json({ error: 'Bancard no está configurado.' }); return; }
+
+    // Antes de generar una sesión nueva: ¿el pago del intento anterior ya está aprobado?
+    // (permite que /checkout se auto-active al volver, sin depender del webhook).
+    if (order.gatewayRef) {
+      try {
+        const { approved } = await BancardService.confirm({ shopProcessId: order.gatewayRef });
+        if (approved) {
+          await PaymentService.handlePaymentSuccess(order.referenceCode);
+          res.json({ status: 'PAID' });
+          return;
+        }
+      } catch (e: any) {
+        console.warn('[bancard:session] confirm previo falló:', e?.response?.status || e?.message);
+      }
+    }
+
     try {
       const shopProcessId = Date.now().toString();
       const checkout = await BancardService.createCheckout({

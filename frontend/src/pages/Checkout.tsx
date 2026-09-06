@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { useSearchParams, Link } from 'react-router-dom';
+import { useSearchParams, Link, useNavigate } from 'react-router-dom';
 import { api } from '../utils/api';
 import {
   CreditCard,
@@ -95,9 +95,14 @@ export const Checkout: React.FC = () => {
     };
   }, [fetchOrder]);
 
+  const navigate = useNavigate();
   useEffect(() => {
-    if (order?.status === 'PAID' && poll.current) window.clearInterval(poll.current);
-  }, [order?.status]);
+    if (order?.status === 'PAID') {
+      if (poll.current) window.clearInterval(poll.current);
+      const t = window.setTimeout(() => navigate('/dashboard'), 5000);
+      return () => window.clearTimeout(t);
+    }
+  }, [order?.status, navigate]);
 
   // Bancard: el process_id vence a los pocos minutos, así que al abrir esta página pedimos una
   // sesión FRESCA (POST /payments/:ref/bancard-session) y mostramos su QR + link. El pago se
@@ -221,15 +226,16 @@ export const Checkout: React.FC = () => {
       {paid ? (
         <div className="rounded-3xl border border-emerald-500/30 bg-emerald-500/[0.08] p-8 text-center shadow-2xl animate-fadeIn">
           <CheckCircle2 className="w-14 h-14 text-emerald-600 dark:text-emerald-400 mx-auto mb-3" />
-          <h2 className="text-xl font-bold text-fg">¡Pago Confirmado!</h2>
-          <p className="mt-1 text-sm text-fg-soft leading-relaxed">
-            Tu Bio-Pass está activo. Te enviamos el comprobante y el kit de stickers a tu WhatsApp.
+          <h2 className="text-xl font-black text-fg">¡Gracias por tu compra!</h2>
+          <p className="mt-2 text-sm text-fg-soft leading-relaxed">
+            Tu suscripción <b>Bio-Pass</b> quedó <b>activa</b>. Recibiste el comprobante, tu QR de emergencia y el kit de stickers por WhatsApp.
           </p>
+          <p className="mt-1 text-xs text-fg-muted">Te llevamos a tu panel…</p>
           <Link
             to="/dashboard"
             className="mt-5 inline-flex items-center gap-2 px-6 py-3 rounded-2xl bg-gradient-to-r from-teal-500 to-emerald-500 hover:from-teal-400 hover:to-emerald-400 text-slate-950 text-sm font-black shadow-lg shadow-teal-500/25"
           >
-            <span>Ir a Mi Panel</span>
+            <span>Ir a Mi Panel ahora</span>
             <ArrowRight className="w-4 h-4" />
           </Link>
         </div>

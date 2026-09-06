@@ -114,18 +114,17 @@ export class BancardService {
    */
   static async confirm(params: {
     shopProcessId: string;
-    amount: number;
-    currency: 'PYG' | 'USD';
+    amount?: number;
+    currency?: 'PYG' | 'USD';
   }): Promise<{ approved: boolean; raw: any }> {
-    const amount = this.fmt(params.amount);
-    const token = md5(
-      `${config.bancard.privateKey}${params.shopProcessId}confirm${amount}${params.currency}`
-    );
+    // El token de la API de consulta usa "get_confirmation" (NO "confirm"+monto+moneda, que es
+    // el del callback/webhook). Ese era el bug: daba InvalidTokenError.
+    const token = md5(`${config.bancard.privateKey}${params.shopProcessId}get_confirmation`);
 
     const { data } = await axios.post(
       `${config.bancard.baseUrl}/vpos/api/0.3/single_buy/confirmations`,
       { public_key: config.bancard.publicKey, operation: { token, shop_process_id: params.shopProcessId } },
-      { timeout: 30_000, headers: { "User-Agent": "Mozilla/5.0 (compatible; BioPass/1.0)", Accept: "application/json" } }
+      { timeout: 30_000, headers: { 'User-Agent': 'Mozilla/5.0 (compatible; BioPass/1.0)', Accept: 'application/json' } }
     );
 
     const resp = data?.confirmation;
