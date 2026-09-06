@@ -15,13 +15,13 @@ export const Payments: React.FC = () => {
   const [plan, setPlan] = useState<Plan>('ANNUAL');
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [pricing, setPricing] = useState<any>(null);
 
   useEffect(() => {
-    api
-      .get('/auth/profile')
-      .then((r) => setUser(r.data.user))
-      .catch(() => {})
-      .finally(() => setLoading(false));
+    Promise.all([
+      api.get('/auth/profile').then((r) => setUser(r.data.user)).catch(() => {}),
+      api.get('/payments/methods').then((r) => setPricing(r.data)).catch(() => {}),
+    ]).finally(() => setLoading(false));
   }, []);
 
   const generate = async () => {
@@ -50,22 +50,20 @@ export const Payments: React.FC = () => {
     );
   }
 
+  // Los precios vienen de /payments/methods (editables desde el panel admin). Los textos
+  // estáticos quedan solo como fallback si el endpoint falla.
+  const cc = country === 'PARAGUAY' ? pricing?.paraguay : pricing?.brasil;
+  const isPY = country === 'PARAGUAY';
+  const fb = isPY
+    ? { annual: 'Gs. 300.000', monthly: 'Gs. 35.000', methods: ['Bancard · Tarjetas de Crédito / Débito', 'Transferencia SIPAP (Alias: BIOPASS.PY)', 'Billetera Tigo Money'] }
+    : { annual: 'R$ 220,00', monthly: 'R$ 25,00', methods: ['PIX Instantâneo (Copia e Cola + QR)', 'Cartão de Crédito e Débito'] };
   const plans = {
-    PARAGUAY: {
-      flag: '🇵🇾',
-      annual: 'Gs. 300.000 / año',
-      annualSave: 'Ahorras 2 meses',
-      monthly: 'Gs. 35.000 / mes',
-      methods: ['Bancard · Tarjetas de Crédito / Débito', 'Transferencia SIPAP (Alias: BIOPASS.PY)', 'Billetera Tigo Money'],
-    },
-    BRASIL: {
-      flag: '🇧🇷',
-      annual: 'R$ 220,00 / ano',
-      annualSave: 'Economize 2 meses',
-      monthly: 'R$ 25,00 / mês',
-      methods: ['PIX Instantâneo (Copia e Cola + QR)', 'Cartão de Crédito e Débito'],
-    },
-  }[country];
+    flag: isPY ? '🇵🇾' : '🇧🇷',
+    annual: `${cc?.plans?.annual?.formatted || fb.annual} / ${isPY ? 'año' : 'ano'}`,
+    annualSave: isPY ? 'Ahorras 2 meses' : 'Economize 2 meses',
+    monthly: `${cc?.plans?.monthly?.formatted || fb.monthly} / ${isPY ? 'mes' : 'mês'}`,
+    methods: (cc?.methods && cc.methods.length ? cc.methods : fb.methods) as string[],
+  };
 
   return (
     <div className="max-w-4xl mx-auto px-3.5 sm:px-6 lg:px-8 py-6 sm:py-8 space-y-6 sm:space-y-8 pb-20">

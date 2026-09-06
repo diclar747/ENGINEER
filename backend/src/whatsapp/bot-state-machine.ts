@@ -454,19 +454,25 @@ export class BotStateMachine {
         encryptedMedicalBlob: initialEncryptedBlob,
       });
 
+      // Precios en vivo (editables desde /admin → Contenido).
+      const pr = await PaymentService.getPlanPrices();
+      const gs = (n: number) => `Gs. ${n.toLocaleString('es-PY')}`;
+      const rs = (n: number) => `R$ ${n.toLocaleString('pt-BR')}`;
+      const menu =
+        `🇵🇾 *Paraguay:*\n*[1]* Plan Mensual (${gs(pr.PY.MONTHLY)} / mes)\n*[2]* Plan Anual (${gs(pr.PY.ANNUAL)} / año)\n\n` +
+        `🇧🇷 *Brasil:*\n*[3]* Plano Mensal (${rs(pr.BR.MONTHLY)} / mês)\n*[4]* Plano Anual (${rs(pr.BR.ANNUAL)} / ano)\n\n`;
+
       return {
         replyText: tr(
           `🔒 *¡PIN de seguridad cifrado con éxito!*\n\n` +
             `💳 *Paso 8/8 (Activación y Pago):*\n` +
             `Elegí tu país y plan para activar tu Bio-Pass y generar tu QR de rescate:\n\n` +
-            `🇵🇾 *Paraguay:*\n*[1]* Plan Mensual (Gs. 35.000 / mes)\n*[2]* Plan Anual (Gs. 300.000 / año · 30% off)\n\n` +
-            `🇧🇷 *Brasil:*\n*[3]* Plano Mensal (R$ 25 / mês)\n*[4]* Plano Anual (R$ 220 / ano · 25% off)\n\n` +
+            menu +
             `_Respondé 1, 2, 3 o 4 para recibir el link de pago y el código PIX / Alias._`,
           `🔒 *Nde PIN oñecifra porã!*\n\n` +
             `💳 *Paso 8/8 (Activación ha Pago):*\n` +
             `Eiporavo nde tetã ha plan remoañete hagua nde Bio-Pass ha emoheñói nde QR:\n\n` +
-            `🇵🇾 *Paraguay:*\n*[1]* Plan Mensual (Gs. 35.000 / mes)\n*[2]* Plan Anual (Gs. 300.000 / ary · 30% off)\n\n` +
-            `🇧🇷 *Brasil:*\n*[3]* Plano Mensal (R$ 25)\n*[4]* Plano Anual (R$ 220)\n\n` +
+            menu +
             `_Embohovái 1, 2, 3 térã 4 rehupyty hagua link de pago ha código PIX / Alias._`
         ),
       };
