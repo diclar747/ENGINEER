@@ -29,6 +29,29 @@ const csvCell = (v: unknown) => {
   return /[",\n;]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
 };
 
+/** Filtro Prisma de Subscription desde el query (lista, export). */
+function subscriptionWhere(q: Record<string, unknown>): any {
+  const where: any = {};
+  const filter = qs(q.filter) || 'all';
+  const status = qs(q.status);
+  const plan = qs(q.plan);
+  const from = qs(q.from);
+  const to = qs(q.to);
+  const now = new Date();
+  const in7 = new Date(now.getTime() + 7 * 864e5);
+  if (filter === 'active') { where.status = 'ACTIVE'; where.expiryDate = { gt: now }; }
+  else if (filter === 'expiring') { where.status = 'ACTIVE'; where.expiryDate = { gt: now, lte: in7 }; }
+  else if (filter === 'expired') { where.OR = [{ status: { in: ['EXPIRED', 'CANCELLED'] } }, { expiryDate: { lte: now } }]; }
+  if (status) where.status = status;
+  if (plan) where.plan = plan;
+  if (from || to) {
+    where.createdAt = {};
+    if (from) where.createdAt.gte = new Date(`${from}T00:00:00`);
+    if (to) where.createdAt.lte = new Date(`${to}T23:59:59.999`);
+  }
+  return where;
+}
+
 export class AdminController {
   static async login(req: Request, res: Response): Promise<void> {
     const { email, password } = req.body || {};
@@ -50,6 +73,151 @@ export class AdminController {
       prisma.paymentOrder.aggregate({ _sum: { amount: true }, where: { status: 'PAID' } }),
     ]);
     res.json({ users, active, pending, paidOrders, pendingOrders, studies, revenue: revenue._sum.amount || 0 });
+  }
+
+  /**
+   * GET /admin/dashboard?from&to — KPIs + series diaria + breakdowns para el panel principal.
+   * Sin from/to: últimos 30 días.
+   */
+  static async dashboard(req: AdminRequest, res: Response): Promise<void> {
+    const now = new Date();
+    const from = qs(req.query.from)
+      ? new Date(`${qs(req.query.from)}T00:00:00`)
+      : new Date(now.getTime() - 29 * 864e5);
+    const to = qs(req.query.to) ? new Date(`${qs(req.query.to)}T23:59:59.999`) : now;
+    const inRange = { gte: from, lte: to };
+
+    const [
+      totalUsers, active, pending, expired, cancelled,
+      paidCount, pendingCount, failedCount, studies,
+      revenueAll, paymentsInRange, usersInRange, subsByPlan, usersByStatus,
+    ] = await Promise.all([
+      prisma.user.count(),
+      prisma.user.count({ where: { status: 'ACTIVE' } }),
+      prisma.user.count({ where: { status: 'PENDING_PAYMENT' } }),
+      prisma.user.count({ where: { status: 'EXPIRED' } }),
+      prisma.user.count({ where: { status: 'CANCELLED' } }),
+      prisma.paymentOrder.count({ where: { status: 'PAID' } }),
+      prisma.paymentOrder.count({ where: { status: 'PENDING' } }),
+      prisma.paymentOrder.count({ where: { status: 'FAILED' } }),
+      prisma.medicalStudy.count(),
+      prisma.paymentOrder.groupBy({ by: ['currency'], where: { status: 'PAID' }, _sum: { amount: true } }),
+      prisma.paymentOrder.findMany({
+        where: { createdAt: inRange },
+        select: { createdAt: true, amount: true, currency: true, status: true, gateway: true },
+      }),
+      prisma.user.findMany({ where: { createdAt: inRange }, select: { createdAt: true } }),
+      prisma.subscription.groupBy({ by: ['plan'], _count: true }),
+      prisma.user.groupBy({ by: ['status'], _count: true }),
+    ]);
+
+    // Serie diaria (revenue PAID + nº de pagos + nº de altas) sobre el rango.
+    const dayKey = (d: Date) => d.toISOString().slice(0, 10);
+    const days: Record<string, { date: string; revenue: number; payments: number; newUsers: number }> = {};
+    for (let d = new Date(from); d <= to; d = new Date(d.getTime() + 864e5)) {
+      days[dayKey(d)] = { date: dayKey(d), revenue: 0, payments: 0, newUsers: 0 };
+    }
+    for (const p of paymentsInRange) {
+      const k = dayKey(p.createdAt);
+      if (!days[k]) continue;
+      days[k].payments++;
+      if (p.status === 'PAID') days[k].revenue += p.amount;
+    }
+    for (const u of usersInRange) {
+      const k = dayKey(u.createdAt);
+      if (days[k]) days[k].newUsers++;
+    }
+
+    const byStatus: Record<string, { count: number; sum: number }> = {};
+    const byGateway: Record<string, { count: number; sum: number }> = {};
+    for (const p of paymentsInRange) {
+      (byStatus[p.status] ||= { count: 0, sum: 0 }).count++;
+      if (p.status === 'PAID') byStatus[p.status].sum += p.amount;
+      (byGateway[p.gateway] ||= { count: 0, sum: 0 }).count++;
+      if (p.status === 'PAID') byGateway[p.gateway].sum += p.amount;
+    }
+
+    const revenueInRange = paymentsInRange.filter((p) => p.status === 'PAID').reduce((s, p) => s + p.amount, 0);
+
+    res.json({
+      range: { from: dayKey(from), to: dayKey(to) },
+      kpis: {
+        totalUsers, active, pending, expired, cancelled,
+        paidCount, pendingCount, failedCount, studies,
+        revenuePYG: revenueAll.find((r) => r.currency === 'PYG')?._sum.amount || 0,
+        revenueBRL: revenueAll.find((r) => r.currency === 'BRL')?._sum.amount || 0,
+        newUsersInRange: usersInRange.length,
+        paymentsInRange: paymentsInRange.length,
+        paidInRange: paymentsInRange.filter((p) => p.status === 'PAID').length,
+        revenueInRange,
+      },
+      series: Object.values(days),
+      byStatus: Object.entries(byStatus).map(([status, v]) => ({ status, ...v })),
+      byGateway: Object.entries(byGateway).map(([gateway, v]) => ({ gateway, ...v })),
+      subsByPlan: subsByPlan.map((s) => ({ plan: s.plan, count: (s as any)._count })),
+      usersByStatus: usersByStatus.map((u) => ({ status: u.status, count: (u as any)._count })),
+    });
+  }
+
+  /**
+   * GET /admin/movements?from&to&type&status&page — feed unificado: pagos + altas + suscripciones.
+   * type: PAYMENT | SIGNUP | SUBSCRIPTION (vacío = todos).
+   */
+  static async movements(req: AdminRequest, res: Response): Promise<void> {
+    const page = Math.max(1, parseInt(qs(req.query.page) || '1', 10));
+    const type = qs(req.query.type).toUpperCase();
+    const status = qs(req.query.status);
+    const from = qs(req.query.from) ? new Date(`${qs(req.query.from)}T00:00:00`) : undefined;
+    const to = qs(req.query.to) ? new Date(`${qs(req.query.to)}T23:59:59.999`) : undefined;
+    const baseWhere = (): any => {
+      const w: any = {};
+      if (from || to) w.createdAt = { ...(from ? { gte: from } : {}), ...(to ? { lte: to } : {}) };
+      if (status) w.status = status;
+      return w;
+    };
+
+    const items: any[] = [];
+
+    if (!type || type === 'PAYMENT') {
+      const rows = await prisma.paymentOrder.findMany({
+        where: baseWhere(),
+        orderBy: { createdAt: 'desc' }, take: 400,
+        include: { user: { select: { fullName: true, phoneNumber: true } } },
+      });
+      for (const p of rows) items.push({
+        type: 'PAYMENT', at: p.createdAt, title: p.user?.fullName || p.user?.phoneNumber || '—',
+        subtitle: `${p.gateway} · ${p.paymentMethod}`, status: p.status,
+        amount: p.amount, currency: p.currency, ref: p.referenceCode,
+      });
+    }
+    if (!type || type === 'SIGNUP') {
+      const rows = await prisma.user.findMany({
+        where: baseWhere(),
+        orderBy: { createdAt: 'desc' }, take: 400,
+        select: { id: true, fullName: true, phoneNumber: true, status: true, createdAt: true },
+      });
+      for (const u of rows) items.push({
+        type: 'SIGNUP', at: u.createdAt, title: u.fullName || 'Sin nombre',
+        subtitle: u.phoneNumber, status: u.status, userId: u.id,
+      });
+    }
+    if (!type || type === 'SUBSCRIPTION') {
+      const rows = await prisma.subscription.findMany({
+        where: baseWhere(),
+        orderBy: { createdAt: 'desc' }, take: 400,
+        include: { user: { select: { id: true, fullName: true, phoneNumber: true } } },
+      });
+      for (const s of rows) items.push({
+        type: 'SUBSCRIPTION', at: s.createdAt, title: s.user?.fullName || s.user?.phoneNumber || '—',
+        subtitle: `${s.plan} · vence ${new Date(s.expiryDate).toLocaleDateString('es-PY')}`,
+        status: s.status, amount: s.amount, currency: s.currency, userId: s.user?.id,
+      });
+    }
+
+    items.sort((a, b) => new Date(b.at).getTime() - new Date(a.at).getTime());
+    const total = items.length;
+    const slice = items.slice((page - 1) * PAGE, page * PAGE);
+    res.json({ total, page, pageSize: PAGE, rows: slice });
   }
 
   static async listUsers(req: AdminRequest, res: Response): Promise<void> {
@@ -238,15 +406,9 @@ export class AdminController {
   /** GET /admin/subscriptions — monitoreo de suscripciones. filtro: ?filter=active|expiring|expired|all */
   static async listSubscriptions(req: AdminRequest, res: Response): Promise<void> {
     const page = Math.max(1, parseInt(qs(req.query.page) || '1', 10));
-    const filter = qs(req.query.filter) || 'all';
+    const where = subscriptionWhere(req.query as any);
     const now = new Date();
-    const in7 = new Date(now.getTime() + 7 * 864e5);
-    const where: any = {};
-    if (filter === 'active') { where.status = 'ACTIVE'; where.expiryDate = { gt: now }; }
-    else if (filter === 'expiring') { where.status = 'ACTIVE'; where.expiryDate = { gt: now, lte: in7 }; }
-    else if (filter === 'expired') { where.OR = [{ status: { in: ['EXPIRED', 'CANCELLED'] } }, { expiryDate: { lte: now } }]; }
-
-    const [total, rows] = await Promise.all([
+    const [total, rows, totals] = await Promise.all([
       prisma.subscription.count({ where }),
       prisma.subscription.findMany({
         where,
@@ -255,9 +417,11 @@ export class AdminController {
         take: PAGE,
         include: { user: { select: { id: true, fullName: true, phoneNumber: true, status: true } } },
       }),
+      prisma.subscription.groupBy({ by: ['currency'], where, _sum: { amount: true }, _count: true }),
     ]);
     res.json({
       total, page, pageSize: PAGE,
+      totals: totals.map((t) => ({ currency: t.currency, count: t._count, sum: t._sum.amount || 0 })),
       rows: rows.map((s) => ({
         id: s.id, plan: s.plan, status: s.status, currency: s.currency, amount: s.amount,
         startDate: s.startDate, expiryDate: s.expiryDate,
@@ -265,6 +429,34 @@ export class AdminController {
         finePending: s.finePending, user: s.user,
       })),
     });
+  }
+
+  /** Export de suscripciones (mismos filtros) — CSV (Excel) o JSON (para imprimir). */
+  static async exportSubscriptions(req: AdminRequest, res: Response): Promise<void> {
+    const where = subscriptionWhere(req.query as any);
+    const now = new Date();
+    const rows = await prisma.subscription.findMany({
+      where, orderBy: { expiryDate: 'asc' }, take: 5000,
+      include: { user: { select: { fullName: true, phoneNumber: true } } },
+    });
+    const mapped = rows.map((s) => ({
+      cliente: s.user?.fullName || '', telefono: s.user?.phoneNumber || '',
+      plan: s.plan, estado: s.status, moneda: s.currency, monto: s.amount,
+      inicio: new Date(s.startDate).toISOString().slice(0, 10),
+      vence: new Date(s.expiryDate).toISOString().slice(0, 10),
+      diasRestantes: Math.ceil((s.expiryDate.getTime() - now.getTime()) / 864e5),
+      multa: s.finePending ? 'SI' : 'NO',
+    }));
+    if (qs(req.query.format) === 'json') {
+      const totals = await prisma.subscription.groupBy({ by: ['currency'], where, _sum: { amount: true }, _count: true });
+      res.json({ rows: mapped, totals: totals.map((t) => ({ currency: t.currency, count: t._count, sum: t._sum.amount || 0 })) });
+      return;
+    }
+    const header = ['Cliente', 'Telefono', 'Plan', 'Estado', 'Moneda', 'Monto', 'Inicio', 'Vence', 'DiasRestantes', 'Multa'];
+    const csv = '﻿' + [header.join(','), ...mapped.map((m) => Object.values(m).map(csvCell).join(','))].join('\r\n');
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="suscripciones-biopass-${now.toISOString().slice(0, 10)}.csv"`);
+    res.send(csv);
   }
 
   static async listPayments(req: AdminRequest, res: Response): Promise<void> {

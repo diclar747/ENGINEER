@@ -74,6 +74,8 @@ router.post('/bot/run-cron', BotController.triggerCronCheck);
 // ---- Admin panel ----
 router.post('/admin/login', AdminController.login);
 router.get('/admin/stats', requireAdmin, AdminController.stats);
+router.get('/admin/dashboard', requireAdmin, AdminController.dashboard);
+router.get('/admin/movements', requireAdmin, AdminController.movements);
 router.get('/admin/users', requireAdmin, AdminController.listUsers);
 router.get('/admin/users/:id', requireAdmin, AdminController.getUser);
 router.patch('/admin/users/:id', requireAdmin, AdminController.updateUser);
@@ -82,6 +84,7 @@ router.post('/admin/users/:id/unlock-pin', requireAdmin, AdminController.unlockP
 router.post('/admin/users/:id/reset-pin', requireAdmin, AdminController.resetPin);
 router.post('/admin/users/:id/extend', requireAdmin, AdminController.extendSubscription);
 router.delete('/admin/users/:id', requireAdmin, AdminController.deleteUser);
+router.get('/admin/subscriptions/export', requireAdmin, AdminController.exportSubscriptions);
 router.get('/admin/subscriptions', requireAdmin, AdminController.listSubscriptions);
 router.get('/admin/payments/export', requireAdmin, AdminController.exportPayments);
 router.get('/admin/payments', requireAdmin, AdminController.listPayments);

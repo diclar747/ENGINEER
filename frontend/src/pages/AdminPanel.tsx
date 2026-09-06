@@ -3,11 +3,22 @@ import { useNavigate } from 'react-router-dom';
 import { adminApi } from '../utils/adminApi';
 import { ThemeToggle } from '../components/ThemeToggle';
 import { useConfirm, useToast } from '../components/ui/Feedback';
+import { AreaLine, Bars, Donut, HBars, CH } from '../components/ui/Charts';
 import {
   ShieldCheck, LogOut, Users, CreditCard, ListChecks, LayoutDashboard, CalendarClock,
   Loader2, Search, Check, X, RefreshCw, Plus, Trash2, Save, Smartphone, Download, Printer,
-  KeyRound, Unlock, CalendarPlus, Pencil, ExternalLink,
+  KeyRound, Unlock, CalendarPlus, Pencil, ExternalLink, TrendingUp, DollarSign, UserPlus, Activity,
 } from 'lucide-react';
+
+const STATUS_COLOR: Record<string, string> = {
+  PAID: CH.emerald, PENDING: CH.amber, FAILED: CH.rose, EXPIRED: CH.slate,
+  ACTIVE: CH.emerald, PENDING_PAYMENT: CH.amber, CANCELLED: CH.rose, PURGED: CH.slate,
+};
+const rangePreset = (days: number) => {
+  const to = new Date();
+  const from = new Date(to.getTime() - (days - 1) * 864e5);
+  return { from: from.toISOString().slice(0, 10), to: to.toISOString().slice(0, 10) };
+};
 
 type Tab = 'resumen' | 'clientes' | 'suscripciones' | 'pagos' | 'contenido';
 const money = (n: number) => new Intl.NumberFormat('es-PY').format(Number(n) || 0);
@@ -80,26 +91,148 @@ export const AdminPanel: React.FC = () => {
 
 /* ───────────────────────────────  Resumen  ─────────────────────────────── */
 
-const Resumen: React.FC = () => {
-  const [s, setS] = useState<any>(null);
-  const [err, setErr] = useState<string | null>(null);
-  useEffect(() => { adminApi.get('/admin/stats').then((r) => setS(r.data)).catch((e) => setErr(e?.response?.data?.error || 'Error')); }, []);
-  if (err) return <p className="text-rose-600 dark:text-rose-400 text-sm">{err}</p>;
-  if (!s) return <Loading />;
-  const cards: [string, React.ReactNode][] = [
-    ['Clientes', s.users], ['Activos', s.active], ['Pendientes de pago', s.pending],
-    ['Pagos acreditados', s.paidOrders], ['Pagos pendientes', s.pendingOrders],
-    ['Estudios cargados', s.studies], ['Ingresos (Gs.)', money(s.revenue)],
-  ];
-  return (
-    <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-      {cards.map(([label, val]) => (
-        <div key={label} className="bg-card border border-line rounded-2xl p-4">
-          <p className="text-[11px] font-semibold text-fg-muted uppercase tracking-wide">{label}</p>
-          <p className="text-2xl font-black text-fg mt-1">{val}</p>
-        </div>
-      ))}
+const Kpi: React.FC<{ label: string; value: React.ReactNode; hint?: string; icon: React.ReactNode; tone?: string }> = ({ label, value, hint, icon, tone = 'text-teal-600 dark:text-teal-400' }) => (
+  <div className="bg-card border border-line rounded-2xl p-4">
+    <div className="flex items-center justify-between">
+      <p className="text-[11px] font-bold text-fg-muted uppercase tracking-wide">{label}</p>
+      <span className={tone}>{icon}</span>
     </div>
+    <p className="text-2xl font-black text-fg mt-1.5">{value}</p>
+    {hint && <p className="text-[11px] text-fg-muted mt-0.5">{hint}</p>}
+  </div>
+);
+
+const Card: React.FC<{ title: string; children: React.ReactNode; right?: React.ReactNode }> = ({ title, children, right }) => (
+  <div className="bg-card border border-line rounded-2xl p-4">
+    <div className="flex items-center justify-between mb-3">
+      <h3 className="text-xs font-black text-fg uppercase tracking-wide">{title}</h3>
+      {right}
+    </div>
+    {children}
+  </div>
+);
+
+const Resumen: React.FC = () => {
+  const [d, setD] = useState<any>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [range, setRange] = useState(rangePreset(30));
+  const [preset, setPreset] = useState(30);
+
+  const load = useCallback(() => {
+    setErr(null);
+    adminApi.get('/admin/dashboard', { params: range })
+      .then((r) => setD(r.data)).catch((e) => setErr(e?.response?.data?.error || 'Error'));
+  }, [range]);
+  useEffect(() => { load(); }, [load]);
+  const setP = (days: number) => { setPreset(days); setRange(rangePreset(days)); };
+
+  if (err) return <p className="text-rose-600 dark:text-rose-400 text-sm">{err}</p>;
+  if (!d) return <Loading />;
+  const k = d.kpis;
+  const series = (d.series || []) as any[];
+  const shortLabel = (iso: string) => iso.slice(8) + '/' + iso.slice(5, 7);
+
+  return (
+    <div className="space-y-4">
+      {/* Rango */}
+      <div className="flex flex-wrap items-center gap-2">
+        {[7, 30, 90].map((n) => (
+          <button key={n} onClick={() => setP(n)} className={`px-3 py-1.5 rounded-lg text-xs font-bold ${preset === n ? 'bg-teal-500 text-slate-950' : 'bg-muted text-fg-soft'}`}>{n} días</button>
+        ))}
+        <input type="date" value={range.from} onChange={(e) => { setPreset(0); setRange({ ...range, from: e.target.value }); }} className={inputCls} />
+        <span className="text-fg-muted text-xs">→</span>
+        <input type="date" value={range.to} onChange={(e) => { setPreset(0); setRange({ ...range, to: e.target.value }); }} className={inputCls} />
+        <button onClick={load} className="px-3 py-2 bg-muted rounded-xl text-fg-soft"><RefreshCw className="w-4 h-4" /></button>
+      </div>
+
+      {/* KPIs */}
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+        <Kpi label="Ingresos (rango)" value={`Gs. ${money(k.revenueInRange)}`} hint={`${k.paidInRange} pagos acreditados`} icon={<DollarSign className="w-4 h-4" />} />
+        <Kpi label="Altas (rango)" value={k.newUsersInRange} hint={`${k.paymentsInRange} órdenes generadas`} icon={<UserPlus className="w-4 h-4" />} tone="text-sky-500" />
+        <Kpi label="Clientes activos" value={k.active} hint={`${k.totalUsers} en total`} icon={<Activity className="w-4 h-4" />} tone="text-emerald-500" />
+        <Kpi label="Pendientes de pago" value={k.pending} hint={`${k.pendingCount} órdenes pendientes`} icon={<CreditCard className="w-4 h-4" />} tone="text-amber-500" />
+        <Kpi label="Ingresos totales" value={`Gs. ${money(k.revenuePYG)}`} hint={k.revenueBRL ? `+ R$ ${money(k.revenueBRL)}` : undefined} icon={<TrendingUp className="w-4 h-4" />} />
+        <Kpi label="Pagos acreditados" value={k.paidCount} icon={<Check className="w-4 h-4" />} tone="text-emerald-500" />
+        <Kpi label="Vencidos / cancelados" value={k.expired + k.cancelled} icon={<X className="w-4 h-4" />} tone="text-rose-500" />
+        <Kpi label="Estudios cargados" value={k.studies} icon={<ListChecks className="w-4 h-4" />} tone="text-violet-500" />
+      </div>
+
+      {/* Gráficos */}
+      <div className="grid lg:grid-cols-2 gap-3">
+        <Card title={`Ingresos por día · Gs. ${money(k.revenueInRange)}`}>
+          <AreaLine data={series.map((x) => ({ label: shortLabel(x.date), value: x.revenue }))} color={CH.teal} height={140} />
+          <div className="flex justify-between text-[10px] text-fg-muted mt-1"><span>{shortLabel(d.range.from)}</span><span>{shortLabel(d.range.to)}</span></div>
+        </Card>
+        <Card title="Pagos por estado">
+          <Donut data={(d.byStatus || []).map((x: any) => ({ label: x.status, value: x.count, color: STATUS_COLOR[x.status] || CH.slate }))} />
+        </Card>
+        <Card title="Órdenes generadas por día">
+          <Bars data={series.map((x) => ({ label: x.date, value: x.payments }))} color={CH.sky} height={110} />
+        </Card>
+        <Card title="Altas de clientes por día">
+          <Bars data={series.map((x) => ({ label: x.date, value: x.newUsers }))} color={CH.emerald} height={110} />
+        </Card>
+        <Card title="Pagos por pasarela (rango)">
+          <HBars data={(d.byGateway || []).map((x: any) => ({ label: x.gateway, value: x.count, sub: `${x.count} · Gs. ${money(x.sum)}` }))} />
+        </Card>
+        <Card title="Clientes por estado">
+          <HBars data={(d.usersByStatus || []).map((x: any) => ({ label: x.status, value: x.count }))} color={CH.violet} />
+        </Card>
+      </div>
+
+      {/* Movimientos */}
+      <Movimientos />
+    </div>
+  );
+};
+
+const MOV_TYPES: Record<string, string> = { PAYMENT: 'Pago', SIGNUP: 'Alta', SUBSCRIPTION: 'Suscripción' };
+const Movimientos: React.FC = () => {
+  const [rows, setRows] = useState<any[]>([]);
+  const [total, setTotal] = useState(0);
+  const [page, setPage] = useState(1);
+  const [loading, setLoading] = useState(false);
+  const [f, setF] = useState({ type: '', status: '', from: '', to: '' });
+  const load = useCallback(() => {
+    setLoading(true);
+    adminApi.get('/admin/movements', { params: { page, ...f } })
+      .then((r) => { setRows(r.data.rows); setTotal(r.data.total); }).finally(() => setLoading(false));
+  }, [page, f]);
+  useEffect(() => { load(); }, [load]);
+  const set = (k: string, v: string) => { setPage(1); setF({ ...f, [k]: v }); };
+  return (
+    <Card title="Movimientos" right={<span className="text-[11px] text-fg-muted">{total} registros</span>}>
+      <div className="flex flex-wrap items-center gap-2 mb-3">
+        <select value={f.type} onChange={(e) => set('type', e.target.value)} className={inputCls}>
+          <option value="">Categoría: todas</option>
+          <option value="PAYMENT">Pagos</option><option value="SIGNUP">Altas</option><option value="SUBSCRIPTION">Suscripciones</option>
+        </select>
+        <input value={f.status} onChange={(e) => set('status', e.target.value)} placeholder="Estado" className={`${inputCls} w-28`} />
+        <input type="date" value={f.from} onChange={(e) => set('from', e.target.value)} className={inputCls} />
+        <span className="text-fg-muted text-xs">→</span>
+        <input type="date" value={f.to} onChange={(e) => set('to', e.target.value)} className={inputCls} />
+        <button onClick={load} className="px-3 py-2 bg-muted rounded-xl text-fg-soft"><RefreshCw className="w-4 h-4" /></button>
+      </div>
+      <div className="overflow-x-auto">
+        <table className="w-full text-xs">
+          <thead className="text-fg-muted border-b border-line"><tr>{['Fecha', 'Tipo', 'Detalle', 'Estado', 'Monto'].map((h) => <th key={h} className="text-left font-semibold px-2 py-2 whitespace-nowrap">{h}</th>)}</tr></thead>
+          <tbody>
+            {loading && <tr><td colSpan={5} className="py-6 text-center"><Loader2 className="w-4 h-4 animate-spin inline text-teal-500" /></td></tr>}
+            {!loading && rows.length === 0 && <tr><td colSpan={5} className="py-6 text-center text-fg-muted">Sin movimientos</td></tr>}
+            {!loading && rows.map((m, i) => (
+              <tr key={i} className="border-b border-line/50">
+                <td className="px-2 py-2 whitespace-nowrap">{fdatetime(m.at)}</td>
+                <td className="px-2 py-2"><span className="px-1.5 py-0.5 rounded bg-muted text-fg-soft font-bold text-[10px]">{MOV_TYPES[m.type] || m.type}</span></td>
+                <td className="px-2 py-2"><span className="font-semibold text-fg">{m.title}</span> <span className="text-fg-muted">· {m.subtitle}</span></td>
+                <td className="px-2 py-2"><span className={`px-2 py-0.5 rounded-full font-bold ${STATUS[m.status] || 'bg-muted'}`}>{m.status}</span></td>
+                <td className="px-2 py-2 whitespace-nowrap font-semibold text-fg">{m.amount != null ? `${money(m.amount)} ${m.currency || ''}` : '—'}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <div className="mt-3"><Pager page={page} total={total} onPage={setPage} /></div>
+    </Card>
   );
 };
 
@@ -330,26 +463,70 @@ const Clientes: React.FC = () => {
 /* ─────────────────────────────  Suscripciones  ────────────────────────── */
 
 const Suscripciones: React.FC = () => {
+  const toast = useToast();
   const [rows, setRows] = useState<any[]>([]);
+  const [totals, setTotals] = useState<any[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
-  const [filter, setFilter] = useState('all');
   const [loading, setLoading] = useState(false);
   const [openId, setOpenId] = useState<string | null>(null);
+  const [f, setF] = useState({ filter: 'all', status: '', plan: '', from: '', to: '' });
   const load = useCallback(() => {
     setLoading(true);
-    adminApi.get('/admin/subscriptions', { params: { page, filter } })
-      .then((r) => { setRows(r.data.rows); setTotal(r.data.total); }).finally(() => setLoading(false));
-  }, [page, filter]);
+    adminApi.get('/admin/subscriptions', { params: { page, ...f } })
+      .then((r) => { setRows(r.data.rows); setTotal(r.data.total); setTotals(r.data.totals || []); }).finally(() => setLoading(false));
+  }, [page, f]);
   useEffect(() => { load(); }, [load]);
+  const set = (k: string, v: string) => { setPage(1); setF({ ...f, [k]: v }); };
+
+  const exportCsv = async () => {
+    try {
+      const r = await adminApi.get('/admin/subscriptions/export', { params: f, responseType: 'blob' });
+      const url = URL.createObjectURL(new Blob([r.data], { type: 'text/csv' }));
+      const a = document.createElement('a'); a.href = url; a.download = `suscripciones-biopass-${new Date().toISOString().slice(0, 10)}.csv`; a.click(); URL.revokeObjectURL(url);
+    } catch { toast.error('No se pudo exportar.'); }
+  };
+  const printReport = async () => {
+    try {
+      const r = await adminApi.get('/admin/subscriptions/export', { params: { ...f, format: 'json' } });
+      const rr: any[] = r.data.rows || []; const tt: any[] = r.data.totals || [];
+      const w = window.open('', '_blank'); if (!w) return;
+      w.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>Suscripciones — Bio-Pass</title>
+        <style>body{font-family:system-ui,Arial,sans-serif;margin:24px;color:#111}h1{font-size:18px;margin:0}p{color:#555;font-size:12px}
+        table{width:100%;border-collapse:collapse;margin-top:12px;font-size:11px}th,td{border:1px solid #ccc;padding:5px 7px;text-align:left}th{background:#f2f2f2}tfoot td{font-weight:bold;background:#fafafa}</style></head><body>
+        <h1>Suscripciones — Doorway Cortex Bio-Pass</h1><p>Generado: ${new Date().toLocaleString('es-PY')} · ${rr.length} registros</p>
+        <table><thead><tr><th>Cliente</th><th>Teléfono</th><th>Plan</th><th>Estado</th><th>Inicio</th><th>Vence</th><th>Días</th><th>Multa</th></tr></thead>
+        <tbody>${rr.map((s) => `<tr><td>${s.cliente}</td><td>${s.telefono}</td><td>${s.plan}</td><td>${s.estado}</td><td>${s.inicio}</td><td>${s.vence}</td><td>${s.diasRestantes}</td><td>${s.multa}</td></tr>`).join('')}</tbody>
+        <tfoot>${tt.map((t) => `<tr><td colspan="8">${t.count} suscripciones · ${t.currency} ${money(t.sum)}</td></tr>`).join('')}</tfoot></table></body></html>`);
+      w.document.close(); w.focus(); setTimeout(() => w.print(), 300);
+    } catch { toast.error('No se pudo generar el reporte.'); }
+  };
+
   return (
     <div className="space-y-3">
-      <div className="flex gap-2">
-        <select value={filter} onChange={(e) => { setPage(1); setFilter(e.target.value); }} className={inputCls}>
+      <div className="flex flex-wrap items-end gap-2">
+        <select value={f.filter} onChange={(e) => set('filter', e.target.value)} className={inputCls}>
           <option value="all">Todas</option><option value="active">Activas</option><option value="expiring">Vencen en 7 días</option><option value="expired">Vencidas / canceladas</option>
         </select>
+        <select value={f.status} onChange={(e) => set('status', e.target.value)} className={inputCls}>
+          <option value="">Estado: todos</option><option value="ACTIVE">Activa</option><option value="EXPIRED">Vencida</option><option value="CANCELLED">Cancelada</option><option value="PENDING_PAYMENT">Pendiente</option>
+        </select>
+        <select value={f.plan} onChange={(e) => set('plan', e.target.value)} className={inputCls}>
+          <option value="">Plan: todos</option><option value="MONTHLY">Mensual</option><option value="ANNUAL">Anual</option>
+        </select>
+        <label className="text-[11px] text-fg-muted">Desde<br /><input type="date" value={f.from} onChange={(e) => set('from', e.target.value)} className={inputCls} /></label>
+        <label className="text-[11px] text-fg-muted">Hasta<br /><input type="date" value={f.to} onChange={(e) => set('to', e.target.value)} className={inputCls} /></label>
         <button onClick={load} className="px-3 py-2 bg-muted rounded-xl text-fg-soft"><RefreshCw className="w-4 h-4" /></button>
+        <button onClick={exportCsv} className="px-3 py-2 rounded-xl bg-emerald-600/80 text-white text-xs font-bold inline-flex items-center gap-1.5"><Download className="w-3.5 h-3.5" />Excel/CSV</button>
+        <button onClick={printReport} className="px-3 py-2 rounded-xl bg-muted text-fg-soft text-xs font-bold inline-flex items-center gap-1.5"><Printer className="w-3.5 h-3.5" />Imprimir</button>
       </div>
+      {totals.length > 0 && (
+        <div className="flex flex-wrap gap-2 text-xs">
+          {totals.map((t) => (
+            <span key={t.currency} className="px-3 py-1.5 rounded-xl bg-card border border-line font-bold text-fg">{t.count} suscripciones · <span className="text-teal-600 dark:text-teal-400">{money(t.sum)} {t.currency}</span></span>
+          ))}
+        </div>
+      )}
       <div className="overflow-x-auto bg-card border border-line rounded-2xl">
         <table className="w-full text-xs">
           <thead className="text-fg-muted border-b border-line"><tr>{['Cliente', 'Teléfono', 'Plan', 'Estado', 'Inicio', 'Vence', 'Días', 'Multa'].map((h) => (<th key={h} className="text-left font-semibold px-3 py-2.5 whitespace-nowrap">{h}</th>))}</tr></thead>
