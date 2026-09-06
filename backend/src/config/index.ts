@@ -84,23 +84,24 @@ export const config = {
     },
   },
 
-  winsap: {
-    // Winsap "payment links" API — hosted checkout (Tpago/Bancard) for Paraguay.
-    apiKey: process.env.WINSAP_API_KEY || '',
-    baseUrl: (process.env.WINSAP_BASE_URL || 'https://winsap.com.py/api/v1').replace(/\/$/, ''),
-    get enabled() {
-      return !!this.apiKey;
-    },
-  },
-
   bancard: {
     publicKey: process.env.BANCARD_PUBLIC_KEY || '',
     privateKey: process.env.BANCARD_PRIVATE_KEY || '',
     env: (process.env.BANCARD_ENV || 'staging').toLowerCase(),
+    /**
+     * Full API + hosted-checkout host. Override with BANCARD_BASE_URL (no trailing slash);
+     * otherwise: production → https://vpos.infonet.com.py, staging → https://vpos.infonet.com.py:8888
+     */
     get baseUrl() {
+      const override = process.env.BANCARD_BASE_URL;
+      if (override) return override.replace(/\/+$/, '');
       return this.env === 'production'
         ? 'https://vpos.infonet.com.py'
         : 'https://vpos.infonet.com.py:8888';
+    },
+    /** Bancard-side confirmation (webhook) URL to register for this commerce — informational, printed on boot. */
+    get webhookUrl() {
+      return `${config.baseUrl}/api/payments/bancard/webhook`;
     },
     get enabled() {
       return !!(this.publicKey && this.privateKey);

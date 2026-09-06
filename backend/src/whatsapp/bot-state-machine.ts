@@ -5,7 +5,6 @@ import { PaymentService } from '../services/payment.service';
 import { QrPdfService } from '../services/qr-pdf.service';
 import { StorageService } from '../storage/storage.service';
 import { NiroService } from '../services/niro.service';
-import { WinsapService } from '../services/winsap.service';
 import { NlpHandler } from './nlp-handler';
 import { config } from '../config';
 
@@ -457,11 +456,11 @@ export class BotStateMachine {
             `💰 *Monto:* ${order.formattedAmount} (${plan === 'ANNUAL' ? 'Plan Anual' : 'Plan Mensual'})\n` +
             `🔢 *Referencia:* \`${order.referenceCode}\`\n\n` +
             (hasQr
-              ? `📷 *Escaneá el QR de arriba* con tu app del banco (Bancard / QR interbancario) para pagar al instante.\n\n`
+              ? `📷 *Escaneá el QR de arriba* con la cámara o tu app del banco para abrir el pago de Bancard (tarjeta o QR).\n\n`
               : '') +
-            `🏦 *Transferencia SIPAP Directa:*\n` +
+            `🌐 *Pagar con Tarjeta / Bancard / QR:*\n${order.paymentLink}\n\n` +
+            `🏦 *Alternativa — Transferencia SIPAP / Tigo Money:*\n` +
             `${order.aliasInfo}\n\n` +
-            `🌐 *O pagá con Tarjeta / Bancard / QR desde el navegador:*\n${order.paymentLink}\n\n` +
             `_Una vez realizado el pago, tu QR y Kit de Stickers (3x3 cm) se enviarán inmediatamente por este chat._`,
           mediaAttachment: qrAttachment(order.pixQrImage, `Bio-Pass — ${order.formattedAmount} (${order.referenceCode})`),
         };
@@ -487,22 +486,8 @@ export class BotStateMachine {
         });
 
         if (lastOrder) {
-          if (lastOrder.gateway === 'WINSAP') {
-            // Real check against Winsap's transaction list — no blind trust.
-            const wStatus = await WinsapService.getStatusByReference(lastOrder.referenceCode);
-            if (wStatus === 'paid') {
-              await PaymentService.handlePaymentSuccess(lastOrder.referenceCode);
-              return { replyText: `✅ *Pago confirmado por Winsap.* Activando tu cuenta…` };
-            }
-            return {
-              replyText:
-                wStatus === 'cancelled'
-                  ? `⚠️ *Ese pago figura cancelado en Winsap.*\n\nEscribí *1*, *2*, *3* o *4* para generar una nueva orden.`
-                  : `⏳ *Todavía no vemos el pago acreditado en Winsap.*\n\nSi ya pagaste, esperá unos segundos (a veces demora en confirmarse) y volvé a escribir *PAGAR*.`,
-            };
-          }
-
-          // Non-Winsap gateways (Bancard / PIX / transferencia manual): kept as before.
+          // Bancard / PIX / transferencia manual: la confirmación autoritativa llega por webhook.
+          // Este "PAGAR" es el atajo manual del usuario.
           await PaymentService.handlePaymentSuccess(lastOrder.referenceCode);
           return { replyText: `✅ *Pago procesado con éxito.*` };
         }

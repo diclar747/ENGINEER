@@ -118,6 +118,57 @@ export class PaymentController {
     );
   }
 
+  /**
+   * Bancard server-to-server confirmation (POST). No X-Webhook-Secret: authenticity is the
+   * MD5 token in the payload (privateKey + shop_process_id + "confirm" + amount + currency).
+   * Always answers 200 so Bancard doesn't retry-storm. Mirrors cardnet/backend/index.php.
+   */
+  public static async bancardWebhook(req: Request, res: Response): Promise<void> {
+    const op = req.body?.operation;
+    const shopProcessId = op?.shop_process_id != null ? String(op.shop_process_id) : '';
+    try {
+      if (!shopProcessId) {
+        res.status(200).json({ status: 'error', message: 'Payload inválido' });
+        return;
+      }
+      const order = await prisma.paymentOrder.findFirst({
+        where: { gateway: 'BANCARD', gatewayRef: shopProcessId },
+      });
+      if (!order) {
+        console.warn('[bancard:webhook] orden no encontrada para shop_process_id', shopProcessId);
+        res.status(200).json({ status: 'error', message: 'Orden no encontrada' });
+        return;
+      }
+
+      const currency: 'PYG' | 'USD' = order.currency === 'USD' ? 'USD' : 'PYG';
+      const { valid, approved, description } = BancardService.parseWebhook(req.body, {
+        amount: order.amount,
+        currency,
+      });
+
+      if (!valid) {
+        console.warn('[bancard:webhook] token inválido para', shopProcessId);
+        res.status(200).json({ status: 'error', message: 'Token inválido' });
+        return;
+      }
+
+      if (approved) {
+        await PaymentService.handlePaymentSuccess(order.referenceCode);
+        console.log(`[bancard:webhook] pago ${shopProcessId} aprobado — Bio-Pass activado`);
+      } else if (order.status !== 'PAID') {
+        await prisma.paymentOrder
+          .update({ where: { id: order.id }, data: { status: 'FAILED' } })
+          .catch(() => {});
+        console.log(`[bancard:webhook] pago ${shopProcessId} rechazado: ${description || 'sin detalle'}`);
+      }
+
+      res.status(200).json({ status: 'success' });
+    } catch (err: any) {
+      console.error('[bancard:webhook]', err?.message);
+      res.status(200).json({ status: 'error_handled' });
+    }
+  }
+
   /** Bancard hits this (GET, browser redirect) after the hosted checkout. We verify then activate. */
   public static async bancardReturn(req: Request, res: Response): Promise<void> {
     const ref = String(req.query.ref || '');

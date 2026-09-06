@@ -79,6 +79,13 @@ async function bootstrap() {
     `🧩 Integrations — OCR:${config.ocr.enabled ? 'on' : 'off'} · AI vision:${config.ai.provider} · ` +
       `Email:${config.email.enabled ? 'SMTP' : 'log-only'} · Bancard:${config.bancard.enabled ? 'on' : 'off'} · PIX:${config.pix.psp}`
   );
+  if (config.bancard.enabled) {
+    console.log(
+      `💳 Bancard vPOS (${config.bancard.env}) — API: ${config.bancard.baseUrl}\n` +
+        `   ↳ Registrar en Bancard como "URL de confirmación": ${config.bancard.webhookUrl}\n` +
+        `   ↳ Return del navegador: ${config.baseUrl}/api/payments/bancard/return?ref={referenceCode}`
+    );
+  }
 
   // 5. Start WhatsApp Bot (Baileys) in non-blocking mode
   whatsappBot.start().catch((err) => {

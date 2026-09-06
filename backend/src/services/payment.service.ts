@@ -6,7 +6,6 @@ import { PushService } from './push.service';
 import { EmailService } from './email.service';
 import { PixService } from './pix.service';
 import { BancardService } from './bancard.service';
-import { WinsapService } from './winsap.service';
 import QRCode from 'qrcode';
 
 export interface CreateOrderParams {
@@ -64,13 +63,13 @@ export class PaymentService {
     let pixPayload: string | undefined;
     let pixQrImage: string | undefined;
     let gatewayRef: string | undefined;
-    let gateway: 'MERCADOPAGO' | 'PIX' | 'BANCARD' | 'BANK_TRANSFER' | 'WINSAP' = isPY ? 'BANK_TRANSFER' : 'PIX';
+    let gateway: 'MERCADOPAGO' | 'PIX' | 'BANCARD' | 'BANK_TRANSFER' = isPY ? 'BANK_TRANSFER' : 'PIX';
     let paymentMethod = isPY ? 'ALIAS / TRANSFERENCIA' : 'PIX';
     let externalRedirect: string | undefined;
     let orderExpiry: Date | undefined;
 
     if (isPY) {
-      // Always provide the manual transfer instructions
+      // Secondary/manual instructions, shown alongside the Bancard checkout.
       aliasInfo =
         `BANCO: ${config.payments.paraguayBank}\n` +
         `ALIAS SIPAP: ${config.payments.paraguayAlias}\n` +
@@ -78,47 +77,36 @@ export class PaymentService {
         `TITULAR: DOORWAY CORTEX BIO-PASS PY\n` +
         `REF: ${referenceCode}`;
 
-      // Prefer Winsap (hosted checkout QR sent straight in the chat) when configured.
-      if (WinsapService.enabled) {
-        const link = await WinsapService.createPaymentLink({
-          name: `Bio-Pass ${params.plan === 'ANNUAL' ? 'Plan Anual' : 'Plan Mensual'}`,
-          price: baseAmount,
+      // Bancard vPOS es el procesador de Paraguay (reemplaza el portal winsap.com.py). El cliente
+      // paga con tarjeta o QR en la pantalla alojada de Bancard; el webhook activa la cuenta.
+      if (BancardService.enabled) {
+        // Un fallo acá sale como error 500 al llamador, en vez de crear silenciosamente una orden
+        // "solo transferencia".
+        const checkout = await BancardService.createCheckout({
+          shopProcessId,
+          amount: baseAmount,
           currency: 'PYG',
-          description: `Suscripción Bio-Pass (${params.plan}) — ${user.fullName || user.phoneNumber}`,
-          reference: referenceCode,
-          successUrl: `${checkoutLink}&status=success`,
+          description: `Bio-Pass ${params.plan}`,
+          returnUrl: `${config.baseUrl}/api/payments/bancard/return?ref=${referenceCode}`,
           cancelUrl: `${checkoutLink}&status=cancel`,
         });
-        if (link) {
-          gateway = 'WINSAP';
-          paymentMethod = 'QR / Tarjeta (Winsap)';
-          gatewayRef = link.id;
-          externalRedirect = link.paymentUrl;
-          try {
-            pixQrImage = await QRCode.toDataURL(link.paymentUrl, { errorCorrectionLevel: 'M', margin: 1, width: 320 });
-          } catch (err: any) {
-            console.warn('[payment] Winsap QR render failed:', err?.message);
-          }
-        }
-      }
-
-      if (!externalRedirect && BancardService.enabled) {
+        gateway = 'BANCARD';
+        paymentMethod = 'Tarjeta / QR (Bancard)';
+        // Guardamos NUESTRO shop_process_id: es lo que Bancard reenvía en el webhook / la
+        // confirmación, y por lo que bancardReturn / bancardWebhook buscan la orden. El process_id
+        // propio de Bancard no se necesita del lado servidor (vive en externalRedirect).
+        gatewayRef = shopProcessId;
+        externalRedirect = checkout.redirectUrl;
+        // QR escaneable del checkout de Bancard, para mandarlo directo en el chat de WhatsApp.
         try {
-          const checkout = await BancardService.createCheckout({
-            shopProcessId,
-            amount: baseAmount,
-            currency: 'PYG',
-            description: `Bio-Pass ${params.plan}`,
-            returnUrl: `${config.baseUrl}/api/payments/bancard/return?ref=${referenceCode}`,
-            cancelUrl: `${checkoutLink}&status=cancel`,
-          });
-          gateway = 'BANCARD';
-          paymentMethod = 'CARD / QR (Bancard)';
-          gatewayRef = checkout.processId;
-          externalRedirect = checkout.redirectUrl;
+          pixQrImage = await QRCode.toDataURL(checkout.redirectUrl, { errorCorrectionLevel: 'M', margin: 1, width: 320 });
         } catch (err: any) {
-          console.warn('[payment] Bancard checkout failed, using transfer instructions only:', err?.message);
+          console.warn('[payment] Bancard QR render failed:', err?.message);
         }
+      } else {
+        console.warn(
+          '[payment] BANCARD_PUBLIC_KEY / BANCARD_PRIVATE_KEY sin configurar — la orden PY sale solo con instrucciones de transferencia manual.'
+        );
       }
     } else {
       const pix = await PixService.createCharge({
@@ -165,7 +153,9 @@ export class PaymentService {
       gateway,
       paymentMethod,
       checkoutUrl: checkoutLink,
-      paymentLink: externalRedirect || checkoutLink,
+      // El punto de entrada para el usuario es siempre nuestra página /checkout: muestra monto +
+      // estado, hace polling de la confirmación y ofrece el botón "Pagar con Bancard".
+      paymentLink: checkoutLink,
       externalRedirect,
       aliasInfo,
       pixPayload,
@@ -183,6 +173,10 @@ export class PaymentService {
     });
     if (!order) return null;
     const isPY = order.currency === 'PYG';
+    // Link de pasarela externa = una URL absoluta que NO es nuestra propia página /checkout.
+    const link = order.paymentLink || '';
+    const externalRedirect =
+      link.startsWith('http') && !link.startsWith(config.frontendUrl) ? link : undefined;
     return {
       referenceCode: order.referenceCode,
       status: order.status,
@@ -196,7 +190,7 @@ export class PaymentService {
       pixPayload: order.pixPayload,
       pixQrImage: order.pixQrImage,
       pixKey: config.payments.brasilPixKey,
-      externalRedirect: order.paymentLink?.startsWith('http') && !order.paymentLink.includes('/checkout') ? order.paymentLink : undefined,
+      externalRedirect,
       expiresAt: order.expiresAt,
       customerName: order.user?.fullName,
     };

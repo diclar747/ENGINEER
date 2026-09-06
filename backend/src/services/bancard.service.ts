@@ -60,13 +60,58 @@ export class BancardService {
       throw new Error(`Bancard single_buy failed: ${JSON.stringify(data?.messages || data)}`);
     }
 
+    const processId = String(data.process_id);
     return {
-      processId: String(data.process_id),
-      redirectUrl: `${config.bancard.baseUrl}/checkout/new/${data.process_id}`,
+      processId,
+      // Hosted redirect checkout (card + QR tabs rendered by Bancard).
+      // The iframe alternative loads bancard-checkout-4.0.0.js and calls Bancard.Checkout.createForm(el, processId).
+      redirectUrl: `${config.bancard.baseUrl}/checkout/new/${processId}`,
     };
   }
 
+  /**
+   * MD5 that a valid Bancard confirmation / webhook payload must carry, per the
+   * reference portal (cardnet/backend/index.php): privateKey + shop_process_id + "confirm" + amount + currency.
+   */
+  static webhookToken(shopProcessId: string, amount: number, currency: 'PYG' | 'USD'): string {
+    return md5(`${config.bancard.privateKey}${shopProcessId}confirm${this.fmt(amount)}${currency}`);
+  }
+
+  /**
+   * Validates a Bancard webhook body against the expected order and reports approval.
+   * Bancard sends: { operation: { token, shop_process_id, amount, currency, response, response_code, response_description, ... } }
+   * Approved when response_code === "00" and response === "S".
+   */
+  static parseWebhook(
+    body: any,
+    expected: { amount: number; currency: 'PYG' | 'USD' }
+  ): { valid: boolean; approved: boolean; shopProcessId: string; description?: string; raw: any } {
+    const op = body?.operation;
+    const shopProcessId = op?.shop_process_id != null ? String(op.shop_process_id) : '';
+    if (!op || !shopProcessId || typeof op.token !== 'string') {
+      return { valid: false, approved: false, shopProcessId, raw: body };
+    }
+    const expectedToken = this.webhookToken(shopProcessId, expected.amount, expected.currency);
+    let valid = false;
+    try {
+      valid =
+        op.token.length === expectedToken.length &&
+        crypto.timingSafeEqual(Buffer.from(op.token), Buffer.from(expectedToken));
+    } catch {
+      valid = false;
+    }
+    const approved = op.response_code === '00' && op.response === 'S';
+    return { valid, approved, shopProcessId, description: op.response_description, raw: body };
+  }
+
   /** Verifies a transaction after Bancard hits the return_url / webhook. */
+  /**
+   * NOTE: this endpoint could not be validated against a completed live payment (returns
+   * PaymentNotFoundError until a card is actually charged). The authoritative activation
+   * path is the webhook (`parseWebhook` + POST /api/payments/bancard/webhook); this call
+   * is only a best-effort immediate check from the browser return_url and its failure is
+   * non-fatal (bancardReturn falls back to "pending" and the /checkout page keeps polling).
+   */
   static async confirm(params: {
     shopProcessId: string;
     amount: number;

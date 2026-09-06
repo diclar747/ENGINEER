@@ -18,3 +18,6 @@ backend/.tess-cache/
 *.log
 .DS_Store
 .vscode/
+
+# Portal de referencia Bancard (PHP) — contiene credenciales de producción, no versionar
+cardnet/
