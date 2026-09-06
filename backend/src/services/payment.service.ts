@@ -174,6 +174,7 @@ export class PaymentService {
         pixPayload,
         pixQrImage,
         gatewayRef,
+        bancardProcessIds: gateway === 'BANCARD' ? JSON.stringify([shopProcessId]) : null,
         paymentLink: externalRedirect || checkoutLink,
         expiresAt: orderExpiry,
       },

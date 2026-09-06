@@ -186,6 +186,7 @@ model PaymentOrder {
   aliasInfo       String?        // Paraguay SIPAP / Alias Bancario
   paymentLink     String?
   gatewayRef      String?        // external transaction id from the PSP / Bancard process_id
+  bancardProcessIds String?      @db.Text  // JSON array de todos los shop_process_id generados (Bancard)
   amount          Float
   currency        String
   status          PaymentStatus  @default(PENDING)

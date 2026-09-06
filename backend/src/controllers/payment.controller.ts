@@ -7,6 +7,32 @@ import { PixService } from '../services/pix.service';
 import { prisma } from '../database/prisma';
 import { config } from '../config';
 
+/** Todos los shop_process_id de una orden Bancard (lista + gatewayRef actual), sin repetir. */
+function bancardIds(order: { gatewayRef: string | null; bancardProcessIds: string | null }): string[] {
+  const set = new Set<string>();
+  if (order.gatewayRef) set.add(order.gatewayRef);
+  try {
+    const arr = order.bancardProcessIds ? JSON.parse(order.bancardProcessIds) : [];
+    if (Array.isArray(arr)) arr.forEach((x) => x && set.add(String(x)));
+  } catch {
+    /* noop */
+  }
+  return [...set];
+}
+
+/** Consulta la confirmación de cada shop_process_id; true si alguno está aprobado. */
+async function bancardConfirmAny(ids: string[]): Promise<boolean> {
+  for (const id of ids) {
+    try {
+      const { approved } = await BancardService.confirm({ shopProcessId: id });
+      if (approved) return true;
+    } catch {
+      /* PaymentNotFoundError / WAF: seguimos con el siguiente */
+    }
+  }
+  return false;
+}
+
 /** Constant-time comparison of the webhook shared secret. */
 function webhookSecretValid(req: Request): boolean {
   const expected = config.paymentWebhookSecret;
@@ -135,7 +161,10 @@ export class PaymentController {
         return;
       }
       const order = await prisma.paymentOrder.findFirst({
-        where: { gateway: 'BANCARD', gatewayRef: shopProcessId },
+        where: {
+          gateway: 'BANCARD',
+          OR: [{ gatewayRef: shopProcessId }, { bancardProcessIds: { contains: shopProcessId } }],
+        },
       });
       if (!order) {
         console.warn('[bancard:webhook] orden no encontrada para shop_process_id', shopProcessId);
@@ -178,35 +207,25 @@ export class PaymentController {
     const order = await prisma.paymentOrder.findUnique({ where: { referenceCode: ref }, include: { subscription: true } });
     const redirectBase = `${config.frontendUrl}/checkout?ref=${ref}`;
 
-    if (!order || !order.gatewayRef) {
+    if (!order) {
       res.redirect(`${redirectBase}&status=error`);
       return;
     }
-    // Si ya lo confirmó el webhook, listo.
     if (order.status === 'PAID') {
       res.redirect(`${redirectBase}&status=success`);
       return;
     }
-    try {
-      const { approved } = await BancardService.confirm({
-        shopProcessId: order.gatewayRef,
-        amount: order.amount,
-        currency: 'PYG',
-      });
-      if (approved) {
-        await PaymentService.handlePaymentSuccess(order.referenceCode);
-        res.redirect(`${redirectBase}&status=success`);
-        return;
-      }
-      // No aprobado (o la API de confirmación no está disponible): NO es un error del pago.
-      // El webhook es la vía autoritativa; la página /checkout sigue consultando el estado.
-      res.redirect(`${redirectBase}&status=pending`);
-    } catch (err: any) {
-      // 403 = el WAF de Bancard bloquea la consulta server-to-server. El pago pudo salir bien;
-      // que lo confirme el webhook. Nunca mostrar "error" solo por esto.
-      console.warn('[bancard:return] no se pudo verificar (probable WAF):', err?.message);
-      res.redirect(`${redirectBase}&status=pending`);
+    // Consultamos la confirmación de TODOS los shop_process_id que se generaron para esta orden
+    // (el /checkout regenera la sesión cuando el process_id vence; solo uno queda pagado).
+    const approved = await bancardConfirmAny(bancardIds(order));
+    if (approved) {
+      await PaymentService.handlePaymentSuccess(order.referenceCode);
+      res.redirect(`${redirectBase}&status=success`);
+      return;
     }
+    // Sin confirmación todavía: NO es un error. La página /checkout sigue consultando y el
+    // webhook (si está registrado) también lo activará.
+    res.redirect(`${redirectBase}&status=pending`);
   }
 
   /**
@@ -221,19 +240,12 @@ export class PaymentController {
     if (order.status === 'PAID') { res.json({ status: 'PAID' }); return; }
     if (!BancardService.enabled) { res.status(400).json({ error: 'Bancard no está configurado.' }); return; }
 
-    // Antes de generar una sesión nueva: ¿el pago del intento anterior ya está aprobado?
-    // (permite que /checkout se auto-active al volver, sin depender del webhook).
-    if (order.gatewayRef) {
-      try {
-        const { approved } = await BancardService.confirm({ shopProcessId: order.gatewayRef });
-        if (approved) {
-          await PaymentService.handlePaymentSuccess(order.referenceCode);
-          res.json({ status: 'PAID' });
-          return;
-        }
-      } catch (e: any) {
-        console.warn('[bancard:session] confirm previo falló:', e?.response?.status || e?.message);
-      }
+    // ¿Algún intento anterior ya está pagado? (auto-activa /checkout al volver, sin webhook).
+    const prevIds = bancardIds(order);
+    if (prevIds.length && (await bancardConfirmAny(prevIds))) {
+      await PaymentService.handlePaymentSuccess(order.referenceCode);
+      res.json({ status: 'PAID' });
+      return;
     }
 
     try {
@@ -248,10 +260,17 @@ export class PaymentController {
       });
       const QRCode = (await import('qrcode')).default;
       const qr = await QRCode.toDataURL(checkout.redirectUrl, { errorCorrectionLevel: 'M', margin: 1, width: 320 }).catch(() => null);
-      // El webhook y el return buscan la orden por gatewayRef = NUESTRO shop_process_id.
+      // Se AGREGA el nuevo shop_process_id a la lista (no se pisan los anteriores) para poder
+      // consultar la confirmación de todos.
+      const ids = [...new Set([...prevIds, shopProcessId])].slice(-8);
       await prisma.paymentOrder.update({
         where: { id: order.id },
-        data: { gatewayRef: shopProcessId, paymentLink: checkout.redirectUrl, pixQrImage: qr },
+        data: {
+          gatewayRef: shopProcessId,
+          bancardProcessIds: JSON.stringify(ids),
+          paymentLink: checkout.redirectUrl,
+          pixQrImage: qr,
+        },
       });
       res.json({
         processId: checkout.processId,
