@@ -24,6 +24,7 @@ export class BaileysClient {
   private reconnectAttempts = 0;
   private lastError: string | null = null;
   private gaveUp = false;
+  private lastLogoutAt = 0;
 
   public async start(): Promise<void> {
     if (this.isConnecting || this.isConnected) return;
@@ -92,29 +93,30 @@ export class BaileysClient {
           this.isConnecting = false;
 
           if (loggedOut) {
-            // WhatsApp cerró la sesión (401). Si reconectamos sin credenciales vuelve a dar 401
-            // al instante: sin un tope esto era un loop infinito cada 2s que martillaba a WhatsApp
-            // (riesgo de baneo del número). Ahora usa el presupuesto de reintentos con backoff y,
-            // agotado, se frena y espera un re-vinculado manual (/bot-connect + POST /api/bot/reconnect).
-            this.reconnectAttempts += 1;
-            if (this.reconnectAttempts === 1) {
-              console.warn('⚠️ [WHATSAPP BOT] Logged out. Clearing session — re-pair from /bot-connect.');
-              try { fs.rmSync(authDir, { recursive: true, force: true }); } catch { /* noop */ }
-              this.qrRaw = null;
-            }
-            if (this.reconnectAttempts > config.whatsappMaxReconnect) {
+            // WhatsApp cerró la sesión (401). Reconectar sin credenciales devuelve 401 al
+            // instante: sin freno esto era un loop que martillaba a WhatsApp (riesgo de baneo
+            // del número), y el contador de reintentos no servía porque un 'open' transitorio
+            // lo reseteaba en cada vuelta. Guard por tiempo: si volvió a desloguear en < 2 min
+            // es un loop → se frena y espera re-vinculado manual (/bot-connect + POST
+            // /api/bot/reconnect). Si pasó más, limpia la sesión y reintenta UNA vez para
+            // mostrar un QR nuevo.
+            const now = Date.now();
+            const loopingFast = now - this.lastLogoutAt < 120_000;
+            this.lastLogoutAt = now;
+            try { this.sock?.ev.removeAllListeners('connection.update'); } catch { /* noop */ }
+            if (loopingFast) {
               this.gaveUp = true;
               console.warn(
-                `⚠️ [WHATSAPP BOT] Sigue deslogueado tras ${this.reconnectAttempts} intentos — freno la reconexión. ` +
+                '⚠️ [WHATSAPP BOT] Logout en loop — freno la reconexión. ' +
                   'Escaneá el QR en /bot-connect y luego POST /api/bot/reconnect.'
               );
               return;
             }
-            const delay = Math.min(60_000, 5_000 * this.reconnectAttempts);
-            console.warn(
-              `⚠️ [WHATSAPP BOT] Logout persistente. Reintento ${this.reconnectAttempts}/${config.whatsappMaxReconnect} en ${delay / 1000}s.`
-            );
-            setTimeout(() => this.start(), delay);
+            console.warn('⚠️ [WHATSAPP BOT] Logged out. Clearing session — re-pair from /bot-connect.');
+            try { fs.rmSync(authDir, { recursive: true, force: true }); } catch { /* noop */ }
+            this.qrRaw = null;
+            this.reconnectAttempts = 0;
+            setTimeout(() => this.start(), 3_000);
             return;
           }
 
@@ -436,6 +438,7 @@ export class BaileysClient {
   public async reconnect(): Promise<void> {
     this.reconnectAttempts = 0;
     this.gaveUp = false;
+    this.lastLogoutAt = 0; // re-vinculado manual: no lo cuentes como "loop"
     if (this.isConnected || this.isConnecting) return;
     await this.start();
   }
