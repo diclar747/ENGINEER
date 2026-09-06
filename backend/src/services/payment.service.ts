@@ -177,6 +177,13 @@ export class PaymentService {
     const link = order.paymentLink || '';
     const externalRedirect =
       link.startsWith('http') && !link.startsWith(config.frontendUrl) ? link : undefined;
+    // Bancard se paga con su iframe (bancard-checkout-4.0.0.js + Bancard.Checkout.createForm),
+    // no con el redirect a /checkout/new/{id} (bloqueado por el WAF del comercio). La página
+    // /checkout necesita el process_id de Bancard, que quedó embebido en paymentLink.
+    const bancardProcessId =
+      order.gateway === 'BANCARD' && link.includes('/checkout/new/')
+        ? link.split('/checkout/new/').pop() || undefined
+        : undefined;
     return {
       referenceCode: order.referenceCode,
       status: order.status,
@@ -191,6 +198,8 @@ export class PaymentService {
       pixQrImage: order.pixQrImage,
       pixKey: config.payments.brasilPixKey,
       externalRedirect,
+      bancardProcessId,
+      bancardBaseUrl: bancardProcessId ? config.bancard.baseUrl : undefined,
       expiresAt: order.expiresAt,
       customerName: order.user?.fullName,
     };
