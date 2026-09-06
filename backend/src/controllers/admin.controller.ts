@@ -5,6 +5,30 @@ import { adminCredentialsOk, generateAdminToken, AdminRequest } from '../securit
 const PAGE = 20;
 const qs = (v: unknown) => String(v ?? '').trim();
 
+/** Construye el filtro Prisma de PaymentOrder desde el query (compartido por lista y export). */
+function paymentWhere(q: Record<string, unknown>): any {
+  const where: any = {};
+  const status = qs(q.status);
+  const gateway = qs(q.gateway);
+  const method = qs(q.method);
+  const from = qs(q.from);
+  const to = qs(q.to);
+  if (status) where.status = status;
+  if (gateway) where.gateway = gateway;
+  if (method) where.paymentMethod = { contains: method, mode: 'insensitive' };
+  if (from || to) {
+    where.createdAt = {};
+    if (from) where.createdAt.gte = new Date(`${from}T00:00:00`);
+    if (to) where.createdAt.lte = new Date(`${to}T23:59:59.999`);
+  }
+  return where;
+}
+
+const csvCell = (v: unknown) => {
+  const s = String(v ?? '');
+  return /[",\n;]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+};
+
 export class AdminController {
   static async login(req: Request, res: Response): Promise<void> {
     const { email, password } = req.body || {};
@@ -78,19 +102,175 @@ export class AdminController {
   }
 
   static async setUserStatus(req: AdminRequest, res: Response): Promise<void> {
-    const { status } = req.body || {};
+    const { status, months } = req.body || {};
     const allowed = ['ACTIVE', 'PENDING_PAYMENT', 'EXPIRED', 'CANCELLED'];
     if (!allowed.includes(status)) { res.status(400).json({ error: 'Estado invalido' }); return; }
     const user = await prisma.user.update({ where: { id: req.params.id }, data: { status } });
+
+    // Activar a mano SIN una suscripción vigente = el cron lo vuelve a bajar a EXPIRED al día
+    // siguiente. Al activar, garantizamos una suscripción activa (por defecto +12 meses).
+    if (status === 'ACTIVE') {
+      const addMonths = Math.max(1, Math.min(60, Math.round(Number(months) || 12)));
+      const latest = await prisma.subscription.findFirst({ where: { userId: user.id }, orderBy: { createdAt: 'desc' } });
+      const base = latest && latest.expiryDate > new Date() ? new Date(latest.expiryDate) : new Date();
+      base.setMonth(base.getMonth() + addMonths);
+      if (latest) {
+        await prisma.subscription.update({
+          where: { id: latest.id },
+          data: { status: 'ACTIVE', expiryDate: base, finePending: false, fineAmount: 0, lastNotification: 'NONE' },
+        });
+      } else {
+        await prisma.subscription.create({
+          data: {
+            userId: user.id, plan: addMonths >= 12 ? 'ANNUAL' : 'MONTHLY',
+            country: 'PARAGUAY', currency: 'PYG', amount: 0, status: 'ACTIVE',
+            expiryDate: base, lastNotification: 'NONE',
+          },
+        });
+      }
+    }
     res.json({ ok: true, status: user.status });
+  }
+
+  /** PATCH /admin/users/:id — editar datos del usuario (nombre, teléfono, CI, email, etc.). */
+  static async updateUser(req: AdminRequest, res: Response): Promise<void> {
+    const b = req.body || {};
+    const data: any = {};
+    const strFields = ['fullName', 'ciNumber', 'email', 'bloodType', 'dateOfBirth', 'birthPlace', 'sex', 'address'];
+    for (const f of strFields) if (b[f] !== undefined) data[f] = b[f] === '' ? null : String(b[f]).trim();
+    if (b.language && ['ES', 'GN'].includes(b.language)) data.language = b.language;
+
+    if (b.phoneNumber !== undefined) {
+      const phone = String(b.phoneNumber).replace(/[^0-9]/g, '');
+      if (!/^\d{7,15}$/.test(phone)) { res.status(400).json({ error: 'Teléfono inválido (7-15 dígitos).' }); return; }
+      const clash = await prisma.user.findFirst({ where: { phoneNumber: phone, NOT: { id: req.params.id } }, select: { id: true } });
+      if (clash) { res.status(409).json({ error: 'Ya existe otro usuario con ese teléfono.' }); return; }
+      data.phoneNumber = phone;
+    }
+    if (Object.keys(data).length === 0) { res.status(400).json({ error: 'Nada para actualizar.' }); return; }
+    try {
+      const user = await prisma.user.update({ where: { id: req.params.id }, data });
+      res.json({ ok: true, user });
+    } catch {
+      res.status(404).json({ error: 'Usuario no encontrado.' });
+    }
+  }
+
+  /** Desbloquea el PIN tras 5 intentos fallidos (sin pérdida de datos). */
+  static async unlockPin(req: AdminRequest, res: Response): Promise<void> {
+    try {
+      await prisma.user.update({
+        where: { id: req.params.id },
+        data: { failedPinAttempts: 0, pinLockedUntil: null },
+      });
+      res.json({ ok: true });
+    } catch {
+      res.status(404).json({ error: 'Usuario no encontrado.' });
+    }
+  }
+
+  /**
+   * Resetea el PIN. Zero-knowledge: el PIN deriva la clave de la bóveda médica cifrada,
+   * así que al resetearlo esa bóveda queda ilegible → se limpia y el usuario elige un PIN
+   * nuevo en su próximo acceso (por WhatsApp o web). La ficha pública y los estudios subidos
+   * (archivos) no se pierden; solo el historial cifrado de consultas.
+   */
+  static async resetPin(req: AdminRequest, res: Response): Promise<void> {
+    try {
+      const user = await prisma.user.update({
+        where: { id: req.params.id },
+        data: {
+          pinHash: null,
+          encryptionSalt: null,
+          encryptedMedicalBlob: null,
+          webVaultInitialized: false,
+          failedPinAttempts: 0,
+          pinLockedUntil: null,
+          onboardingState: 'RESET_PIN',
+        },
+      });
+      res.json({ ok: true, note: 'El usuario deberá elegir un PIN nuevo por WhatsApp (escribiendo cualquier mensaje al bot); la bóveda cifrada se reinicia vacía.', userId: user.id });
+    } catch {
+      res.status(404).json({ error: 'Usuario no encontrado.' });
+    }
+  }
+
+  /** Extiende (o crea) la suscripción del usuario N meses/días — para cortesías y soporte. */
+  static async extendSubscription(req: AdminRequest, res: Response): Promise<void> {
+    const days = Math.round(Number(req.body?.days) || 0);
+    const months = Math.round(Number(req.body?.months) || 0);
+    if (days <= 0 && months <= 0) { res.status(400).json({ error: 'Indicá días o meses a agregar.' }); return; }
+    const user = await prisma.user.findUnique({ where: { id: req.params.id }, select: { id: true } });
+    if (!user) { res.status(404).json({ error: 'Usuario no encontrado.' }); return; }
+
+    const latest = await prisma.subscription.findFirst({ where: { userId: user.id }, orderBy: { createdAt: 'desc' } });
+    const base = latest && latest.expiryDate > new Date() ? new Date(latest.expiryDate) : new Date();
+    if (months > 0) base.setMonth(base.getMonth() + months);
+    if (days > 0) base.setDate(base.getDate() + days);
+
+    if (latest) {
+      await prisma.subscription.update({
+        where: { id: latest.id },
+        data: { expiryDate: base, status: 'ACTIVE', finePending: false, fineAmount: 0, lastNotification: 'NONE' },
+      });
+    } else {
+      await prisma.subscription.create({
+        data: {
+          userId: user.id, plan: months >= 12 ? 'ANNUAL' : 'MONTHLY',
+          country: 'PARAGUAY', currency: 'PYG', amount: 0, status: 'ACTIVE', expiryDate: base, lastNotification: 'NONE',
+        },
+      });
+    }
+    await prisma.user.update({ where: { id: user.id }, data: { status: 'ACTIVE' } });
+    res.json({ ok: true, expiryDate: base });
+  }
+
+  /** DELETE /admin/users/:id — borra el usuario y todo lo asociado (cascade). Irreversible. */
+  static async deleteUser(req: AdminRequest, res: Response): Promise<void> {
+    try {
+      await prisma.user.delete({ where: { id: req.params.id } });
+      res.json({ ok: true });
+    } catch {
+      res.status(404).json({ error: 'Usuario no encontrado.' });
+    }
+  }
+
+  /** GET /admin/subscriptions — monitoreo de suscripciones. filtro: ?filter=active|expiring|expired|all */
+  static async listSubscriptions(req: AdminRequest, res: Response): Promise<void> {
+    const page = Math.max(1, parseInt(qs(req.query.page) || '1', 10));
+    const filter = qs(req.query.filter) || 'all';
+    const now = new Date();
+    const in7 = new Date(now.getTime() + 7 * 864e5);
+    const where: any = {};
+    if (filter === 'active') { where.status = 'ACTIVE'; where.expiryDate = { gt: now }; }
+    else if (filter === 'expiring') { where.status = 'ACTIVE'; where.expiryDate = { gt: now, lte: in7 }; }
+    else if (filter === 'expired') { where.OR = [{ status: { in: ['EXPIRED', 'CANCELLED'] } }, { expiryDate: { lte: now } }]; }
+
+    const [total, rows] = await Promise.all([
+      prisma.subscription.count({ where }),
+      prisma.subscription.findMany({
+        where,
+        orderBy: { expiryDate: 'asc' },
+        skip: (page - 1) * PAGE,
+        take: PAGE,
+        include: { user: { select: { id: true, fullName: true, phoneNumber: true, status: true } } },
+      }),
+    ]);
+    res.json({
+      total, page, pageSize: PAGE,
+      rows: rows.map((s) => ({
+        id: s.id, plan: s.plan, status: s.status, currency: s.currency, amount: s.amount,
+        startDate: s.startDate, expiryDate: s.expiryDate,
+        daysLeft: Math.ceil((s.expiryDate.getTime() - now.getTime()) / 864e5),
+        finePending: s.finePending, user: s.user,
+      })),
+    });
   }
 
   static async listPayments(req: AdminRequest, res: Response): Promise<void> {
     const page = Math.max(1, parseInt(qs(req.query.page) || '1', 10));
-    const status = qs(req.query.status);
-    const where: any = {};
-    if (status) where.status = status;
-    const [total, rows] = await Promise.all([
+    const where = paymentWhere(req.query as any);
+    const [total, rows, totals] = await Promise.all([
       prisma.paymentOrder.count({ where }),
       prisma.paymentOrder.findMany({
         where,
@@ -99,8 +279,58 @@ export class AdminController {
         take: PAGE,
         include: { user: { select: { fullName: true, phoneNumber: true } } },
       }),
+      prisma.paymentOrder.groupBy({ by: ['currency'], where, _sum: { amount: true }, _count: true }),
     ]);
-    res.json({ total, page, pageSize: PAGE, rows });
+    res.json({
+      total,
+      page,
+      pageSize: PAGE,
+      rows,
+      totals: totals.map((t) => ({ currency: t.currency, count: t._count, sum: t._sum.amount || 0 })),
+    });
+  }
+
+  /** Exporta la lista de pagos (con los mismos filtros) a CSV (Excel) o JSON (para imprimir). */
+  static async exportPayments(req: AdminRequest, res: Response): Promise<void> {
+    const where = paymentWhere(req.query as any);
+    const rows = await prisma.paymentOrder.findMany({
+      where,
+      orderBy: { createdAt: 'desc' },
+      take: 5000,
+      include: { user: { select: { fullName: true, phoneNumber: true } } },
+    });
+    if (qs(req.query.format) === 'json') {
+      const totals = await prisma.paymentOrder.groupBy({ by: ['currency'], where, _sum: { amount: true }, _count: true });
+      res.json({
+        rows: rows.map((p) => ({
+          createdAt: p.createdAt, fullName: p.user?.fullName || '', phoneNumber: p.user?.phoneNumber || '',
+          gateway: p.gateway, paymentMethod: p.paymentMethod, amount: p.amount, currency: p.currency,
+          status: p.status, referenceCode: p.referenceCode,
+        })),
+        totals: totals.map((t) => ({ currency: t.currency, count: t._count, sum: t._sum.amount || 0 })),
+      });
+      return;
+    }
+    const header = ['Fecha', 'Cliente', 'Telefono', 'Gateway', 'Metodo', 'Monto', 'Moneda', 'Estado', 'Referencia'];
+    const lines = rows.map((p) =>
+      [
+        new Date(p.createdAt).toISOString(),
+        p.user?.fullName || '',
+        p.user?.phoneNumber || '',
+        p.gateway,
+        p.paymentMethod,
+        p.amount,
+        p.currency,
+        p.status,
+        p.referenceCode,
+      ]
+        .map(csvCell)
+        .join(',')
+    );
+    const csv = '﻿' + [header.join(','), ...lines].join('\r\n');
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="pagos-biopass-${new Date().toISOString().slice(0, 10)}.csv"`);
+    res.send(csv);
   }
 
   static async markPaid(req: AdminRequest, res: Response): Promise<void> {

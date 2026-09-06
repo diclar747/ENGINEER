@@ -16,6 +16,7 @@ import { Checkout } from './pages/Checkout';
 import { EmergencyView } from './pages/EmergencyView';
 import { AdminLogin } from './pages/AdminLogin';
 import { AdminPanel } from './pages/AdminPanel';
+import { FeedbackProvider } from './components/ui/Feedback';
 
 /** Redirects to /login when there is no session token. */
 const RequireAuth: React.FC = () => {
@@ -44,7 +45,7 @@ const AppLayout: React.FC = () => (
 
 const App: React.FC = () => {
   return (
-    <>
+    <FeedbackProvider>
       <Routes>
         {/* Public emergency card — full screen, no chrome */}
         <Route path="/e/:token" element={<EmergencyView />} />
@@ -75,7 +76,7 @@ const App: React.FC = () => {
           <Route path="*" element={<Navigate to="/" replace />} />
         </Route>
       </Routes>
-    </>
+    </FeedbackProvider>
   );
 };
 

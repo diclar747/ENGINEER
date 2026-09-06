@@ -13,6 +13,7 @@ import path from 'path';
 import QRCode from 'qrcode';
 import { config } from '../config';
 import { BotStateMachine } from './bot-state-machine';
+import { NiroService } from '../services/niro.service';
 import { prisma } from '../database/prisma';
 
 export class BaileysClient {
@@ -224,7 +225,7 @@ export class BaileysClient {
     const rawPhone = rawId;
 
     // Extract text
-    const body =
+    let body =
       msg.message?.conversation ||
       msg.message?.extendedTextMessage?.text ||
       msg.message?.imageMessage?.caption ||
@@ -233,6 +234,36 @@ export class BaileysClient {
     let mediaBuffer: Buffer | undefined;
     let mediaMimeType: string | undefined;
     let mediaFilename: string | undefined;
+
+    // Nota de voz / audio → transcribir con Niro y tratarlo como si el usuario hubiera escrito.
+    // Así el audio funciona en TODO el flujo (registro, menú, preguntas) sin tocar el motor.
+    if (msg.message?.audioMessage) {
+      try {
+        const audioBuf = (await downloadMediaMessage(
+          msg,
+          'buffer',
+          {},
+          { logger: pino({ level: 'silent' }), reuploadRequest: this.sock!.updateMediaMessage }
+        )) as Buffer;
+        const mime = msg.message.audioMessage.mimetype || 'audio/ogg';
+        const ext = mime.includes('mp4') || mime.includes('m4a')
+          ? 'm4a'
+          : mime.includes('mpeg') || mime.includes('mp3')
+            ? 'mp3'
+            : mime.includes('wav')
+              ? 'wav'
+              : 'ogg';
+        const transcript = await NiroService.transcribeAudio(audioBuf, `wa_audio_${Date.now()}.${ext}`);
+        if (transcript) {
+          body = body ? `${body} ${transcript}` : transcript;
+          console.log('[WHATSAPP BOT] audio transcrito:', transcript.slice(0, 140));
+        } else {
+          console.warn('[WHATSAPP BOT] no se pudo transcribir el audio (Niro devolvió vacío)');
+        }
+      } catch (e) {
+        console.warn('Could not download/transcribe audio message:', e);
+      }
+    }
 
     // Check for image or document media
     if (msg.message?.imageMessage) {

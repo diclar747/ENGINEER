@@ -4,6 +4,7 @@ import { generateToken, AuthenticatedRequest } from '../security/jwt';
 import { ZeroKnowledgeSecurity } from '../security/zero-knowledge';
 import { OtpService } from '../services/otp.service';
 import { BotStateMachine } from '../whatsapp/bot-state-machine';
+import { NiroService } from '../services/niro.service';
 import { config } from '../config';
 
 export class AuthController {
@@ -31,13 +32,26 @@ export class AuthController {
       return;
     }
 
+    // Audio (nota de voz) → transcribir con Niro y pasarlo como texto; no como media.
+    let effectiveBody = message || '';
+    let mediaBuffer = file?.buffer;
+    let mediaMimeType = file?.mimetype;
+    let mediaFilename = file?.originalname;
+    if (file && /^audio\//.test(file.mimetype || '')) {
+      const transcript = await NiroService.transcribeAudio(file.buffer, file.originalname || 'audio.ogg');
+      if (transcript) effectiveBody = effectiveBody ? `${effectiveBody} ${transcript}` : transcript;
+      mediaBuffer = undefined;
+      mediaMimeType = undefined;
+      mediaFilename = undefined;
+    }
+
     try {
       const response = await BotStateMachine.handleMessage({
         from: cleanPhone,
-        body: message || '',
-        mediaBuffer: file?.buffer,
-        mediaMimeType: file?.mimetype,
-        mediaFilename: file?.originalname,
+        body: effectiveBody,
+        mediaBuffer,
+        mediaMimeType,
+        mediaFilename,
       });
 
       const user = await prisma.user.findUnique({

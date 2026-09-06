@@ -157,42 +157,57 @@ export class BotStateMachine {
 
     // STEP 2: DOCUMENT UPLOAD & OCR
     if (state === 'STEP2_DOCUMENT') {
-      let extractedName = '';
-      let extractedCi = '';
-      let ciPhotoUrl = '';
-      let extractedDob = '';
-      let extractedBirthPlace = '';
-      let extractedSex = '';
+      // Se acumula entre varias fotos (frente + dorso) y entre foto + texto/audio:
+      // nunca se pisa un dato bueno con uno vacío.
+      const prev = getTempData();
+      let extractedName = (prev.extractedName || '').trim();
+      let extractedCi = (prev.extractedCi || '').trim();
+      let ciPhotoUrl = (prev.ciPhotoUrl || '').trim();
+      let extractedDob = (prev.extractedDob || '').trim();
+      let extractedBirthPlace = (prev.extractedBirthPlace || '').trim();
+      let extractedSex = (prev.extractedSex || '').trim();
+      const keepBest = (cur: string, next?: string) => (next && next.trim() ? next.trim() : cur);
 
       if (msg.mediaBuffer) {
         const saved = await StorageService.saveFile('ci_documents', `ci_${user.id}_${Date.now()}.jpg`, msg.mediaBuffer);
-        ciPhotoUrl = saved.fileUrl;
+        // El frente suele tener la foto/nombre; el dorso, más datos. Se guarda el primero como principal.
+        ciPhotoUrl = ciPhotoUrl || saved.fileUrl;
         const ocrResult = await OcrAiService.processCiImage(msg.mediaBuffer, msg.mediaFilename || 'ci.jpg');
-        extractedName = (ocrResult.fullName || '').trim();
-        extractedCi = (ocrResult.ciNumber || '').trim();
-        // Everything the AI could read off the document — captured now so the user
-        // never has to type it later (date/place of birth, sex).
-        extractedDob = (ocrResult.dateOfBirth || '').trim();
-        extractedBirthPlace = (ocrResult.birthPlace || '').trim();
-        extractedSex = (ocrResult.sex || '').trim();
-      } else {
-        // Manual input: "Nombre, CI"
-        const parts = cleanText.split(/[,:-]/);
-        if (parts.length >= 2) {
-          extractedName = parts[0].trim();
-          extractedCi = parts[1].replace(/[^0-9]/g, '');
-        } else {
-          extractedName = cleanText.trim();
+        extractedName = keepBest(extractedName, ocrResult.fullName);
+        extractedCi = keepBest(extractedCi, (ocrResult.ciNumber || '').replace(/[^0-9]/g, ''));
+        extractedDob = keepBest(extractedDob, ocrResult.dateOfBirth);
+        extractedBirthPlace = keepBest(extractedBirthPlace, ocrResult.birthPlace);
+        extractedSex = keepBest(extractedSex, ocrResult.sex);
+      } else if (cleanText) {
+        // Texto tecleado o transcripto de audio ("me llamo Carlos Benítez, cédula 3.500.200").
+        // Primero la IA de Niro; si falla, el split simple por coma.
+        const ai = await NiroService.extractFields(
+          cleanText,
+          'De este texto de una persona registrándose, extraé: fullName (nombre y apellidos completos, como los diría en una cédula) y ciNumber (número de cédula, SOLO dígitos, sin puntos).'
+        );
+        if (ai?.fullName) extractedName = keepBest(extractedName, String(ai.fullName));
+        if (ai?.ciNumber) extractedCi = keepBest(extractedCi, String(ai.ciNumber).replace(/[^0-9]/g, ''));
+        if (!extractedName || !extractedCi) {
+          const parts = cleanText.split(/[,:;-]/);
+          if (parts.length >= 2) {
+            extractedName = keepBest(extractedName, parts[0]);
+            extractedCi = keepBest(extractedCi, parts[1].replace(/[^0-9]/g, ''));
+          } else if (!extractedName) {
+            extractedName = cleanText.trim();
+          }
         }
       }
 
-      // Couldn't read anything usable — ask the user to type it
+      // Todavía falta algo — guardá lo que haya y pedí solo lo que falta.
       if (!extractedName || !extractedCi) {
-        await updateState('STEP2_DOCUMENT', {}, {});
+        await updateState('STEP2_DOCUMENT', { extractedName, extractedCi, ciPhotoUrl, extractedDob, extractedBirthPlace, extractedSex });
+        const falta = !extractedName && !extractedCi ? 'tu nombre y tu número de cédula' : !extractedName ? 'tu nombre completo' : 'tu número de cédula';
         return {
           replyText:
-            `😕 No pude leer con claridad ${!extractedName && !extractedCi ? 'tus datos' : !extractedName ? 'tu nombre' : 'tu número de cédula'}.\n\n` +
-            `Escribí tu *Nombre Completo y Número de Cédula* separados por coma:\n` +
+            `😕 Me falta leer ${falta}.\n\n` +
+            (extractedName ? `✅ Tengo: *${extractedName}*\n` : '') +
+            (extractedCi ? `✅ Tengo cédula: *${extractedCi}*\n` : '') +
+            `\nMandá otra foto más nítida de la cédula, o escribí (o mandá un audio con) tu *Nombre Completo y Número de Cédula*.\n` +
             `_Ejemplo: Carlos Benítez, 3500200_`,
         };
       }
@@ -371,6 +386,41 @@ export class BotStateMachine {
     }
 
     // STEP 7: SECURITY PIN (ZERO KNOWLEDGE DERIVATION)
+    // RESET DE PIN (lo activa un admin desde el panel). Solo captura un PIN nuevo, reinicia
+    // la bóveda cifrada y devuelve al usuario a su menú — sin volver a pedir pago ni cambiar estado.
+    if (state === 'RESET_PIN') {
+      const m = cleanText.match(/\b\d{4}\b/);
+      if (!m) {
+        return { replyText: `🔒 *Restablecé tu PIN de Bio-Pass.*\n\nIngresá un *PIN nuevo de 4 dígitos* (Ej: 1234):` };
+      }
+      const pin = m[0];
+      const salt = ZeroKnowledgeSecurity.generateSalt(16);
+      const pinHash = await ZeroKnowledgeSecurity.hashPin(pin);
+      const blob = ZeroKnowledgeSecurity.encryptWithPin(
+        { fullName: user.fullName, pinResetAt: new Date().toISOString(), consultationHistory: [] },
+        pin,
+        salt
+      );
+      await prisma.user.update({
+        where: { id: user.id },
+        data: {
+          pinHash,
+          encryptionSalt: salt,
+          encryptedMedicalBlob: blob,
+          webVaultInitialized: false,
+          failedPinAttempts: 0,
+          pinLockedUntil: null,
+          onboardingState: user.status === 'ACTIVE' ? 'ACTIVE_MEMBER' : 'STEP8_PAYMENT',
+        },
+      });
+      return {
+        replyText:
+          `✅ *PIN actualizado.*\n\n` +
+          `Tu nuevo PIN de 4 dígitos ya quedó activo. Usalo para entrar a la web y para desbloquear tu ficha médica.\n\n` +
+          `_Escribí *MENU* para ver tus opciones._`,
+      };
+    }
+
     if (state === 'STEP7_PIN') {
       const pinMatch = cleanText.match(/\b\d{4}\b/);
       if (!pinMatch) {

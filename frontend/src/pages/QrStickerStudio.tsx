@@ -3,8 +3,10 @@ import { api, API_BASE_URL } from '../utils/api';
 import { QRCodeSVG } from 'qrcode.react';
 import { QrCode, Download, Smartphone, HardHat, Wallet, ShieldCheck, Upload, Sparkles, AlertCircle, Building2, CheckCircle2 } from 'lucide-react';
 import { stripAsterisks } from '../utils/textFormat';
+import { useToast } from '../components/ui/Feedback';
 
 export const QrStickerStudio: React.FC = () => {
+  const toast = useToast();
   const [user, setUser] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [orgName, setOrgName] = useState('');
@@ -57,7 +59,7 @@ export const QrStickerStudio: React.FC = () => {
       setBrandingSuccess(true);
       setTimeout(() => setBrandingSuccess(false), 3000);
     } catch (err: any) {
-      alert('Error: ' + (err?.response?.data?.error || err.message));
+      toast.error('Error: ' + (err?.response?.data?.error || err.message));
     } finally {
       setUpdatingBranding(false);
     }

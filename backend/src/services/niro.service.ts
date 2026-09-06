@@ -94,6 +94,60 @@ export class NiroService {
     return !!KEY;
   }
 
+  /**
+   * Transcribe un audio (nota de voz de WhatsApp, etc.) vía Niro (Qwen ASR / Whisper).
+   * Endpoint: POST /api/v1/audio/transcriptions (multipart, campo `file`).
+   */
+  static async transcribeAudio(file: Buffer, filename = 'audio.ogg'): Promise<string | null> {
+    if (!KEY) return null;
+    try {
+      const { body, contentType } = buildMultipart([
+        { name: 'file', value: file, filename, contentType: guessAudioMime(filename) },
+      ]);
+      const { status, json } = await postMultipartHttp2(
+        '/api/v1/audio/transcriptions',
+        { 'content-type': contentType, authorization: `Bearer ${KEY}` },
+        body,
+        60000,
+      );
+      if (status < 200 || status >= 300) {
+        console.warn('[NIRO] audio error:', status, json?.error?.message || json?.detail);
+        return null;
+      }
+      const t = json?.text || json?.transcript || json?.transcription || '';
+      return typeof t === 'string' && t.trim() ? t.trim() : null;
+    } catch (err: any) {
+      console.warn('[NIRO] audio error:', err?.message);
+      return null;
+    }
+  }
+
+  /**
+   * Extrae campos estructurados de un texto libre (tecleado o transcripto de audio)
+   * usando el chat de Niro. `instruction` describe qué claves devolver.
+   */
+  static async extractFields(text: string, instruction: string): Promise<Record<string, any> | null> {
+    const out = await this.chat([
+      { role: 'system', content: `${instruction} Respondé ÚNICAMENTE un objeto JSON válido, sin markdown ni texto extra. Si un dato no está, usá null. No inventes.` },
+      { role: 'user', content: text.trim() },
+    ]);
+    if (!out) return null;
+    const cleaned = out.trim().replace(/^```(?:json)?/i, '').replace(/```$/, '').trim();
+    try {
+      return JSON.parse(cleaned);
+    } catch {
+      const m = cleaned.match(/\{[\s\S]*\}/);
+      if (m) {
+        try {
+          return JSON.parse(m[0]);
+        } catch {
+          /* noop */
+        }
+      }
+      return null;
+    }
+  }
+
   /** Chat estilo OpenAI vía Niro. Devuelve el texto del asistente, o null si falla. */
   static async chat(messages: ChatMsg[]): Promise<string | null> {
     if (!KEY) return null;
@@ -153,4 +207,13 @@ function guessMime(filename: string): string {
   if (ext === 'pdf') return 'application/pdf';
   if (ext === 'webp') return 'image/webp';
   return 'image/jpeg';
+}
+
+function guessAudioMime(filename: string): string {
+  const ext = filename.toLowerCase().split('.').pop() || '';
+  if (ext === 'mp3' || ext === 'mpeg') return 'audio/mpeg';
+  if (ext === 'm4a' || ext === 'mp4') return 'audio/mp4';
+  if (ext === 'wav') return 'audio/wav';
+  if (ext === 'webm') return 'audio/webm';
+  return 'audio/ogg';
 }

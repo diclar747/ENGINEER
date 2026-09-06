@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import { api } from '../utils/api';
+import { useToast } from '../components/ui/Feedback';
 import { QRCodeSVG } from 'qrcode.react';
 import {
   HeartPulse,
@@ -30,6 +31,7 @@ import { RiskBadges } from '../components/RiskBadges';
 import { stripAsterisks } from '../utils/textFormat';
 
 export const Dashboard: React.FC = () => {
+  const toast = useToast();
   const [user, setUser] = useState<any>(null);
   const [viewerStudy, setViewerStudy] = useState<{ title: string; fileUrl: string } | null>(null);
   const [studies, setStudies] = useState<any[]>([]);
@@ -71,8 +73,9 @@ export const Dashboard: React.FC = () => {
         headers: { 'Content-Type': 'multipart/form-data' },
       });
       setStudies([res.data.study, ...studies]);
+      toast.success('Estudio subido y procesado.');
     } catch (err: any) {
-      alert('Error subiendo estudio: ' + (err?.response?.data?.error || err.message));
+      toast.error('Error subiendo estudio: ' + (err?.response?.data?.error || err.message));
     } finally {
       setUploading(false);
     }

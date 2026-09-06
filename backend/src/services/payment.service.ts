@@ -16,7 +16,43 @@ export interface CreateOrderParams {
   isFine?: boolean;
 }
 
+interface PlanPriceTable {
+  PY: { MONTHLY: number; ANNUAL: number; FINE: number };
+  BR: { MONTHLY: number; ANNUAL: number; FINE: number };
+}
+
 export class PaymentService {
+  /**
+   * Precios de los planes. Se leen de AppSetting (editables desde /admin → Contenido),
+   * con fallback a config.payments.planPrices (env). Claves: price.py.monthly, price.py.annual,
+   * price.py.fine, price.br.monthly, price.br.annual, price.br.fine.
+   */
+  public static async getPlanPrices(): Promise<PlanPriceTable> {
+    const def = config.payments.planPrices;
+    try {
+      const rows = await prisma.appSetting.findMany({ where: { key: { startsWith: 'price.' } } });
+      const s = Object.fromEntries(rows.map((r) => [r.key, r.value]));
+      const num = (k: string, fb: number) => {
+        const n = Number(String(s[k] ?? '').replace(/[^\d.]/g, ''));
+        return Number.isFinite(n) && n > 0 ? n : fb;
+      };
+      return {
+        PY: {
+          MONTHLY: num('price.py.monthly', def.PY.MONTHLY),
+          ANNUAL: num('price.py.annual', def.PY.ANNUAL),
+          FINE: num('price.py.fine', def.PY.FINE),
+        },
+        BR: {
+          MONTHLY: num('price.br.monthly', def.BR.MONTHLY),
+          ANNUAL: num('price.br.annual', def.BR.ANNUAL),
+          FINE: num('price.br.fine', def.BR.FINE),
+        },
+      };
+    } catch {
+      return { PY: { ...def.PY }, BR: { ...def.BR } };
+    }
+  }
+
   /**
    * Creates a payment order for Paraguay or Brasil.
    * - PY: Bancard vPOS hosted checkout when configured, plus alias/transfer instructions as fallback.
@@ -32,10 +68,11 @@ export class PaymentService {
 
     const isPY = params.country === 'PARAGUAY';
     const currency = isPY ? 'PYG' : 'BRL';
-    let baseAmount = isPY
-      ? params.plan === 'ANNUAL' ? config.payments.planPrices.PY.ANNUAL : config.payments.planPrices.PY.MONTHLY
-      : params.plan === 'ANNUAL' ? config.payments.planPrices.BR.ANNUAL : config.payments.planPrices.BR.MONTHLY;
-    if (params.isFine) baseAmount += isPY ? config.payments.planPrices.PY.FINE : config.payments.planPrices.BR.FINE;
+    // Precios editables desde el panel admin (AppSetting price.*), con fallback al config/env.
+    const prices = await PaymentService.getPlanPrices();
+    const P = isPY ? prices.PY : prices.BR;
+    let baseAmount = params.plan === 'ANNUAL' ? P.ANNUAL : P.MONTHLY;
+    if (params.isFine) baseAmount += P.FINE;
 
     const shopProcessId = Date.now().toString();
     const referenceCode = `BIO-${shopProcessId}-${Math.floor(1000 + Math.random() * 9000)}`;
@@ -54,7 +91,7 @@ export class PaymentService {
         status: 'PENDING_PAYMENT',
         expiryDate,
         finePending: !!params.isFine,
-        fineAmount: params.isFine ? (isPY ? config.payments.planPrices.PY.FINE : config.payments.planPrices.BR.FINE) : 0,
+        fineAmount: params.isFine ? P.FINE : 0,
       },
     });
 

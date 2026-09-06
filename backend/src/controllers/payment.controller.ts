@@ -43,14 +43,17 @@ export class PaymentController {
   }
 
   public static async getPaymentMethods(_req: Request, res: Response): Promise<void> {
+    const p = await PaymentService.getPlanPrices();
+    const gs = (n: number) => `Gs. ${n.toLocaleString('es-PY')}`;
+    const rs = (n: number) => `R$ ${n.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}`;
     res.json({
       paraguay: {
         currency: 'PYG',
         gateway: BancardService.enabled ? 'BANCARD' : 'BANK_TRANSFER',
         plans: {
-          monthly: { name: 'Plan Mensual', amount: config.payments.planPrices.PY.MONTHLY, formatted: 'Gs. 35.000' },
-          annual: { name: 'Plan Anual', amount: config.payments.planPrices.PY.ANNUAL, formatted: 'Gs. 300.000' },
-          fine: { name: 'Multa de Reactivación', amount: config.payments.planPrices.PY.FINE, formatted: 'Gs. 50.000' },
+          monthly: { name: 'Plan Mensual', amount: p.PY.MONTHLY, formatted: gs(p.PY.MONTHLY) },
+          annual: { name: 'Plan Anual', amount: p.PY.ANNUAL, formatted: gs(p.PY.ANNUAL) },
+          fine: { name: 'Multa de Reactivación', amount: p.PY.FINE, formatted: gs(p.PY.FINE) },
         },
         methods: ['Bancard / Tarjetas / QR', 'SIPAP / Alias Bancario', 'Tigo Money'],
       },
@@ -58,9 +61,9 @@ export class PaymentController {
         currency: 'BRL',
         gateway: config.pix.psp === 'mercadopago' && config.pix.mercadopagoToken ? 'MERCADOPAGO' : 'PIX',
         plans: {
-          monthly: { name: 'Plano Mensal', amount: config.payments.planPrices.BR.MONTHLY, formatted: 'R$ 25,00' },
-          annual: { name: 'Plano Anual', amount: config.payments.planPrices.BR.ANNUAL, formatted: 'R$ 220,00' },
-          fine: { name: 'Multa de Reativação', amount: config.payments.planPrices.BR.FINE, formatted: 'R$ 44,00' },
+          monthly: { name: 'Plano Mensal', amount: p.BR.MONTHLY, formatted: rs(p.BR.MONTHLY) },
+          annual: { name: 'Plano Anual', amount: p.BR.ANNUAL, formatted: rs(p.BR.ANNUAL) },
+          fine: { name: 'Multa de Reativação', amount: p.BR.FINE, formatted: rs(p.BR.FINE) },
         },
         methods: ['PIX Instantâneo', 'Cartão de Crédito / Débito'],
       },
