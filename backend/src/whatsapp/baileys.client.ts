@@ -92,11 +92,29 @@ export class BaileysClient {
           this.isConnecting = false;
 
           if (loggedOut) {
-            console.warn('⚠️ [WHATSAPP BOT] Logged out. Clearing session — re-pair from /bot-connect.');
-            try { fs.rmSync(authDir, { recursive: true, force: true }); } catch { /* noop */ }
-            this.reconnectAttempts = 0;
-            this.qrRaw = null;
-            setTimeout(() => this.start(), 2_000);
+            // WhatsApp cerró la sesión (401). Si reconectamos sin credenciales vuelve a dar 401
+            // al instante: sin un tope esto era un loop infinito cada 2s que martillaba a WhatsApp
+            // (riesgo de baneo del número). Ahora usa el presupuesto de reintentos con backoff y,
+            // agotado, se frena y espera un re-vinculado manual (/bot-connect + POST /api/bot/reconnect).
+            this.reconnectAttempts += 1;
+            if (this.reconnectAttempts === 1) {
+              console.warn('⚠️ [WHATSAPP BOT] Logged out. Clearing session — re-pair from /bot-connect.');
+              try { fs.rmSync(authDir, { recursive: true, force: true }); } catch { /* noop */ }
+              this.qrRaw = null;
+            }
+            if (this.reconnectAttempts > config.whatsappMaxReconnect) {
+              this.gaveUp = true;
+              console.warn(
+                `⚠️ [WHATSAPP BOT] Sigue deslogueado tras ${this.reconnectAttempts} intentos — freno la reconexión. ` +
+                  'Escaneá el QR en /bot-connect y luego POST /api/bot/reconnect.'
+              );
+              return;
+            }
+            const delay = Math.min(60_000, 5_000 * this.reconnectAttempts);
+            console.warn(
+              `⚠️ [WHATSAPP BOT] Logout persistente. Reintento ${this.reconnectAttempts}/${config.whatsappMaxReconnect} en ${delay / 1000}s.`
+            );
+            setTimeout(() => this.start(), delay);
             return;
           }
 
