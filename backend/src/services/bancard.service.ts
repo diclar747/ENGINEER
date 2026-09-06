@@ -53,7 +53,7 @@ export class BancardService {
           cancel_url: params.cancelUrl,
         },
       },
-      { timeout: 30_000 }
+      { timeout: 30_000, headers: { "User-Agent": "Mozilla/5.0 (compatible; BioPass/1.0)", Accept: "application/json" } }
     );
 
     if (data?.status !== 'success' || !data?.process_id) {
@@ -125,7 +125,7 @@ export class BancardService {
     const { data } = await axios.post(
       `${config.bancard.baseUrl}/vpos/api/0.3/single_buy/confirmations`,
       { public_key: config.bancard.publicKey, operation: { token, shop_process_id: params.shopProcessId } },
-      { timeout: 30_000 }
+      { timeout: 30_000, headers: { "User-Agent": "Mozilla/5.0 (compatible; BioPass/1.0)", Accept: "application/json" } }
     );
 
     const resp = data?.confirmation;

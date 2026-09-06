@@ -46,6 +46,7 @@ router.post('/payments/webhook', PaymentController.webhook);
 router.get('/payments/methods', PaymentController.getPaymentMethods);
 router.post('/payments/bancard/webhook', PaymentController.bancardWebhook);
 router.get('/payments/bancard/return', PaymentController.bancardReturn);
+router.post('/payments/:ref/bancard-session', PaymentController.bancardSession);
 router.post('/payments/:ref/dev-confirm', PaymentController.devConfirm);
 router.get('/payments/:ref', PaymentController.getOrder);
 

@@ -99,61 +99,25 @@ export const Checkout: React.FC = () => {
     if (order?.status === 'PAID' && poll.current) window.clearInterval(poll.current);
   }, [order?.status]);
 
-  // Bancard: se paga con su iframe (bancard-checkout-4.0.0.js), no con redirect. Se carga el
-  // SDK una vez y se monta el formulario seguro en #bancard-container. Al completar, Bancard
-  // redirige la ventana al return_url (nuestro /api/payments/bancard/return) y el webhook activa
-  // la cuenta; el polling de esta página refleja el PAID.
-  const bancardMounted = useRef(false);
+  // Bancard: el process_id vence a los pocos minutos, así que al abrir esta página pedimos una
+  // sesión FRESCA (POST /payments/:ref/bancard-session) y mostramos su QR + link. El pago se
+  // completa en la pantalla de Bancard (escaneando el QR con el teléfono o abriendo el link);
+  // al terminar, Bancard vuelve al return_url y el webhook activa la cuenta — el polling de
+  // esta página refleja el PAID.
+  const [bancard, setBancard] = useState<{ redirectUrl: string; qr: string | null } | null>(null);
+  const [bancardErr, setBancardErr] = useState(false);
+  const bancardAsked = useRef(false);
   useEffect(() => {
-    const pid = order?.bancardProcessId;
-    const base = order?.bancardBaseUrl;
-    if (!pid || !base || order?.status === 'PAID' || bancardMounted.current) return;
-    bancardMounted.current = true;
-
-    const styles = {
-      'form-background-color': '#ffffff',
-      'button-background-color': '#0d9488',
-      'button-text-color': '#ffffff',
-      'button-border-color': '#0d9488',
-      'input-background-color': '#ffffff',
-      'input-text-color': '#111111',
-      'input-placeholder-color': '#9ca3af',
-    };
-    const render = () => {
-      try {
-        window.Bancard?.Checkout?.createForm('bancard-container', pid, styles);
-      } catch (e) {
-        console.error('[bancard] createForm', e);
-      }
-    };
-    const src = `${base}/checkout/javascript/dist/bancard-checkout-4.0.0.js`;
-    if (window.Bancard?.Checkout) {
-      render();
-    } else if (!document.querySelector(`script[src="${src}"]`)) {
-      const s = document.createElement('script');
-      s.src = src;
-      s.async = true;
-      s.onload = render;
-      document.head.appendChild(s);
-    } else {
-      const iv = window.setInterval(() => {
-        if (window.Bancard?.Checkout) {
-          window.clearInterval(iv);
-          render();
-        }
-      }, 200);
-      window.setTimeout(() => window.clearInterval(iv), 10000);
-    }
-
-    return () => {
-      try {
-        window.Bancard?.Checkout?.destroy?.();
-      } catch {
-        /* noop */
-      }
-      bancardMounted.current = false;
-    };
-  }, [order?.bancardProcessId, order?.bancardBaseUrl, order?.status]);
+    if (order?.gateway !== 'BANCARD' || order?.status === 'PAID' || bancardAsked.current) return;
+    bancardAsked.current = true;
+    api
+      .post(`/payments/${encodeURIComponent(ref)}/bancard-session`)
+      .then((r) => {
+        if (r.data?.status === 'PAID') { fetchOrder(); return; }
+        setBancard({ redirectUrl: r.data.redirectUrl, qr: r.data.qr || null });
+      })
+      .catch(() => setBancardErr(true));
+  }, [order?.gateway, order?.status, ref, fetchOrder]);
 
   if (loading) {
     return (
@@ -196,9 +160,9 @@ export const Checkout: React.FC = () => {
           Cancelaste el proceso de pago. Puedes reintentar a continuación.
         </div>
       )}
-      {returnStatus === 'error' && !paid && (
-        <div className="rounded-2xl bg-rose-50 dark:bg-rose-950/40 border border-rose-500/40 text-xs text-rose-600 dark:text-rose-300 p-3.5 text-center">
-          Hubo un inconveniente al procesar con la pasarela. Si ya realizaste el pago, se acreditará automáticamente en breve.
+      {(returnStatus === 'pending' || returnStatus === 'error') && !paid && (
+        <div className="rounded-2xl bg-amber-50 dark:bg-amber-950/40 border border-amber-500/30 text-xs text-amber-700 dark:text-amber-300 p-3.5 text-center">
+          Recibimos tu vuelta de la pasarela. Si ya pagaste, tu Bio-Pass se activa en unos segundos apenas Bancard confirme — esta página se actualiza sola.
         </div>
       )}
 
@@ -241,27 +205,46 @@ export const Checkout: React.FC = () => {
         </div>
       ) : (
         <>
-          {/* Bancard — formulario seguro embebido (iframe SDK) */}
-          {order.bancardProcessId ? (
-            <div className="rounded-3xl border border-line bg-card p-5 shadow-xl">
-              <h3 className="text-sm font-bold text-fg flex items-center gap-2 mb-3">
+          {/* Bancard — QR + link a la pantalla de pago (tarjeta / QR). El iframe embebido no está
+              habilitado para este comercio; el QR abre la pantalla de Bancard en el teléfono. */}
+          {order.gateway === 'BANCARD' && (
+            <div className="rounded-3xl border border-line bg-card p-6 space-y-4 shadow-xl">
+              <h3 className="text-sm font-bold text-fg flex items-center gap-2">
                 <CreditCard className="w-4 h-4 text-teal-600 dark:text-teal-400" />
-                <span>Pagar con tarjeta de crédito / débito (Bancard)</span>
+                <span>Pagar con Bancard (tarjeta o QR)</span>
               </h3>
-              <div id="bancard-container" className="min-h-[460px] w-full rounded-xl overflow-hidden bg-white" />
-              <p className="mt-3 text-[11px] text-fg-muted">
-                Formulario protegido por Bancard. Tus datos de tarjeta no pasan por Bio-Pass.
-              </p>
+              {!bancard && !bancardErr && (
+                <p className="text-xs text-fg-muted flex items-center gap-2"><Loader2 className="w-4 h-4 animate-spin" />Generando pago seguro…</p>
+              )}
+              {bancardErr && (
+                <p className="text-xs text-rose-600 dark:text-rose-400">No se pudo iniciar el pago con Bancard. Reintentá en unos minutos o usá la transferencia SIPAP de abajo.</p>
+              )}
+              {bancard && (
+                <>
+                  {bancard.qr && (
+                    <div className="bg-white p-3 rounded-2xl w-fit mx-auto shadow-md">
+                      <img src={bancard.qr} alt="QR de pago Bancard" className="w-56 h-56" />
+                    </div>
+                  )}
+                  <p className="text-xs text-fg-soft text-center">
+                    Escaneá el QR con la cámara de tu teléfono, o tocá el botón para abrir la pantalla de pago de Bancard.
+                  </p>
+                  <a
+                    href={bancard.redirectUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="flex items-center justify-center gap-2 w-full py-4 rounded-2xl bg-gradient-to-r from-teal-500 to-emerald-500 hover:from-teal-400 hover:to-emerald-400 text-slate-950 font-black shadow-lg shadow-teal-500/25 transition-all"
+                  >
+                    <CreditCard className="w-5 h-5" />
+                    <span>Abrir pantalla de pago de Bancard</span>
+                  </a>
+                  <p className="text-[11px] text-fg-muted text-center">
+                    Al terminar el pago, esta página se actualiza sola. Si tardás y el QR expira, recargá para generar uno nuevo.
+                  </p>
+                </>
+              )}
             </div>
-          ) : order.externalRedirect ? (
-            <a
-              href={order.externalRedirect}
-              className="flex items-center justify-center gap-2 w-full py-4 rounded-2xl bg-gradient-to-r from-teal-500 to-emerald-500 hover:from-teal-400 hover:to-emerald-400 text-slate-950 font-black shadow-lg shadow-teal-500/25 transition-all hover:scale-[1.01] active:scale-[0.98]"
-            >
-              <CreditCard className="w-5 h-5" />
-              <span>Pagar con {isPY ? 'Bancard / Tarjeta' : 'Pasarela de Pago'}</span>
-            </a>
-          ) : null}
+          )}
 
           {/* PIX (Brasil) */}
           {order.pixPayload && (

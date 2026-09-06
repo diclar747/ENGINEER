@@ -182,6 +182,11 @@ export class PaymentController {
       res.redirect(`${redirectBase}&status=error`);
       return;
     }
+    // Si ya lo confirmó el webhook, listo.
+    if (order.status === 'PAID') {
+      res.redirect(`${redirectBase}&status=success`);
+      return;
+    }
     try {
       const { approved } = await BancardService.confirm({
         shopProcessId: order.gatewayRef,
@@ -191,12 +196,56 @@ export class PaymentController {
       if (approved) {
         await PaymentService.handlePaymentSuccess(order.referenceCode);
         res.redirect(`${redirectBase}&status=success`);
-      } else {
-        res.redirect(`${redirectBase}&status=pending`);
+        return;
       }
+      // No aprobado (o la API de confirmación no está disponible): NO es un error del pago.
+      // El webhook es la vía autoritativa; la página /checkout sigue consultando el estado.
+      res.redirect(`${redirectBase}&status=pending`);
     } catch (err: any) {
-      console.error('[bancard:return]', err?.message);
-      res.redirect(`${redirectBase}&status=error`);
+      // 403 = el WAF de Bancard bloquea la consulta server-to-server. El pago pudo salir bien;
+      // que lo confirme el webhook. Nunca mostrar "error" solo por esto.
+      console.warn('[bancard:return] no se pudo verificar (probable WAF):', err?.message);
+      res.redirect(`${redirectBase}&status=pending`);
+    }
+  }
+
+  /**
+   * Genera una sesión FRESCA de Bancard para una orden pendiente. El process_id de Bancard
+   * vence a los pocos minutos, así que la página /checkout llama a esto al abrirse en vez de
+   * usar el que se creó al generar la orden. Devuelve process_id + URL + QR nuevos.
+   */
+  public static async bancardSession(req: Request, res: Response): Promise<void> {
+    const ref = String(req.params.ref || '');
+    const order = await prisma.paymentOrder.findUnique({ where: { referenceCode: ref } });
+    if (!order || order.gateway !== 'BANCARD') { res.status(404).json({ error: 'Orden no encontrada.' }); return; }
+    if (order.status === 'PAID') { res.json({ status: 'PAID' }); return; }
+    if (!BancardService.enabled) { res.status(400).json({ error: 'Bancard no está configurado.' }); return; }
+    try {
+      const shopProcessId = Date.now().toString();
+      const checkout = await BancardService.createCheckout({
+        shopProcessId,
+        amount: order.amount,
+        currency: 'PYG',
+        description: `Bio-Pass ${ref.slice(-6)}`,
+        returnUrl: `${config.baseUrl}/api/payments/bancard/return?ref=${encodeURIComponent(ref)}`,
+        cancelUrl: `${config.frontendUrl}/checkout?ref=${encodeURIComponent(ref)}&status=cancel`,
+      });
+      const QRCode = (await import('qrcode')).default;
+      const qr = await QRCode.toDataURL(checkout.redirectUrl, { errorCorrectionLevel: 'M', margin: 1, width: 320 }).catch(() => null);
+      // El webhook y el return buscan la orden por gatewayRef = NUESTRO shop_process_id.
+      await prisma.paymentOrder.update({
+        where: { id: order.id },
+        data: { gatewayRef: shopProcessId, paymentLink: checkout.redirectUrl, pixQrImage: qr },
+      });
+      res.json({
+        processId: checkout.processId,
+        redirectUrl: checkout.redirectUrl,
+        qr,
+        bancardBaseUrl: config.bancard.baseUrl,
+      });
+    } catch (e: any) {
+      console.error('[bancard:session]', e?.message);
+      res.status(502).json({ error: 'No se pudo iniciar el pago con Bancard.' });
     }
   }
 }
