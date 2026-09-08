@@ -107,6 +107,9 @@ export class PixService {
         description: params.description,
         payment_method_id: 'pix',
         external_reference: params.txid,
+        // Per-charge webhook target: MP posts { type:'payment', data:{ id } } here on status
+        // change. Set on the charge itself so it works without a panel-level webhook config.
+        notification_url: `${config.baseUrl}/api/payments/webhook`,
         payer: { email: params.payerEmail || 'sem-email@bio-pass.com' },
       },
       {
