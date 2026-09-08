@@ -5,6 +5,14 @@ import { PaymentService } from '../services/payment.service';
 import { QrPdfService } from '../services/qr-pdf.service';
 import { StorageService } from '../storage/storage.service';
 import { NiroService } from '../services/niro.service';
+import {
+  Medication,
+  parseMedications,
+  mergeMedications,
+  removeMedication,
+  formatMedications,
+  medicationConflicts,
+} from '../services/medication.util';
 import { NlpHandler } from './nlp-handler';
 import { config } from '../config';
 
@@ -559,64 +567,404 @@ export class BotStateMachine {
     // ==========================================
     // REGISTERED ACTIVE MEMBER MENU & NLP ENGINE
     // ==========================================
-    if (user.status === 'ACTIVE' || state === 'ACTIVE_MEMBER') {
-      // Check if user sent media (Medical Study / Blood analysis / X-Ray)
-      if (msg.mediaBuffer) {
-        const saved = await StorageService.saveFile('medical_studies', `study_${user.id}_${Date.now()}.jpg`, msg.mediaBuffer);
-        const studyOcr = await OcrAiService.processMedicalStudy(msg.mediaBuffer, msg.mediaFilename || 'estudio.jpg');
+    if (user.status === 'ACTIVE' || state === 'ACTIVE_MEMBER' || state.startsWith('ACTIVE_')) {
+      // ---- Carga categorizada de medicamentos / recetas / estudios ----
+      // El estado del miembro activo tiene "sub-modos" que se guardan en
+      // onboardingState: ACTIVE_UPLOAD_MED | ACTIVE_UPLOAD_RX | ACTIVE_UPLOAD_STUDY
+      // | ACTIVE_RX_CONFIRM | ACTIVE_ASK_CATEGORY. Fuera de esos, es el menú.
+      const subMode =
+        state === 'ACTIVE_UPLOAD_MED' ||
+        state === 'ACTIVE_UPLOAD_RX' ||
+        state === 'ACTIVE_UPLOAD_STUDY' ||
+        state === 'ACTIVE_RX_CONFIRM' ||
+        state === 'ACTIVE_ASK_CATEGORY'
+          ? state
+          : 'ACTIVE_MEMBER';
 
+      const meds = parseMedications(user.currentMedications);
+      const lc = cleanText.toLowerCase();
+
+      const extFrom = (filename?: string, mime?: string): string => {
+        const fromName = (filename || '').toLowerCase().split('.').pop() || '';
+        if (/^(jpg|jpeg|png|webp|pdf|heic)$/.test(fromName)) return fromName === 'jpeg' ? 'jpg' : fromName;
+        const m = (mime || '').toLowerCase();
+        if (m.includes('png')) return 'png';
+        if (m.includes('pdf')) return 'pdf';
+        if (m.includes('webp')) return 'webp';
+        if (m.includes('heic') || m.includes('heif')) return 'heic';
+        return 'jpg';
+      };
+
+      const activeMenu = (): string =>
+        tr(
+          `👋 *Hola, ${user!.fullName || 'Titular Bio-Pass'}*\n\n` +
+            `¿Qué querés hacer hoy?\n\n` +
+            `*[1]* 💊 Cargar *medicamento* (lo que estás tomando)\n` +
+            `*[2]* 📄 Cargar *receta* médica\n` +
+            `*[3]* 🧪 Cargar *estudio* / evaluación médica\n` +
+            `*[4]* 📁 Ver mi *perfil médico*\n` +
+            `*[5]* 🏷️ Descargar Kit de Stickers (3x3 cm) y QR\n` +
+            `*[6]* ✏️ Modificar datos de emergencia / alergias\n` +
+            `*[7]* 💬 Hablar con soporte\n\n` +
+            `_Respondé con el número, o mandá directo una foto/PDF._`,
+          `👋 *Mba'éichapa, ${user!.fullName || 'Titular Bio-Pass'}*\n\n` +
+            `Mba'épa rejaposéta ko'ág̃a?\n\n` +
+            `*[1]* 💊 Emombe'u *pohã* reiporúva\n` +
+            `*[2]* 📄 Emombe'u *receta* médica\n` +
+            `*[3]* 🧪 Emombe'u *estudio* médico\n` +
+            `*[4]* 📁 Ahecha che *perfil médico*\n` +
+            `*[5]* 🏷️ Kit Stickers (3x3 cm) ha QR\n` +
+            `*[6]* ✏️ Emoambue datos de emergencia / alergia\n` +
+            `*[7]* 💬 Soporte ndive\n\n` +
+            `_Embohovái papapy reheve, térã emondo peteĩ ta'anga/PDF._`
+        );
+
+      const medUpdateMsg = (r: {
+        added: string[];
+        updated: string[];
+        list: Medication[];
+        conflicts: string[];
+      }): string => {
+        const lines: string[] = [];
+        if (r.added.length) lines.push(tr(`✅ Agregado: *${r.added.join(', ')}*`, `✅ Ojeagrega: *${r.added.join(', ')}*`));
+        if (r.updated.length) lines.push(tr(`♻️ Actualizado: *${r.updated.join(', ')}*`, `♻️ Oñemoambue: *${r.updated.join(', ')}*`));
+        lines.push('');
+        lines.push(tr(`💊 *Tu medicación actual (${r.list.length}):*`, `💊 *Ne pohã ko'ág̃agua (${r.list.length}):*`));
+        lines.push(formatMedications(r.list));
+        if (r.conflicts.length) {
+          lines.push('');
+          lines.push(tr('⚠️ *Atención — posible interacción con tu ficha:*', '⚠️ *Ejesareko:*'));
+          for (const c of r.conflicts) lines.push(`• ${c}`);
+          lines.push(tr('_Confirmá con tu médico._', '_Eñemongeta nde médico ndive._'));
+        }
+        return lines.join('\n');
+      };
+
+      const persistMeds = async (list: Medication[]) => {
+        await prisma.user.update({ where: { id: user!.id }, data: { currentMedications: JSON.stringify(list) } });
+      };
+
+      const ingestMedFromInput = async (opts: {
+        buffer?: Buffer;
+        filename?: string;
+        text?: string;
+        source: 'manual' | 'photo' | 'receta';
+      }) => {
+        const extracted = await OcrAiService.extractMedications({
+          buffer: opts.buffer,
+          filename: opts.filename,
+          text: opts.text,
+        });
+        if (!extracted.length) return null;
+        const { list, added, updated } = mergeMedications(meds, extracted, opts.source);
+        await persistMeds(list);
+        const conflicts = medicationConflicts(list, user!.severeAllergies, user!.contraindicatedMeds);
+        return { list, added, updated, conflicts };
+      };
+
+      const saveReceta = async (buffer: Buffer, filename: string) => {
+        const saved = await StorageService.saveFile(
+          'medical_studies',
+          `rx_${user!.id}_${Date.now()}.${extFrom(filename, msg.mediaMimeType)}`,
+          buffer
+        );
+        const rx = await OcrAiService.processPrescription(buffer, filename);
         await prisma.medicalStudy.create({
           data: {
-            userId: user.id,
+            userId: user!.id,
+            title: rx.diagnosis ? `Receta — ${rx.diagnosis}` : 'Receta médica',
+            studyType: 'PRESCRIPTION',
+            studyDate: rx.studyDate || new Date(),
+            fileUrl: saved.fileUrl,
+            ocrRawText: rx.rawText,
+            aiSummary: rx.aiSummary,
+          },
+        });
+        return rx;
+      };
+
+      const recetaReply = async (rx: Awaited<ReturnType<typeof saveReceta>>): Promise<BotResponse> => {
+        if (rx.medications.length) {
+          await updateState('ACTIVE_RX_CONFIRM', { pendingRxMeds: rx.medications });
+          const listStr = rx.medications
+            .map((m) => {
+              const bits = [m.dose, m.frequency].filter(Boolean).join(' · ');
+              return `• *${m.name}*${bits ? ` — ${bits}` : ''}`;
+            })
+            .join('\n');
+          return {
+            replyText: tr(
+              `📄 *Receta guardada en tu perfil.*\n\n💊 Medicamentos detectados:\n${listStr}\n\n` +
+                `¿Los agrego a tu *Medicación actual*?\n*[1]* Sí   *[2]* No, solo guardar la receta`,
+              `📄 *Receta oñeguarda.*\n\n💊 Pohã ojejuhúva:\n${listStr}\n\n` +
+                `¿Ambojoapy ne *pohã ko'ág̃aguápe*?\n*[1]* Heẽ   *[2]* Nahániri`
+            ),
+          };
+        }
+        return {
+          replyText: tr(
+            `📄 *Receta guardada en tu perfil.*\nNo pude leer la lista de medicamentos; si querés, cargalos con la opción *[1]* del menú.\n\n_Mandá otra receta o escribí *LISTO*._`,
+            `📄 *Receta oñeguarda.*\n\n_Emondo ambue térã ehai *LISTO*._`
+          ),
+        };
+      };
+
+      const saveEstudio = async (buffer: Buffer, filename: string): Promise<BotResponse> => {
+        const saved = await StorageService.saveFile(
+          'medical_studies',
+          `study_${user!.id}_${Date.now()}.${extFrom(filename, msg.mediaMimeType)}`,
+          buffer
+        );
+        const studyOcr = await OcrAiService.processMedicalStudy(buffer, filename);
+        // Un archivo que el usuario clasificó explícitamente como "estudio" nunca
+        // se guarda como receta aunque la IA lo confunda.
+        const st = studyOcr.studyType === 'PRESCRIPTION' ? 'OTHER' : studyOcr.studyType;
+        await prisma.medicalStudy.create({
+          data: {
+            userId: user!.id,
             title: studyOcr.title,
-            studyType: studyOcr.studyType,
+            studyType: st,
             studyDate: studyOcr.studyDate || new Date(),
             fileUrl: saved.fileUrl,
             ocrRawText: studyOcr.rawText,
             aiSummary: studyOcr.aiSummary,
           },
         });
-
-        const engine =
-          studyOcr.source === 'ai+ocr' ? 'OCR + Inteligencia Artificial'
-          : studyOcr.source === 'ocr' ? 'OCR'
-          : 'almacenamiento seguro';
         const findingsBlock = studyOcr.keyFindings.length
-          ? `\n📊 *Hallazgos:*\n${studyOcr.keyFindings.slice(0, 6).map((f) => `• ${f}`).join('\n')}\n`
+          ? `\n📊 *${tr('Hallazgos', 'Ojejuhúva')}:*\n${studyOcr.keyFindings.slice(0, 6).map((f) => `• ${f}`).join('\n')}\n`
           : '';
         return {
-          replyText: `🩺 *ESTUDIO MÉDICO PROCESADO (${engine})*\n\n` +
-            `📋 *Tipo:* ${studyOcr.title}\n` +
-            `📅 *Fecha:* ${(studyOcr.studyDate || new Date()).toLocaleDateString('es-PY', { timeZone: config.timezone })}\n` +
-            `🤖 *Resumen:* ${studyOcr.aiSummary}\n${findingsBlock}\n` +
-            `✅ Clasificado y subido a tu Bóveda Médica Cifrada.\n` +
-            `Solo vos y tu médico pueden verlo ingresando tu PIN en la plataforma web.`,
+          replyText:
+            `🧪 *${tr('ESTUDIO GUARDADO EN TU PERFIL', 'ESTUDIO OÑEGUARDA')}*\n\n` +
+            `📋 *${tr('Tipo', 'Tipo')}:* ${studyOcr.title}\n` +
+            `📅 *${tr('Fecha', 'Ára')}:* ${(studyOcr.studyDate || new Date()).toLocaleDateString('es-PY', { timeZone: config.timezone })}\n` +
+            `🤖 ${studyOcr.aiSummary}\n${findingsBlock}` +
+            tr('\n_Mandá otro o escribí *LISTO*._', '\n_Emondo ambue térã ehai *LISTO*._'),
         };
+      };
+
+      const profileSummary = async (): Promise<string> => {
+        const studies = await prisma.medicalStudy.findMany({
+          where: { userId: user!.id },
+          orderBy: [{ studyDate: 'desc' }, { createdAt: 'desc' }],
+        });
+        const rx = studies.filter((s) => s.studyType === 'PRESCRIPTION');
+        const est = studies.filter((s) => s.studyType !== 'PRESCRIPTION');
+        const rows = (arr: typeof studies): string =>
+          arr
+            .slice(0, 8)
+            .map((s) => `• ${s.title} — ${(s.studyDate || s.createdAt).toLocaleDateString('es-PY', { timeZone: config.timezone })}`)
+            .join('\n') || tr('_Nada cargado._', '_Ndaipóri._');
+        const conflicts = medicationConflicts(meds, user!.severeAllergies, user!.contraindicatedMeds);
+        return (
+          `📁 *${tr('TU PERFIL MÉDICO', 'NE PERFIL MÉDICO')}*\n\n` +
+          `💊 *${tr('Medicación actual', "Pohã ko'ág̃agua")} (${meds.length}):*\n` +
+          `${meds.length ? formatMedications(meds, { max: 15 }) : tr('_Sin medicamentos cargados._', '_Ndaipóri pohã._')}\n\n` +
+          `📄 *${tr('Recetas', 'Receta')} (${rx.length}):*\n${rows(rx)}\n\n` +
+          `🧪 *${tr('Estudios', 'Estudio')} (${est.length}):*\n${rows(est)}\n` +
+          (conflicts.length ? `\n⚠️ *${tr('Atención', 'Ejesareko')}:*\n${conflicts.map((c) => `• ${c}`).join('\n')}\n` : '') +
+          `\n🔐 ${tr('Ver todo en detalle en la web (con tu PIN)', 'Ahecha opavave webpe (nde PIN reheve)')}: https://bio-pass.cnid.com.py/\n` +
+          tr('_Escribí *MENU* para volver._', '_Ehai *MENU* rehóvo._')
+        );
+      };
+
+      // Salir de un sub-modo de carga
+      if (subMode !== 'ACTIVE_MEMBER' && /^(listo|menu|men[uú]|0|salir|volver|cancelar|terminar)$/i.test(cleanText)) {
+        await updateState('ACTIVE_MEMBER', {});
+        return { replyText: `✅ ${tr('Listo.', 'Oĩma.')}\n\n${activeMenu()}` };
       }
 
-      // Option 1: Upload study info
-      if (cleanText === '1' || cleanText.toLowerCase().includes('subir estudio')) {
+      // Sub-modo: cargar medicamento (foto de la caja/blíster o texto)
+      if (subMode === 'ACTIVE_UPLOAD_MED') {
+        if (msg.mediaBuffer) {
+          const r = await ingestMedFromInput({
+            buffer: msg.mediaBuffer,
+            filename: msg.mediaFilename || 'medicamento.jpg',
+            source: 'photo',
+          });
+          if (!r) {
+            return {
+              replyText: tr(
+                '😕 No pude leer el medicamento en la foto. Probá con más luz / acercándote, o escribí *nombre + dosis + frecuencia* (ej: "Losartán 50 mg, 1 vez al día").',
+                '😕 Ndaikatúi amoñe\'ẽ pe pohã. Emondo ta\'anga porãvéva, térã ehai *réra + dosis + mboýpa*.'
+              ),
+            };
+          }
+          return { replyText: medUpdateMsg(r) + tr('\n\n_Mandá otro o escribí *LISTO*._', '\n\n_Emondo ambue térã ehai *LISTO*._') };
+        }
+        if (cleanText) {
+          const r = await ingestMedFromInput({ text: cleanText, source: 'manual' });
+          if (!r) {
+            return {
+              replyText: tr(
+                '😕 No entendí el medicamento. Escribilo así: *Nombre Dosis Frecuencia*\n_Ej: Metformina 850 mg, 2 veces al día_',
+                '😕 Ndaikũmbýi. Ehai péicha: *Réra Dosis Mboýpa*'
+              ),
+            };
+          }
+          return { replyText: medUpdateMsg(r) + tr('\n\n_Agregá otro o escribí *LISTO*._', '\n\n_Embojoapy ambue térã ehai *LISTO*._') };
+        }
         return {
-          replyText: `📸 *Subida de Estudios Médicos:*\n\n` +
-            `Envía ahora la *foto o PDF* de tu análisis de sangre, radiografía, tomografía o receta médica.\n\n` +
-            `_Nuestra IA aplicará OCR + Vision para extraer la fecha, tipo de estudio y hallazgos clave automáticamente._`,
+          replyText: tr(
+            '💊 Mandá una *foto del medicamento* (caja/blíster) o escribí *nombre + dosis + frecuencia*.\n_Escribí *LISTO* cuando termines._',
+            '💊 Emondo pe *pohã ra\'anga* térã ehai *réra + dosis + mboýpa*.\n_Ehai *LISTO* rehóvo._'
+          ),
         };
       }
 
-      // Option 2: Edit data / NLP profile update
-      if (cleanText === '2' || cleanText.toLowerCase().includes('modificar')) {
+      // Sub-modo: cargar receta
+      if (subMode === 'ACTIVE_UPLOAD_RX') {
+        if (!msg.mediaBuffer) {
+          return {
+            replyText: tr(
+              '📄 Mandá la *foto o PDF de la receta*. Podés mandar varias.\n_Escribí *LISTO* cuando termines._',
+              '📄 Emondo pe *receta ra\'anga térã PDF*.\n_Ehai *LISTO* rehóvo._'
+            ),
+          };
+        }
+        const rx = await saveReceta(msg.mediaBuffer, msg.mediaFilename || 'receta.jpg');
+        return recetaReply(rx);
+      }
+
+      // Sub-modo: confirmar si sumar los medicamentos de la receta a "medicación actual"
+      if (subMode === 'ACTIVE_RX_CONFIRM') {
+        const pending = (getTempData().pendingRxMeds || []) as Array<{ name: string; dose?: string; frequency?: string }>;
+        if (cleanText === '1' || /^s[ií]$/i.test(cleanText) || /\bsi\b/.test(lc)) {
+          const { list, added, updated } = mergeMedications(meds, pending, 'receta');
+          await persistMeds(list);
+          const conflicts = medicationConflicts(list, user.severeAllergies, user.contraindicatedMeds);
+          await updateState('ACTIVE_UPLOAD_RX', { pendingRxMeds: [] });
+          return {
+            replyText:
+              medUpdateMsg({ added, updated, list, conflicts }) +
+              tr('\n\n_Mandá otra receta o escribí *LISTO*._', '\n\n_Emondo ambue térã ehai *LISTO*._'),
+          };
+        }
+        await updateState('ACTIVE_UPLOAD_RX', { pendingRxMeds: [] });
         return {
-          replyText: `✏️ *Actualización Inteligente de Perfil:*\n\n` +
-            `Puedes escribir en lenguaje natural lo que deseas actualizar. Ejemplos:\n` +
-            `• _"Cambiar alergia a Penicilina e Ibuprofeno"_\n` +
-            `• _"Nuevo contacto Carlos Perez 0981999888"_\n` +
-            `• _"Cambiar dirección a Avda España 500"_\n\n` +
-            `_Escribe tu mensaje a continuación:_`,
+          replyText: tr(
+            '👍 Ok, la receta quedó guardada y no toqué tu medicación.\n\n_Mandá otra receta o escribí *LISTO*._',
+            '👍 Oĩma, receta oñeguarda.\n\n_Emondo ambue térã ehai *LISTO*._'
+          ),
         };
       }
 
-      // Option 3: Download QR & Sticker PDF
-      if (cleanText === '3' || cleanText.toLowerCase().includes('descargar qr')) {
+      // Sub-modo: cargar estudio / evaluación médica
+      if (subMode === 'ACTIVE_UPLOAD_STUDY') {
+        if (!msg.mediaBuffer) {
+          return {
+            replyText: tr(
+              '🧪 Mandá la *foto o PDF del estudio* (laboratorio, radiografía, tomografía, ECG, informe). Podés mandar varios.\n_Escribí *LISTO* cuando termines._',
+              '🧪 Emondo pe *estudio ra\'anga térã PDF*.\n_Ehai *LISTO* rehóvo._'
+            ),
+          };
+        }
+        return saveEstudio(msg.mediaBuffer, msg.mediaFilename || 'estudio.jpg');
+      }
+
+      // Sub-modo: llegó un archivo sin haber elegido categoría
+      if (subMode === 'ACTIVE_ASK_CATEGORY') {
+        const pend = getTempData().pendingUpload as { name: string } | undefined;
+        if (!pend?.name) {
+          await updateState('ACTIVE_MEMBER', {});
+          return { replyText: activeMenu() };
+        }
+        if (!/^[123]$/.test(cleanText)) {
+          return {
+            replyText: tr(
+              '¿Qué es lo que mandaste?\n*[1]* 💊 Un medicamento\n*[2]* 📄 Una receta\n*[3]* 🧪 Un estudio / análisis',
+              'Mba\'épa emondo va\'ekue?\n*[1]* 💊 Pohã\n*[2]* 📄 Receta\n*[3]* 🧪 Estudio'
+            ),
+          };
+        }
+        const buf = await StorageService.getFile('medical_studies', pend.name);
+        if (!buf) {
+          await updateState('ACTIVE_MEMBER', {});
+          return { replyText: tr('No encontré el archivo, reenvialo por favor.', 'Ndajuhúi pe archivo, emondo jey.') };
+        }
+        if (cleanText === '1') {
+          const r = await ingestMedFromInput({ buffer: buf, filename: pend.name, source: 'photo' });
+          await updateState('ACTIVE_UPLOAD_MED', { pendingUpload: null });
+          return {
+            replyText:
+              (r
+                ? medUpdateMsg(r)
+                : tr('😕 No pude leer el medicamento en la foto. Escribí *nombre + dosis + frecuencia*.', '😕 Ndaikatúi. Ehai iréra + dosis + mboýpa.')) +
+              tr('\n\n_Mandá otro o escribí *LISTO*._', '\n\n_Emondo ambue térã ehai *LISTO*._'),
+          };
+        }
+        if (cleanText === '2') {
+          await updateState('ACTIVE_UPLOAD_RX', { pendingUpload: null });
+          const rx = await saveReceta(buf, pend.name);
+          return recetaReply(rx);
+        }
+        await updateState('ACTIVE_UPLOAD_STUDY', { pendingUpload: null });
+        return saveEstudio(buf, pend.name);
+      }
+
+      // ===== A partir de acá subMode === 'ACTIVE_MEMBER' (menú) =====
+
+      // Archivo suelto sin haber elegido opción → preguntar categoría
+      if (msg.mediaBuffer) {
+        const name = `pending_${user.id}_${Date.now()}.${extFrom(msg.mediaFilename, msg.mediaMimeType)}`;
+        await StorageService.saveFile('medical_studies', name, msg.mediaBuffer);
+        await updateState('ACTIVE_ASK_CATEGORY', { pendingUpload: { name } });
+        return {
+          replyText: tr(
+            '📎 Recibí tu archivo. ¿Qué es?\n\n*[1]* 💊 Un medicamento\n*[2]* 📄 Una receta\n*[3]* 🧪 Un estudio / análisis',
+            '📎 Ahupytýma ne archivo. Mba\'épa?\n\n*[1]* 💊 Pohã\n*[2]* 📄 Receta\n*[3]* 🧪 Estudio'
+          ),
+        };
+      }
+
+      // "ya no tomo X" / "sacar X" → quitar de la medicación actual
+      const stopMed = cleanText.match(/^\s*(?:ya no (?:tomo|uso)|dej[eé] de (?:tomar|usar)|sacar|quitar|eliminar|borrar)\s+(.{2,})/i);
+      if (stopMed) {
+        const { list, removed } = removeMedication(meds, stopMed[1].trim());
+        if (removed.length) {
+          await persistMeds(list);
+          return { replyText: tr(`✅ Saqué de tu medicación: *${removed.join(', ')}*`, `✅ Aipe'a ne pohãgui: *${removed.join(', ')}*`) };
+        }
+        return {
+          replyText: tr(
+            `No encontré "*${stopMed[1].trim()}*" en tu lista de medicación. Escribí *4* para ver tu perfil.`,
+            `Ndajuhúi "*${stopMed[1].trim()}*". Ehai *4* rehecha hag̃ua ne perfil.`
+          ),
+        };
+      }
+
+      // Menú numerado
+      if (cleanText === '1' || lc.includes('cargar medicamento')) {
+        await updateState('ACTIVE_UPLOAD_MED', {});
+        return {
+          replyText: tr(
+            '💊 *Cargar medicamento*\n\nMandá una *foto* del medicamento (caja/blíster) o escribí *nombre + dosis + frecuencia*.\n_Ej: Losartán 50 mg, 1 vez al día_\n\n_Podés mandar varios. Escribí *LISTO* cuando termines._',
+            '💊 *Emombe\'u pohã*\n\nEmondo peteĩ *ta\'anga* térã ehai *réra + dosis + mboýpa*.\n\n_Ehai *LISTO* rehóvo._'
+          ),
+        };
+      }
+      if (cleanText === '2' || lc.includes('cargar receta')) {
+        await updateState('ACTIVE_UPLOAD_RX', {});
+        return {
+          replyText: tr(
+            '📄 *Cargar receta*\n\nMandá la *foto o PDF* de la receta del médico.\nLeo los medicamentos y te ofrezco sumarlos a tu medicación actual.\n\n_Podés mandar varias. Escribí *LISTO* cuando termines._',
+            '📄 *Emombe\'u receta*\n\nEmondo pe *ta\'anga térã PDF*.\n\n_Ehai *LISTO* rehóvo._'
+          ),
+        };
+      }
+      if (cleanText === '3' || lc.includes('cargar estudio') || lc.includes('subir estudio')) {
+        await updateState('ACTIVE_UPLOAD_STUDY', {});
+        return {
+          replyText: tr(
+            '🧪 *Cargar estudio / evaluación médica*\n\nMandá la *foto o PDF* del análisis de sangre, radiografía, tomografía, ECG o informe.\nLa IA extrae fecha, tipo y hallazgos.\n\n_Podés mandar varios. Escribí *LISTO* cuando termines._',
+            '🧪 *Emombe\'u estudio*\n\nEmondo pe *ta\'anga térã PDF*.\n\n_Ehai *LISTO* rehóvo._'
+          ),
+        };
+      }
+      if (cleanText === '4' || lc.includes('perfil médico') || lc.includes('perfil medico') || lc.includes('ver lo que tengo')) {
+        return { replyText: await profileSummary() };
+      }
+      if (cleanText === '5' || lc.includes('descargar qr') || lc.includes('sticker')) {
         const sticker = await QrPdfService.generateStickerPdf({
           emergencyToken: user.emergencyToken,
           userName: user.fullName || 'Usuario Bio-Pass',
@@ -630,12 +978,21 @@ export class BotStateMachine {
             `💡 *Recomendación:* Imprime en papel Contact (vinilo adhesivo) resistente al agua y pégalo en tu celular, casco o billetera.`,
         };
       }
-
-      // Option 4: Support
-      if (cleanText === '4' || cleanText.toLowerCase().includes('soporte')) {
+      if (cleanText === '6' || lc.includes('modificar')) {
+        return {
+          replyText: `✏️ *Actualización Inteligente de Perfil:*\n\n` +
+            `Escribí en lenguaje natural lo que querés actualizar. Ejemplos:\n` +
+            `• _"Cambiar alergia a Penicilina e Ibuprofeno"_\n` +
+            `• _"Nuevo contacto Carlos Perez 0981999888"_\n` +
+            `• _"Cambiar dirección a Avda España 500"_\n` +
+            `• _"Ya no tomo Enalapril"_\n\n` +
+            `_Escribí tu mensaje a continuación:_`,
+        };
+      }
+      if (cleanText === '7' || lc.includes('soporte')) {
         return {
           replyText: `👨‍⚕️ *Soporte Técnico Doorway Cortex Bio-Pass:*\n\n` +
-            `Para asistencia médica, corporativa o reclamos de facturación, comunícate con soporte@bio-pass.com o llama al +595 21 500 000.`,
+            `Para asistencia médica, corporativa o reclamos de facturación, escribí a soporte@bio-pass.com o llamá al +595 21 500 000.`,
         };
       }
 
@@ -678,19 +1035,11 @@ export class BotStateMachine {
 
       {
         const ai = await askNiro(cleanText, user.fullName || undefined);
-        if (ai) return { replyText: ai + '\n\n_Escribi *MENU* para ver las opciones._' };
+        if (ai) return { replyText: ai + '\n\n_Escribí *MENU* para ver las opciones._' };
       }
 
-      // Default Active Menu
-      return {
-        replyText: `👋 *Hola, ${user.fullName || 'Titular Bio-Pass'}*\n\n` +
-          `¿Qué deseas realizar hoy?\n\n` +
-          `*[1]* 📤 Subir nuevo estudio médico (Foto/PDF)\n` +
-          `*[2]* ✏️ Modificar datos de emergencia o alergias\n` +
-          `*[3]* 🏷️ Descargar Kit de Stickers (3x3 cm) y QR\n` +
-          `*[4]* 💬 Hablar con soporte\n\n` +
-          `_Responde con el número de la opción o escribe tu consulta._`,
-      };
+      // Menú por defecto del miembro activo
+      return { replyText: activeMenu() };
     }
 
     // Expired or cancelled member

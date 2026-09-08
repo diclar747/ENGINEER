@@ -3,6 +3,7 @@ import fs from 'fs';
 import { createWorker, Worker } from 'tesseract.js';
 import { config } from '../config';
 import { AiVisionService } from './ai-vision.service';
+import { NiroService } from './niro.service';
 
 export interface CiOcrResult {
   fullName?: string;
@@ -22,6 +23,16 @@ export interface MedicalStudyOcrResult {
   rawText: string;
   aiSummary: string;
   keyFindings: string[];
+  source: 'ai+ocr' | 'ocr' | 'none';
+}
+
+export interface PrescriptionOcrResult {
+  medications: Array<{ name: string; dose?: string; frequency?: string; duration?: string }>;
+  prescriber?: string;
+  diagnosis?: string;
+  studyDate?: Date;
+  rawText: string;
+  aiSummary: string;
   source: 'ai+ocr' | 'ocr' | 'none';
 }
 
@@ -209,6 +220,141 @@ export class OcrAiService {
     }
 
     return { title, studyType, studyDate, rawText, aiSummary, keyFindings, source };
+  }
+
+  /**
+   * OCR + IA de una RECETA médica. Devuelve la lista de medicamentos estructurada
+   * (para ofrecer sumarlos a "medicación en curso"), médico, diagnóstico y fecha.
+   */
+  public static async processPrescription(
+    imageBuffer: Buffer,
+    filename: string
+  ): Promise<PrescriptionOcrResult> {
+    const rawText = await runOcr(imageBuffer, filename);
+
+    let medications: PrescriptionOcrResult['medications'] = [];
+    let prescriber: string | undefined;
+    let diagnosis: string | undefined;
+    let studyDate: Date | undefined;
+    let source: PrescriptionOcrResult['source'] = config.ocr.enabled ? 'ocr' : 'none';
+
+    const dm = rawText.match(/(\d{2}[/.\-]\d{2}[/.\-]\d{2,4})/);
+    if (dm) {
+      const [d, m, y] = dm[1].split(/[/.\-]/);
+      const yy = y.length === 2 ? `20${y}` : y;
+      const p = new Date(`${yy}-${m}-${d}T00:00:00`);
+      if (!isNaN(p.getTime())) studyDate = p;
+    }
+
+    let aiSummary = rawText
+      ? `Receta procesada por OCR (${rawText.length} caracteres extraídos).`
+      : 'Receta almacenada en la bóveda; no se pudo extraer texto.';
+
+    if (AiVisionService.available) {
+      const ai = await AiVisionService.extractJson(
+        imageBuffer,
+        guessMime(filename),
+        'Analizá esta RECETA / prescripción médica. Devolvé JSON con las claves: ' +
+          'medications (array de objetos { name, dose, frequency, duration }), ' +
+          'prescriber (nombre y/o matrícula del médico si figura), ' +
+          'diagnosis (motivo o diagnóstico si figura), ' +
+          'date (fecha de la receta DD/MM/YYYY si figura). ' +
+          'name = principio activo o nombre comercial tal cual está escrito. ' +
+          'Si un dato no está, usá null. No inventes nada.'
+      );
+      if (ai) {
+        const rawMeds = Array.isArray(ai.medications) ? ai.medications : [];
+        medications = rawMeds
+          .map((x: any) => ({
+            name: String(x?.name ?? x?.droga ?? x?.medicamento ?? '').trim(),
+            dose: x?.dose ? String(x.dose).trim() : x?.dosis ? String(x.dosis).trim() : undefined,
+            frequency: x?.frequency
+              ? String(x.frequency).trim()
+              : x?.frecuencia
+                ? String(x.frecuencia).trim()
+                : undefined,
+            duration: x?.duration
+              ? String(x.duration).trim()
+              : x?.duracion
+                ? String(x.duracion).trim()
+                : undefined,
+          }))
+          .filter((m: { name: string }) => m.name);
+        if (ai.prescriber) prescriber = String(ai.prescriber).trim();
+        if (ai.diagnosis) diagnosis = String(ai.diagnosis).trim();
+        if (ai.date && /\d{2}[/.\-]\d{2}[/.\-]\d{2,4}/.test(String(ai.date))) {
+          const [d, m, y] = String(ai.date).split(/[/.\-]/);
+          const yy = y.length === 2 ? `20${y}` : y;
+          const p = new Date(`${yy}-${m}-${d}T00:00:00`);
+          if (!isNaN(p.getTime())) studyDate = p;
+        }
+        const listStr = medications
+          .map((m) => [m.name, m.dose, m.frequency].filter(Boolean).join(' '))
+          .join('; ');
+        aiSummary =
+          `Receta${prescriber ? ` de ${prescriber}` : ''}${diagnosis ? ` — ${diagnosis}` : ''}. ` +
+          (listStr ? `Medicación indicada: ${listStr}.` : 'Sin medicación legible.');
+        source = 'ai+ocr';
+      }
+    }
+
+    return { medications, prescriber, diagnosis, studyDate, rawText, aiSummary, source };
+  }
+
+  /**
+   * Extrae una lista de medicamentos de:
+   *  - una FOTO (caja / blíster / frasco), o
+   *  - TEXTO libre tecleado o transcripto de audio ("tomo Losartán 50 mg 1 por día").
+   * Devuelve [] si no logra identificar nada.
+   */
+  public static async extractMedications(input: {
+    buffer?: Buffer;
+    filename?: string;
+    text?: string;
+  }): Promise<Array<{ name: string; dose?: string; frequency?: string }>> {
+    const normalize = (arr: any[]): Array<{ name: string; dose?: string; frequency?: string }> =>
+      (Array.isArray(arr) ? arr : [])
+        .map((x: any) => ({
+          name: String(x?.name ?? x?.droga ?? x?.medicamento ?? x?.nombre ?? '').trim(),
+          dose: x?.dose ? String(x.dose).trim() : x?.dosis ? String(x.dosis).trim() : undefined,
+          frequency: x?.frequency
+            ? String(x.frequency).trim()
+            : x?.frecuencia
+              ? String(x.frecuencia).trim()
+              : undefined,
+        }))
+        .filter((m) => m.name);
+
+    if (input.text && input.text.trim()) {
+      const ai = await NiroService.extractFields(
+        input.text.trim(),
+        'De este texto sobre la medicación que toma una persona, devolvé un JSON ' +
+          '{ "medications": [ { "name", "dose", "frequency" } ] }. ' +
+          'name = nombre del medicamento (principio activo o marca).'
+      );
+      const arr =
+        ai && Array.isArray((ai as any).medications)
+          ? (ai as any).medications
+          : Array.isArray(ai)
+            ? (ai as any)
+            : [];
+      return normalize(arr);
+    }
+
+    if (input.buffer && AiVisionService.available) {
+      const ai = await AiVisionService.extractJson(
+        input.buffer,
+        guessMime(input.filename || 'medicamento.jpg'),
+        'En esta foto hay uno o más MEDICAMENTOS (caja, blíster, frasco o envase). ' +
+          'Devolvé JSON { "medications": [ { "name", "dose", "frequency" } ] }. ' +
+          'name = nombre tal cual se lee (marca o principio activo). ' +
+          'dose = concentración si se ve (ej. "500 mg"). frequency = null salvo que la foto lo indique. ' +
+          'No inventes.'
+      );
+      return normalize(ai?.medications || []);
+    }
+
+    return [];
   }
 
   /** Free the OCR worker (called on graceful shutdown / tests). */

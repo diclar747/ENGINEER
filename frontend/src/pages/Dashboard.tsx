@@ -25,11 +25,27 @@ import {
 } from 'lucide-react';
 import { DocumentViewer } from '../components/DocumentViewer';
 import { StudiesList } from '../components/StudiesList';
+import { MedicationsList } from '../components/MedicationsList';
 import { PinModal } from '../components/PinModal';
 import { PushOptIn } from '../components/PushOptIn';
 import { VaultInit } from '../components/VaultInit';
 import { RiskBadges } from '../components/RiskBadges';
 import { stripAsterisks } from '../utils/textFormat';
+import type { Medication } from '../types';
+
+/** `currentMedications` puede venir como array (API nueva) o como JSON string (DB). */
+const parseMeds = (raw: unknown): Medication[] => {
+  if (Array.isArray(raw)) return raw as Medication[];
+  if (typeof raw === 'string' && raw.trim()) {
+    try {
+      const arr = JSON.parse(raw);
+      return Array.isArray(arr) ? arr : [];
+    } catch {
+      return [];
+    }
+  }
+  return [];
+};
 
 export const Dashboard: React.FC = () => {
   const toast = useToast();
@@ -85,6 +101,18 @@ export const Dashboard: React.FC = () => {
   const handleExportSubmit = async (pin: string) => {
     const res = await api.post('/export/full-vault', { pin });
     setExportResult(res.data);
+  };
+
+  const medications = parseMeds(user?.currentMedications);
+
+  const saveMedications = async (next: Medication[]) => {
+    try {
+      const res = await api.put('/medical/profile', { currentMedications: next });
+      setUser((u: any) => ({ ...u, currentMedications: res.data?.user?.currentMedications ?? next }));
+      toast.success('Medicación actualizada.');
+    } catch (err: any) {
+      toast.error('No se pudo guardar la medicación: ' + (err?.response?.data?.error || err.message));
+    }
   };
 
   const emergencyUrl = `${window.location.origin}/e/${user?.emergencyToken}`;
@@ -263,6 +291,9 @@ export const Dashboard: React.FC = () => {
               contraindicatedMeds={user?.contraindicatedMeds}
             />
           </div>
+
+          {/* Medicación actual */}
+          <MedicationsList medications={medications} onChange={saveMedications} />
 
           {/* Clinical Documents & Laboratory Studies */}
           <StudiesList

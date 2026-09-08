@@ -90,6 +90,7 @@ model User {
   emergencyConditions   String?             // JSON array string: ["Diabetes", "Epilepsia"]
   severeAllergies       String?             // e.g. "Penicilina, Maní"
   contraindicatedMeds   String?             // e.g. "Ibuprofeno, Anticoagulantes"
+  currentMedications    String?             // JSON array: [{ name, dose, frequency, since, source, addedAt }] — medicación en curso, se carga por WhatsApp o web
   address               String?
   email                 String?
   photoUrl              String?

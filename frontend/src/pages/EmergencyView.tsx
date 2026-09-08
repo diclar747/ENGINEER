@@ -25,6 +25,7 @@ import {
 } from 'lucide-react';
 import { DocumentViewer } from '../components/DocumentViewer';
 import { StudiesList } from '../components/StudiesList';
+import { MedicationsList } from '../components/MedicationsList';
 
 export const EmergencyView: React.FC = () => {
   const { token } = useParams<{ token: string }>();
@@ -240,6 +241,15 @@ export const EmergencyView: React.FC = () => {
             contraindicatedMeds={user.contraindicatedMeds}
           />
         </div>
+
+        {/* Medicación actual del titular (visible para el rescatista) */}
+        {Array.isArray(user.currentMedications) && user.currentMedications.length > 0 && (
+          <MedicationsList
+            medications={user.currentMedications}
+            alerts={user.medicationAlerts || []}
+            subtitle="Medicación en curso declarada por el titular"
+          />
+        )}
 
         {/* Emergency Contact Card */}
         {contact && (

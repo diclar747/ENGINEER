@@ -1,3 +1,12 @@
+export interface Medication {
+  name: string;
+  dose?: string;
+  frequency?: string;
+  since?: string;
+  source?: 'manual' | 'receta' | 'photo';
+  addedAt?: string;
+}
+
 export interface User {
   id: string;
   phoneNumber: string;
@@ -7,6 +16,8 @@ export interface User {
   emergencyConditions?: string[] | string;
   severeAllergies?: string;
   contraindicatedMeds?: string;
+  /** JSON string en la DB; array ya parseado cuando lo entrega la API. */
+  currentMedications?: Medication[] | string;
   address?: string;
   email?: string;
   photoUrl?: string;

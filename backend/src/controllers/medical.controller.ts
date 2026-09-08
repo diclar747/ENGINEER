@@ -72,10 +72,31 @@ export class MedicalController {
       emergencyConditions,
       severeAllergies,
       contraindicatedMeds,
+      currentMedications,
       address,
       email,
       encryptedMedicalBlob,
     } = req.body;
+
+    // currentMedications llega como array desde la web; se guarda como JSON string.
+    // `undefined` = no tocar; array vacío / string = sobrescribir.
+    let medsValue: string | undefined;
+    if (currentMedications !== undefined) {
+      medsValue = Array.isArray(currentMedications)
+        ? JSON.stringify(
+            currentMedications
+              .filter((m: any) => m && String(m.name || '').trim())
+              .map((m: any) => ({
+                name: String(m.name).trim(),
+                dose: m.dose ? String(m.dose).trim() : undefined,
+                frequency: m.frequency ? String(m.frequency).trim() : undefined,
+                since: m.since ? String(m.since).trim() : undefined,
+                source: ['manual', 'receta', 'photo'].includes(m.source) ? m.source : 'manual',
+                addedAt: m.addedAt || new Date().toISOString(),
+              }))
+          )
+        : String(currentMedications);
+    }
 
     const user = await prisma.user.update({
       where: { id: req.user.userId },
@@ -85,6 +106,7 @@ export class MedicalController {
         emergencyConditions: typeof emergencyConditions === 'object' ? JSON.stringify(emergencyConditions) : emergencyConditions,
         severeAllergies,
         contraindicatedMeds,
+        ...(medsValue !== undefined ? { currentMedications: medsValue } : {}),
         address,
         email,
         encryptedMedicalBlob,

@@ -2,6 +2,7 @@ import geoip from 'geoip-lite';
 import { prisma } from '../database/prisma';
 import { whatsappBot } from '../whatsapp/baileys.client';
 import { PushService } from './push.service';
+import { parseMedications, medicationConflicts } from './medication.util';
 import { config } from '../config';
 
 export interface EmergencyAccessData {
@@ -12,6 +13,10 @@ export interface EmergencyAccessData {
     emergencyConditions: string[];
     severeAllergies: string;
     contraindicatedMeds: string;
+    /** Medicación en curso declarada por el titular. */
+    currentMedications: Array<{ name: string; dose?: string; frequency?: string }>;
+    /** Advertencias si la medicación en curso choca con alergias / contraindicaciones. */
+    medicationAlerts: string[];
     address: string;
     photoUrl?: string;
     organization?: {
@@ -137,6 +142,8 @@ export class EmergencyService {
 
     const primaryContact = user.emergencyContacts[0] || null;
 
+    const medications = parseMedications(user.currentMedications);
+
     return {
       user: {
         id: user.id,
@@ -145,6 +152,8 @@ export class EmergencyService {
         emergencyConditions: conditions,
         severeAllergies: user.severeAllergies || 'Ninguna registrada',
         contraindicatedMeds: user.contraindicatedMeds || 'Ninguno registrado',
+        currentMedications: medications.map((m) => ({ name: m.name, dose: m.dose, frequency: m.frequency })),
+        medicationAlerts: medicationConflicts(medications, user.severeAllergies, user.contraindicatedMeds),
         address: user.address || 'No especificada',
         photoUrl: user.photoUrl || undefined,
         organization: user.organization
