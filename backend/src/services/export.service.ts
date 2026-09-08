@@ -80,6 +80,15 @@ export class ExportService {
       decryptedMedicalHistory: decryptedMedicalInfo,
       emergencyContacts: user.emergencyContacts,
       medicalStudiesCount: user.medicalStudies.length,
+      medicalStudies: user.medicalStudies.map((s) => ({
+        title: s.title,
+        studyType: s.studyType,
+        studyDate: s.studyDate,
+        fileUrl: s.fileUrl,
+        aiSummary: ZeroKnowledgeSecurity.kmsDecrypt(s.aiSummary),
+        ocrRawText: ZeroKnowledgeSecurity.kmsDecrypt(s.ocrRawText),
+        createdAt: s.createdAt,
+      })),
       auditLogsCount: user.auditLogs.length,
     };
 

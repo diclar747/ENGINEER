@@ -112,12 +112,29 @@ export class AuthController {
    * Verify OTP + PIN and authenticate user session
    */
   public static async verifyLogin(req: Request, res: Response): Promise<void> {
-    const { phoneNumber, pin } = req.body;
+    const { phoneNumber, pin, code } = req.body;
     const cleanPhone = (phoneNumber || '').replace(/[^0-9]/g, '');
     if (!cleanPhone || !pin) {
       res.status(400).json({ error: 'Telefono y PIN son obligatorios' });
       return;
     }
+
+    // OTP en el login: se activa con REQUIRE_LOGIN_OTP=true (opt-in, para poder
+    // desplegar el frontend nuevo primero y recién después exigirlo). Si el request
+    // trae `code`, siempre se valida aunque el flag esté apagado.
+    const requireOtp = process.env.REQUIRE_LOGIN_OTP === 'true' || !!code;
+    if (requireOtp) {
+      if (!code) {
+        res.status(400).json({ error: 'Falta el código de verificación (OTP).', needOtp: true });
+        return;
+      }
+      const otp = await OtpService.verify(cleanPhone, String(code), 'LOGIN');
+      if (!otp.ok) {
+        res.status(401).json({ error: otp.reason || 'Código de verificación inválido.', needOtp: true });
+        return;
+      }
+    }
+
     const user = await prisma.user.findUnique({
       where: { phoneNumber: cleanPhone },
       include: { emergencyContacts: true, subscriptions: { orderBy: { createdAt: 'desc' }, take: 1 } },

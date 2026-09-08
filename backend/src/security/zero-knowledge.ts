@@ -107,4 +107,81 @@ export class ZeroKnowledgeSecurity {
       throw new Error('Decryption failed. Incorrect PIN or corrupted data.');
     }
   }
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // KMS at-rest — para datos que el bot debe cifrar SIN tener el PIN del usuario
+  // (texto OCR y resumen IA de estudios cargados por WhatsApp). No es
+  // Zero-Knowledge puro, pero un dump de la DB ya no expone el contenido: la
+  // clave vive solo en la variable de entorno KMS_KEY del servidor.
+  // Formato: "kms:v1:" + base64(iv).base64(tag).base64(ciphertext)
+  // ─────────────────────────────────────────────────────────────────────────────
+
+  private static kmsKey(): Buffer | null {
+    const raw = process.env.KMS_KEY || '';
+    if (!raw) return null;
+    // Acepta hex de 64 chars, base64 de 32 bytes, o cualquier string (se deriva).
+    if (/^[0-9a-fA-F]{64}$/.test(raw)) return Buffer.from(raw, 'hex');
+    try {
+      const b = Buffer.from(raw, 'base64');
+      if (b.length === 32) return b;
+    } catch {
+      /* noop */
+    }
+    return crypto.createHash('sha256').update(raw).digest();
+  }
+
+  /** Cifra un texto con la clave KMS. Si no hay KMS_KEY configurada, devuelve el texto tal cual. */
+  public static kmsEncrypt(plaintext: string | null | undefined): string | null {
+    if (plaintext == null || plaintext === '') return plaintext ?? null;
+    const key = this.kmsKey();
+    if (!key) return plaintext; // sin clave: comportamiento previo (texto plano)
+    const p = this.encrypt(plaintext, key);
+    return `kms:v1:${p.iv}.${p.authTag}.${p.ciphertext}`;
+  }
+
+  /** Descifra un valor `kms:v1:...`. Si no tiene ese prefijo, lo devuelve intacto (compat con filas viejas). */
+  public static kmsDecrypt(value: string | null | undefined): string | null {
+    if (value == null) return null;
+    if (!value.startsWith('kms:v1:')) return value;
+    const key = this.kmsKey();
+    if (!key) return value; // no se puede descifrar sin clave
+    try {
+      const [iv, authTag, ciphertext] = value.slice(7).split('.');
+      return this.decrypt({ iv, authTag, ciphertext }, key);
+    } catch {
+      return null;
+    }
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // Recovery Key — clave de 16 caracteres que el usuario anota en el registro.
+  // Cifra un "envelope" con el PIN; ese envelope se guarda partido en 2 filas
+  // (RecoveryShard). En la recuperación: Recovery Key → envelope → PIN viejo →
+  // se re-cifra la bóveda con el PIN nuevo.
+  // ─────────────────────────────────────────────────────────────────────────────
+
+  /** 16 caracteres A–Z/2–9 (sin O/0/I/1/L para evitar confusión), formateado XXXX-XXXX-XXXX-XXXX. */
+  public static generateRecoveryKey(): string {
+    const ALPHABET = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
+    let out = '';
+    for (let i = 0; i < 16; i++) out += ALPHABET[crypto.randomInt(0, ALPHABET.length)];
+    return out.replace(/(.{4})(.{4})(.{4})(.{4})/, '$1-$2-$3-$4');
+  }
+
+  /** Normaliza lo que teclea el usuario: mayúsculas, sin guiones ni espacios. */
+  public static normalizeRecoveryKey(input: string): string {
+    return (input || '').toUpperCase().replace(/[^A-Z2-9]/g, '');
+  }
+
+  /** Cifra `secret` (el PIN) con una clave derivada del Recovery Key + salt. Devuelve el JSON del payload. */
+  public static sealWithRecoveryKey(secret: string, recoveryKey: string, salt: string): string {
+    const key = this.deriveKey(this.normalizeRecoveryKey(recoveryKey), salt);
+    return JSON.stringify(this.encrypt(secret, key));
+  }
+
+  /** Abre el envelope: devuelve el secreto (PIN viejo) o lanza si el Recovery Key es incorrecto. */
+  public static openWithRecoveryKey(sealedJson: string, recoveryKey: string, salt: string): string {
+    const key = this.deriveKey(this.normalizeRecoveryKey(recoveryKey), salt);
+    return this.decrypt(JSON.parse(sealedJson) as EncryptedPayload, key);
+  }
 }

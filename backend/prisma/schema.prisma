@@ -10,6 +10,8 @@ datasource db {
 enum Language {
   ES
   GN
+  PT
+  EN
 }
 
 enum UserStatus {
@@ -100,6 +102,11 @@ model User {
   encryptionSalt        String?             // Salt for client-side PBKDF2/AES-256-GCM derivation
   encryptedMedicalBlob  String?             // Encrypted JSON with private consultation history
   webVaultInitialized   Boolean             @default(false) // true once the blob was (re)encrypted client-side on first web login
+  recoveryKeyHash       String?             // bcrypt del Recovery Key de 16 caracteres (recuperación de PIN)
+  recoveryShards        RecoveryShard[]
+
+  // Legal
+  termsAcceptedAt       DateTime?           // cuándo aceptó Términos y Condiciones en el registro
   
   // Public Emergency Identification
   emergencyToken        String              @unique @default(uuid())
@@ -181,11 +188,26 @@ model MedicalStudy {
   studyType         StudyType @default(OTHER)
   studyDate         DateTime?
   fileUrl           String
-  ocrRawText        String?   @db.Text
-  aiSummary         String?   @db.Text
+  ocrRawText        String?   @db.Text // cifrado at-rest (AES-256-GCM, clave KMS del server) cuando contentEncrypted=true
+  aiSummary         String?   @db.Text // idem
   encryptedMetadata String?   @db.Text // Zero knowledge encrypted annotations
+  contentEncrypted  Boolean   @default(false) // true si ocrRawText/aiSummary están cifrados KMS
   createdAt         DateTime  @default(now())
   updatedAt         DateTime  @updatedAt
+}
+
+/// Envelope del PIN cifrado con el Recovery Key de 16 caracteres, partido en 2
+/// filas (shardIndex 0 y 1). Ninguna fila sola permite reconstruir el envelope.
+model RecoveryShard {
+  id         String   @id @default(uuid())
+  userId     String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  shardIndex Int      // 0 | 1
+  shardData  String   @db.Text
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@unique([userId, shardIndex])
 }
 
 model Subscription {

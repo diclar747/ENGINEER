@@ -54,6 +54,38 @@ export class PaymentService {
   }
 
   /**
+   * Métodos / alias de pago por país, editables desde /admin (PUT /admin/settings),
+   * con fallback a config/env. Claves AppSetting:
+   *   pay.py.bank · pay.py.alias · pay.py.tigo · pay.py.extra  (líneas libres: Pagopar, Personal Pay, tPago…)
+   *   pay.br.pix · pay.br.extra
+   */
+  public static async getPaymentMethods(): Promise<{
+    py: { bank: string; alias: string; tigo: string; extra: string };
+    br: { pix: string; extra: string };
+  }> {
+    const c = config.payments;
+    let s: Record<string, string> = {};
+    try {
+      const rows = await prisma.appSetting.findMany({ where: { key: { startsWith: 'pay.' } } });
+      s = Object.fromEntries(rows.map((r) => [r.key, r.value]));
+    } catch {
+      /* usa fallback */
+    }
+    return {
+      py: {
+        bank: s['pay.py.bank'] || c.paraguayBank,
+        alias: s['pay.py.alias'] || c.paraguayAlias,
+        tigo: s['pay.py.tigo'] || c.paraguayTigoWallet,
+        extra: s['pay.py.extra'] || '',
+      },
+      br: {
+        pix: s['pay.br.pix'] || c.brasilPixKey,
+        extra: s['pay.br.extra'] || '',
+      },
+    };
+  }
+
+  /**
    * Creates a payment order for Paraguay or Brasil.
    * - PY: Bancard vPOS hosted checkout when configured, plus alias/transfer instructions as fallback.
    * - BR: real Pix BR Code (valid CRC16) or Mercado Pago Pix charge.
@@ -105,13 +137,15 @@ export class PaymentService {
     let externalRedirect: string | undefined;
     let orderExpiry: Date | undefined;
 
+    const methods = await PaymentService.getPaymentMethods();
     if (isPY) {
       // Secondary/manual instructions, shown alongside the Bancard checkout.
       aliasInfo =
-        `BANCO: ${config.payments.paraguayBank}\n` +
-        `ALIAS SIPAP: ${config.payments.paraguayAlias}\n` +
-        `BILLETERA TIGO MONEY: ${config.payments.paraguayTigoWallet}\n` +
+        `BANCO: ${methods.py.bank}\n` +
+        `ALIAS SIPAP: ${methods.py.alias}\n` +
+        `BILLETERA TIGO MONEY: ${methods.py.tigo}\n` +
         `TITULAR: DOORWAY CORTEX BIO-PASS PY\n` +
+        (methods.py.extra ? `${methods.py.extra}\n` : '') +
         `REF: ${referenceCode}`;
 
       // Bancard vPOS es el procesador de Paraguay (reemplaza el portal winsap.com.py). El cliente
@@ -158,6 +192,10 @@ export class PaymentService {
       gateway = pix.provider === 'mercadopago' ? 'MERCADOPAGO' : 'PIX';
       paymentMethod = pix.provider === 'mercadopago' ? 'PIX (Mercado Pago)' : 'PIX';
       orderExpiry = pix.expiresAt;
+      aliasInfo =
+        `CHAVE PIX: ${methods.br.pix}\n` +
+        (methods.br.extra ? `${methods.br.extra}\n` : '') +
+        `REF: ${referenceCode}`;
     }
 
     const paymentOrder = await prisma.paymentOrder.create({
@@ -198,7 +236,7 @@ export class PaymentService {
       aliasInfo,
       pixPayload,
       pixQrImage,
-      pixKey: config.payments.brasilPixKey,
+      pixKey: methods.br.pix,
       expiresAt: orderExpiry,
     };
   }
@@ -276,6 +314,7 @@ export class PaymentService {
       userName: updatedUser.fullName || 'Usuario Bio-Pass',
       bloodType: updatedUser.bloodType || 'RH Registrado',
       organizationName: order.user.organization?.name,
+      organizationLogoUrl: order.user.organization?.logoUrl || undefined,
     });
 
     const emergencyUrl = `${config.publicEmergencyBaseUrl}/${updatedUser.emergencyToken}`;

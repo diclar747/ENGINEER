@@ -12,10 +12,16 @@ export class MedicalController {
       return;
     }
 
-    const studies = await prisma.medicalStudy.findMany({
+    const rows = await prisma.medicalStudy.findMany({
       where: { userId: req.user.userId },
       orderBy: { createdAt: 'desc' },
     });
+    // ocrRawText/aiSummary van cifrados at-rest (clave KMS del server) → se descifran al vuelo.
+    const studies = rows.map((s) => ({
+      ...s,
+      ocrRawText: ZeroKnowledgeSecurity.kmsDecrypt(s.ocrRawText),
+      aiSummary: ZeroKnowledgeSecurity.kmsDecrypt(s.aiSummary),
+    }));
 
     res.json({ studies });
   }
@@ -48,15 +54,16 @@ export class MedicalController {
         studyType: analysis.studyType,
         studyDate: req.body.studyDate ? new Date(req.body.studyDate) : new Date(),
         fileUrl: saved.fileUrl,
-        ocrRawText: analysis.rawText,
-        aiSummary: analysis.aiSummary,
+        ocrRawText: ZeroKnowledgeSecurity.kmsEncrypt(analysis.rawText),
+        aiSummary: ZeroKnowledgeSecurity.kmsEncrypt(analysis.aiSummary),
+        contentEncrypted: !!process.env.KMS_KEY,
       },
     });
 
     res.json({
       success: true,
       message: 'Estudio médico procesado y almacenado exitosamente',
-      study,
+      study: { ...study, ocrRawText: analysis.rawText, aiSummary: analysis.aiSummary },
     });
   }
 

@@ -9,6 +9,10 @@ export const Login: React.FC = () => {
   const expired = params.get('expired') === '1';
   const [phone, setPhone] = useState('');
   const [pin, setPin] = useState('');
+  const [code, setCode] = useState('');
+  const [otpSent, setOtpSent] = useState(false);
+  const [otpLoading, setOtpLoading] = useState(false);
+  const [otpMsg, setOtpMsg] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [botNumber, setBotNumber] = useState('595985768793');
@@ -17,16 +21,31 @@ export const Login: React.FC = () => {
     api.get('/bot/status').then((r) => r.data?.botNumber && setBotNumber(String(r.data.botNumber))).catch(() => {});
   }, []);
 
+  const sendOtp = async () => {
+    if (phone.replace(/\D/g, '').length < 6) { setError('Ingresá tu número de teléfono primero.'); return; }
+    setOtpLoading(true); setError(null); setOtpMsg(null);
+    try {
+      const r = await api.post('/auth/request-otp', { phoneNumber: phone });
+      setOtpSent(true);
+      setOtpMsg(r.data?.message || 'Te enviamos un código por WhatsApp.');
+      if (r.data?.devOtp) setCode(String(r.data.devOtp));
+    } catch (err: any) {
+      setError(err?.response?.data?.error || 'No se pudo enviar el código.');
+    } finally { setOtpLoading(false); }
+  };
+
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true); setError(null);
     try {
-      const res = await api.post('/auth/verify-login', { phoneNumber: phone, pin });
+      const res = await api.post('/auth/verify-login', { phoneNumber: phone, pin, code });
       localStorage.setItem('biopass_token', res.data.token);
       localStorage.setItem('biopass_user', JSON.stringify(res.data.user));
       navigate('/dashboard');
     } catch (err: any) {
-      setError(err?.response?.data?.error || 'Teléfono o PIN incorrecto.');
+      const d = err?.response?.data;
+      if (d?.needOtp && !otpSent) { setError('Enviá y cargá el código de verificación para continuar.'); }
+      else setError(d?.error || 'Teléfono, PIN o código incorrecto.');
     } finally { setLoading(false); }
   };
 
@@ -64,7 +83,20 @@ export const Login: React.FC = () => {
             </div>
             <p className="mt-1 text-[11px] text-fg-muted text-center">El PIN de 4 dígitos que elegiste en tu registro</p>
           </div>
-          <button type="submit" disabled={loading || phone.length < 6 || pin.length !== 4}
+          <div>
+            <label className="block text-xs font-bold uppercase tracking-wider text-fg-soft mb-1.5">Código de verificación (WhatsApp)</label>
+            <div className="flex gap-2">
+              <input type="text" inputMode="numeric" value={code}
+                onChange={(e) => setCode(e.target.value.replace(/\D/g, '').slice(0, 6))} placeholder="000000" maxLength={6}
+                className="flex-1 px-4 py-3 bg-panel border border-line rounded-2xl text-sm font-mono tracking-[0.3em] text-center text-fg placeholder-fg-muted focus:border-teal-500 focus:ring-2 focus:ring-teal-500/20 outline-none transition-all" />
+              <button type="button" onClick={sendOtp} disabled={otpLoading || phone.replace(/\D/g, '').length < 6}
+                className="px-4 py-3 rounded-2xl border border-teal-500/40 bg-teal-500/10 text-teal-600 dark:text-teal-300 font-bold text-xs whitespace-nowrap hover:bg-teal-500/15 transition-colors disabled:opacity-50">
+                {otpLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : otpSent ? 'Reenviar' : 'Enviar código'}
+              </button>
+            </div>
+            {otpMsg && <p className="mt-1 text-[11px] text-teal-600 dark:text-teal-300">{otpMsg}</p>}
+          </div>
+          <button type="submit" disabled={loading || phone.length < 6 || pin.length !== 4 || code.length !== 6}
             className="w-full py-3.5 px-4 rounded-2xl bg-gradient-to-r from-teal-500 to-emerald-500 hover:from-teal-400 hover:to-emerald-400 text-slate-950 font-black text-sm shadow-lg shadow-teal-500/20 flex items-center justify-center gap-2 transition-all hover:scale-[1.02] active:scale-[0.98] disabled:opacity-50">
             {loading ? <Loader2 className="w-5 h-5 animate-spin" /> : (<><span>Ingresar al Pasaporte</span><ArrowRight className="w-4 h-4" /></>)}
           </button>

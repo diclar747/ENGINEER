@@ -24,6 +24,7 @@ export class StickerController {
         userName: user.fullName || 'Titular Bio-Pass',
         bloodType: user.bloodType || 'O+',
         organizationName: user.organization?.name,
+        organizationLogoUrl: user.organization?.logoUrl || undefined,
       });
 
       res.setHeader('Content-Type', 'application/pdf');

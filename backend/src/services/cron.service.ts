@@ -154,29 +154,45 @@ export class CronService {
         await prisma.scanAuditLog.deleteMany({ where: { userId: user.id } });
         await prisma.medicalStudy.deleteMany({ where: { userId: user.id } });
         await prisma.emergencyContact.deleteMany({ where: { userId: user.id } });
+        await prisma.medicationReminder.deleteMany({ where: { userId: user.id } });
+        await prisma.pushSubscription.deleteMany({ where: { userId: user.id } });
+        await prisma.otpCode.deleteMany({ where: { phoneNumber: user.phoneNumber } });
         await prisma.paymentOrder.deleteMany({ where: { userId: user.id } });
         await prisma.subscription.deleteMany({ where: { userId: user.id } });
-        
-        // Update user to PURGED status with zeroed sensitive data
+
+        // Update user to PURGED status with EVERY personal field wiped (GDPR/LGPD).
+        // El row se conserva solo como lápida (phoneNumber + status=PURGED) para
+        // que un re-registro arranque limpio y quede traza de que existió.
         await prisma.user.update({
           where: { id: user.id },
           data: {
             fullName: '[DATOS PURGADOS GDPR]',
+            whatsappJid: null,
             ciNumber: null,
             ciFrontUrl: null,
             ciBackUrl: null,
+            dateOfBirth: null,
+            birthPlace: null,
+            sex: null,
             bloodType: null,
             emergencyConditions: null,
             severeAllergies: null,
             contraindicatedMeds: null,
+            currentMedications: null,
             address: null,
             email: null,
+            photoUrl: null,
+            onboardingData: null,
             encryptedMedicalBlob: null,
+            encryptionSalt: null,
+            recoveryKeyHash: null,
             pinHash: null,
+            organizationId: null,
             status: 'PURGED',
             onboardingState: 'PURGED',
           },
         });
+        await prisma.recoveryShard.deleteMany({ where: { userId: user.id } }).catch(() => {});
 
         const finalMsg = `🗑️ *AVISO FINAL BIO-PASS (GDPR/LGPD)*\n\n` +
           `Habiendo transcurrido el plazo máximo de 30 días posteriores a la cancelación sin regularización, informamos que:\n\n` +

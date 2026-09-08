@@ -2,6 +2,7 @@ import { prisma } from '../database/prisma';
 import { ZeroKnowledgeSecurity } from '../security/zero-knowledge';
 import { OcrAiService } from '../services/ocr-ai.service';
 import { PaymentService } from '../services/payment.service';
+import { BancardService } from '../services/bancard.service';
 import { QrPdfService } from '../services/qr-pdf.service';
 import { StorageService } from '../storage/storage.service';
 import { NiroService } from '../services/niro.service';
@@ -15,8 +16,10 @@ import {
 } from '../services/medication.util';
 import { AiPromptService, PromptScope } from '../services/ai-prompt.service';
 import { MedicationReminderService } from '../services/medication-reminder.service';
+import { EmailService } from '../services/email.service';
 import { NlpHandler } from './nlp-handler';
 import { config } from '../config';
+import bcrypt from 'bcryptjs';
 
 export interface InboundMessage {
   from: string; // Phone number e.g. "595981123456"
@@ -64,6 +67,148 @@ async function askNiro(
   ]);
 }
 
+/** Traduce por código de idioma explícito (ES/GN/PT/EN). PT/EN caen a ES si faltan. */
+function trLang(l: string, m: { es: string; gn: string; pt?: string; en?: string }): string {
+  switch ((l || 'ES').toUpperCase()) {
+    case 'GN': return m.gn;
+    case 'PT': return m.pt ?? m.es;
+    case 'EN': return m.en ?? m.es;
+    default: return m.es;
+  }
+}
+
+/** minúsculas, sin acentos y sin signos al principio/fin — para comparar respuestas cortas. */
+function norm(s: string): string {
+  return (s || '')
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/^[^\p{L}\p{N}]+/u, '')
+    .replace(/[^\p{L}\p{N}]+$/u, '')
+    .trim();
+}
+
+/** ¿La respuesta a una confirmación *[1]* Sí / *[2]* No es un "sí"?
+ *  Tolera "1", "1 …", "si", "sí", "sip", "dale", "ok", "listo", "correcto",
+ *  "confirmo", "continuar", "de acuerdo", un 👍 / ✅, y el texto del botón
+ *  copiado ("[1] Sí, continuar ✅"). Antes solo `=== '1'` / includes('si') → un
+ *  "Sí" con tilde o un "dale" caían al else y reiniciaban el paso (loop). */
+function isAffirmative(text: string): boolean {
+  const raw = (text || '').trim();
+  if (/^[\p{Emoji_Presentation}\p{Extended_Pictographic}\s]+$/u.test(raw) && /[\u{1F44D}\u{1F44C}✅\u{1F64C}]/u.test(raw)) {
+    return true; // 👍 👌 ✅ 🙌 a secas
+  }
+  const t = norm(raw);
+  if (!t) return false;
+  if (/^2\b/.test(t) || /\bno\b/.test(t)) return false;
+  return (
+    /^1\b/.test(t) ||
+    /\b(si|sisi|sip|sipi|sipe|dale|ok|oka|okey|okay|listo|correcto|correctos|correcta|correctas|confirmo|confirmar|confirmado|confirmados|continuar|continua|proceder|proseguir|acepto|aceptar|adelante|va|vale|bien|exacto|exactos|asi es|es correcto|son correctos|de acuerdo|deacuerdo|afirmativo|yes|claro|obvio|todo bien|esta bien)\b/.test(t)
+  );
+}
+
+/** ¿Es un "no / corregir" explícito a la confirmación de datos? */
+function isNegative(text: string): boolean {
+  const t = norm(text);
+  if (!t) return false;
+  return (
+    /^2\b/.test(t) ||
+    /\b(no|nel|nop|corregir|corregi|corrige|corregilo|incorrecto|incorrectos|esta mal|estan mal|mal|equivocado|error|editar|cambiar|modificar|rehacer|de nuevo)\b/.test(t)
+  );
+}
+
+/** Saludo / charla / audio sin datos ("buenos días", "hola", "probando"…). */
+function isSmallTalk(text: string): boolean {
+  const t = norm(text);
+  if (!t) return true;
+  return /^(hola+|ola|oi|ey+|hey|holis|buenas|buen[oa]s? (dias?|tardes?|noches?)|buen dia|que tal|qué tal|como (estas|andas|va)|todo bien|saludos|gracias|test|prueba|probando|probrando|ping|hello|hi+|estas ahi|hay alguien|start|empezar|iniciar)$/.test(t);
+}
+
+/** ¿El texto parece un nombre y apellido reales (no un saludo ni un número)? */
+function looksLikeFullName(text: string): boolean {
+  const t = (text || '').trim();
+  if (!t || /\d/.test(t) || t.length < 5 || t.length > 60) return false;
+  if (isSmallTalk(t) || isResetCmd(t) || isAffirmative(t) || isNegative(t)) return false;
+  const words = t.split(/\s+/).filter((w) => /\p{L}{2,}/u.test(w));
+  return words.length >= 2 && words.length <= 6;
+}
+
+// Condiciones médicas del Paso 6 — editables desde /admin (tabla MedicalConditionOption).
+// Si la tabla está vacía o falla, se usa esta lista por defecto (incluye "Válvulas cardíacas").
+type CondOpt = { code: string; labelEs: string; labelGn: string };
+const DEFAULT_CONDITIONS: CondOpt[] = [
+  { code: 'DIABETES', labelEs: 'Diabetes', labelGn: 'Diabetes' },
+  { code: 'EPILEPSIA', labelEs: 'Epilepsia', labelGn: 'Epilepsia' },
+  { code: 'HIPERTENSION', labelEs: 'Hipertensión Arterial', labelGn: 'Hipertensión' },
+  { code: 'MARCAPASOS', labelEs: 'Marcapasos / Cardiopatía', labelGn: "Marcapasos / Ñe'ãrasy" },
+  { code: 'VALVULAS', labelEs: 'Válvulas cardíacas', labelGn: 'Válvulas cardíacas' },
+];
+async function getConditionOptions(): Promise<CondOpt[]> {
+  try {
+    const rows = await prisma.medicalConditionOption.findMany({
+      where: { active: true },
+      orderBy: { sortOrder: 'asc' },
+    });
+    // "Ninguna / Mba'eve" no es una condición: el bot agrega esa opción aparte.
+    const filtered = rows.filter(
+      (r) => !/ningun|mba.?eve|^none$/i.test(`${r.labelEs} ${r.labelGn} ${r.code}`)
+    );
+    if (filtered.length) {
+      return filtered.map((r) => ({ code: r.code, labelEs: r.labelEs, labelGn: r.labelGn }));
+    }
+  } catch {
+    /* tabla nueva / DB no disponible → fallback */
+  }
+  return DEFAULT_CONDITIONS;
+}
+
+/** Comando global disponible en CUALQUIER paso: volver a empezar / menú. */
+function isResetCmd(text: string): boolean {
+  const t = norm(text);
+  if (!t) return false;
+  return /^(reiniciar|reinicio|reiniciar todo|empezar de nuevo|empezar de cero|empezar de vuelta|volver a empezar|comenzar de nuevo|arrancar de nuevo|de nuevo|otra vez|start over|restart|reset|cancelar|salir|menu|menu principal|inicio|volver al inicio)$/.test(t);
+}
+
+/** Disparador global de recuperación de PIN. */
+function isRecoverPinCmd(text: string): boolean {
+  const t = norm(text);
+  if (!t) return false;
+  return /\b(recuperar pin|recupera pin|olvide mi pin|olvide el pin|olvide mi clave|perdi mi pin|perdi el pin|no recuerdo mi pin|resetear mi pin|recuperar mi pin|forgot my pin|reset my pin|recover pin|esqueci meu pin|esqueci minha senha|recuperar minha senha)\b/.test(t);
+}
+
+const OTP_TTL_MS = 10 * 60 * 1000;
+/** Genera un código de 6 dígitos y lo persiste hasheado en OtpCode (key = phone o "email:<id>"). */
+async function issueOtp(key: string): Promise<string> {
+  const code = Math.floor(100000 + Math.random() * 900000).toString();
+  await prisma.otpCode.updateMany({
+    where: { phoneNumber: key, purpose: 'PROFILE_CHANGE', consumedAt: null },
+    data: { consumedAt: new Date() },
+  });
+  await prisma.otpCode.create({
+    data: {
+      phoneNumber: key,
+      codeHash: await bcrypt.hash(code, 10),
+      purpose: 'PROFILE_CHANGE',
+      expiresAt: new Date(Date.now() + OTP_TTL_MS),
+    },
+  });
+  return code;
+}
+/** Verifica y consume un código. */
+async function checkOtp(key: string, code: string): Promise<boolean> {
+  const row = await prisma.otpCode.findFirst({
+    where: { phoneNumber: key, purpose: 'PROFILE_CHANGE', consumedAt: null },
+    orderBy: { createdAt: 'desc' },
+  });
+  if (!row || row.expiresAt.getTime() < Date.now()) return false;
+  const ok = await bcrypt.compare(String(code || '').trim(), row.codeHash);
+  await prisma.otpCode.update({
+    where: { id: row.id },
+    data: ok ? { consumedAt: new Date() } : { attempts: { increment: 1 } },
+  });
+  return ok;
+}
+
 export class BotStateMachine {
   /**
    * Main dispatch entry point for WhatsApp conversational engine
@@ -97,13 +242,18 @@ export class BotStateMachine {
       });
 
       return {
-        replyText: `👋 *¡Hola! Bienvenido a Doorway Cortex Bio-Pass (Mobile Health Passport).*\n\n` +
-          `Tu pasaporte médico inteligente y seguro en tu bolsillo.\n` +
-          `⏱️ *El registro dura menos de 3 minutos.*\n\n` +
-          `Por favor, selecciona tu idioma de preferencia:\n` +
-          `*[1]* Español 🇪🇸\n` +
-          `*[2]* Guaraní 🇵🇾\n\n` +
-          `_Responde con 1 o 2 para comenzar._`,
+        replyText:
+          `👋 *¡Hola! Bienvenido a Doorway Cortex Bio-Pass* — tu pasaporte médico de emergencia.\n` +
+          `👋 *Mba'éichapa! Terereg̃uahẽ Doorway Cortex Bio-Pass-pe* — nde pasaporte médico emergencia-pegua.\n` +
+          `👋 *Olá! Bem-vindo ao Doorway Cortex Bio-Pass* — seu passaporte médico de emergência.\n` +
+          `👋 *Hi! Welcome to Doorway Cortex Bio-Pass* — your emergency medical passport.\n\n` +
+          `⏱️ El registro dura menos de 3 minutos / O cadastro leva menos de 3 minutos / Takes under 3 minutes.\n\n` +
+          `*Elegí tu idioma · Eiporavo nde ñe'ẽ · Escolha seu idioma · Choose your language:*\n` +
+          `*[1]* Español 🇪🇸 / 🇵🇾\n` +
+          `*[2]* Guaraní 🇵🇾\n` +
+          `*[3]* Português 🇧🇷\n` +
+          `*[4]* English 🇬🇧\n\n` +
+          `_Respondé con 1, 2, 3 o 4._`,
       };
     }
 
@@ -130,15 +280,233 @@ export class BotStateMachine {
 
     const state = user.onboardingState;
 
-    // Bilingual helper — Guaraní/Jopará for GN users, Spanish otherwise.
-    const lang: 'es' | 'gn' = user.language === 'GN' ? 'gn' : 'es';
-    const tr = (es: string, gn: string) => (lang === 'gn' ? gn : es);
+    // Idioma del usuario. `tr()` toma ES y GN siempre; PT/EN son opcionales y, si
+    // falta la traducción de un texto puntual, cae a ES (nunca deja el mensaje vacío).
+    const lang: 'es' | 'gn' | 'pt' | 'en' =
+      user.language === 'GN' ? 'gn' : user.language === 'PT' ? 'pt' : user.language === 'EN' ? 'en' : 'es';
+    const tr = (es: string, gn: string, pt?: string, en?: string) =>
+      lang === 'gn' ? gn : lang === 'pt' ? pt ?? es : lang === 'en' ? en ?? es : es;
 
-    // Reset command: If user types "REINICIAR" or "MENU"
-    if (cleanText.toUpperCase() === 'REINICIAR') {
+    // Comando global — funciona en CUALQUIER paso del registro: "reiniciar",
+    // "empezar de nuevo", "volver a empezar", "menu", "cancelar", "de nuevo"…
+    // Para un miembro ACTIVO no se borra nada: se lo lleva a su menú.
+    if (isResetCmd(cleanText)) {
+      if (user.status === 'ACTIVE') {
+        // Miembro activo: no se toca su ficha. Se lo deja en el menú y el
+        // siguiente mensaje ("menu"/cualquier cosa) muestra el menú real.
+        await updateState('ACTIVE_MEMBER', {});
+        return {
+          replyText:
+            `🔄 *Listo, volviste al menú principal.*\n\n` +
+            `Escribí *MENU* para ver tus opciones, o directamente lo que querés hacer ` +
+            `(ej: "subir estudio", "agregar medicación", "cambiar contacto").`,
+        };
+      }
       await updateState('STEP1_WELCOME', {});
       return {
-        replyText: `🔄 *Registro reiniciado.*\n\nPor favor selecciona tu idioma:\n*[1]* Español\n*[2]* Guaraní`,
+        replyText:
+          `🔄 *Empezamos de nuevo · Ñepyrũ jey · Recomeçar · Start over.*\n\n` +
+          `*[1]* Español 🇪🇸  *[2]* Guaraní 🇵🇾  *[3]* Português 🇧🇷  *[4]* English 🇬🇧\n\n` +
+          `_Escribí *REINICIAR* en cualquier momento para volver acá._`,
+      };
+    }
+
+    // ==========================================
+    // RECUPERACIÓN DE PIN (comando global)
+    // ==========================================
+    if (isRecoverPinCmd(cleanText) && !state.startsWith('RECOVER_PIN_')) {
+      if (!user.pinHash) {
+        return { replyText: tr(`Todavía no tenés un PIN configurado. Escribí *MENU* para registrarte.`, `Nderehai gueteri PIN. Ehai *MENU*.`, `Você ainda não tem um PIN. Escreva *MENU* para se cadastrar.`, `You don't have a PIN yet. Type *MENU* to register.`) };
+      }
+      if (!user.recoveryKeyHash) {
+        return {
+          replyText: tr(
+            `Tu cuenta se creó antes de la Clave de Recuperación, así que este método no está disponible.\n` +
+              `Escribí a *soporte@bio-pass.com* para un reseteo verificado por un administrador.`,
+            `Nde cuenta oñemoheñói Clave de Recuperación mboyve. Ehai *soporte@bio-pass.com*.`,
+            `Sua conta foi criada antes da Chave de Recuperação. Escreva para *soporte@bio-pass.com* para um reset verificado.`,
+            `Your account predates the Recovery Key. Email *soporte@bio-pass.com* for an admin-verified reset.`
+          ),
+        };
+      }
+      const waCode = await issueOtp(rawPhone);
+      // El OTP por email es la 2ª capa del PRD — solo si hay SMTP configurado y el
+      // usuario tiene correo. Si no, se recupera con OTP de WhatsApp + selfie + Recovery Key.
+      const useEmail = EmailService.enabled && !!user.email;
+      let emailLine = '';
+      if (useEmail) {
+        const emCode = await issueOtp(`email:${user.id}`);
+        emailLine = tr(
+          `\n📧 Te enviamos otro código a *${user.email}*.`,
+          `\n📧 Romondo ambue código *${user.email}* -pe.`,
+          `\n📧 Enviamos outro código para *${user.email}*.`,
+          `\n📧 We sent another code to *${user.email}*.`
+        );
+        EmailService.send({
+          to: user.email!,
+          subject: 'Bio-Pass — Código de recuperación de PIN',
+          template: 'generic',
+          html: `<p>Tu código de recuperación de PIN es:</p><h2 style="letter-spacing:4px">${emCode}</h2><p>Vence en 10 minutos. Si no lo pediste, ignorá este correo.</p>`,
+        }).catch((e) => console.error('[recover] email OTP failed:', e?.message));
+      }
+      await updateState('RECOVER_PIN_OTP', { recStartedAt: Date.now(), recHasEmail: useEmail });
+      return {
+        replyText: tr(
+          `🔓 *Recuperación de PIN*\n\n` +
+            `Código por WhatsApp: *${waCode}*` + emailLine + `\n\n` +
+            (useEmail
+              ? `Respondé con *los dos códigos* separados por espacio (ej: 123456 654321).`
+              : `Respondé con ese código.`) +
+            `\n\nEscribí *CANCELAR* para salir.`,
+          `🔓 *PIN Recuperación*\n\nCódigo WhatsApp rupive: *${waCode}*` + emailLine + `\n\n` +
+            (useEmail ? `Embohovái *mokõive código* espacio-pe.` : `Embohovái upe código.`) + `\n\n*CANCELAR* resei hag̃ua.`,
+          `🔓 *Recuperação de PIN*\n\nCódigo por WhatsApp: *${waCode}*` + emailLine + `\n\n` +
+            (useEmail ? `Responda com *os dois códigos* separados por espaço (ex: 123456 654321).` : `Responda com esse código.`) +
+            `\n\nEscreva *CANCELAR* para sair.`,
+          `🔓 *PIN Recovery*\n\nWhatsApp code: *${waCode}*` + emailLine + `\n\n` +
+            (useEmail ? `Reply with *both codes* separated by a space (e.g. 123456 654321).` : `Reply with that code.`) +
+            `\n\nType *CANCEL* to exit.`
+        ),
+      };
+    }
+
+    if (state === 'RECOVER_PIN_OTP') {
+      if (/^(cancelar|cancel|salir)$/.test(norm(cleanText))) {
+        await updateState(user.status === 'ACTIVE' ? 'ACTIVE_MEMBER' : 'STEP1_WELCOME', {});
+        return { replyText: tr(`Recuperación cancelada.`, `Recuperación oñemboyke.`, `Recuperação cancelada.`, `Recovery cancelled.`) };
+      }
+      const tmp = getTempData();
+      const codes = (cleanText.match(/\d{4,8}/g) || []);
+      const okWa = codes[0] ? await checkOtp(rawPhone, codes[0]) : false;
+      const okEmail = tmp.recHasEmail ? (codes[1] ? await checkOtp(`email:${user.id}`, codes[1]) : false) : true;
+      if (!okWa || !okEmail) {
+        return {
+          replyText: tr(
+            `Códigos incorrectos o vencidos. Reintentá, o escribí *RECUPERAR PIN* para pedir nuevos.`,
+            `Código ndoikói. Eha'ã jey térã ehai *RECUPERAR PIN*.`,
+            `Códigos incorretos ou vencidos. Tente de novo ou escreva *RECUPERAR PIN* para novos.`,
+            `Wrong or expired codes. Try again, or type *RECOVER PIN* for new ones.`
+          ),
+        };
+      }
+      await updateState('RECOVER_PIN_SELFIE', {});
+      return {
+        replyText: tr(
+          `✅ Códigos verificados.\n\n📸 Ahora mandá una *selfie sosteniendo tu cédula* junto a un papel con la *fecha de hoy* escrita a mano.`,
+          `✅ Código oĩporã.\n\n📸 Emondo peteĩ *selfie nde cédula reheve* ha peteĩ kuatia ko ára árape ojehai.`,
+          `✅ Códigos verificados.\n\n📸 Agora envie uma *selfie segurando seu documento* junto a um papel com a *data de hoje* escrita à mão.`,
+          `✅ Codes verified.\n\n📸 Now send a *selfie holding your ID* next to a paper with *today's date* handwritten.`
+        ),
+      };
+    }
+
+    if (state === 'RECOVER_PIN_SELFIE') {
+      if (!msg.mediaBuffer) {
+        return { replyText: tr(`Necesito la *foto (selfie con cédula y papel fechado)* para continuar.`, `Aikotevẽ pe *ta'anga* rehóvo.`, `Preciso da *foto (selfie com documento e papel datado)* para continuar.`, `I need the *photo (selfie with ID and dated paper)* to continue.`) };
+      }
+      const saved = await StorageService.saveFile('recovery_selfies', `rec_${user.id}_${Date.now()}.jpg`, msg.mediaBuffer);
+      await updateState('RECOVER_PIN_KEY', { recSelfieUrl: saved.fileUrl });
+      return {
+        replyText: tr(
+          `✅ Selfie recibida (queda para auditoría).\n\n🗝️ Ingresá tu *Clave de Recuperación de 16 caracteres* (con o sin guiones).`,
+          `✅ Selfie og̃uahẽ.\n\n🗝️ Emoĩ nde *Clave de Recuperación 16 caracteres*.`,
+          `✅ Selfie recebida (fica para auditoria).\n\n🗝️ Digite sua *Chave de Recuperação de 16 caracteres* (com ou sem hífens).`,
+          `✅ Selfie received (kept for audit).\n\n🗝️ Enter your *16-character Recovery Key* (with or without dashes).`
+        ),
+      };
+    }
+
+    if (state === 'RECOVER_PIN_KEY') {
+      const rk = ZeroKnowledgeSecurity.normalizeRecoveryKey(cleanText);
+      if (rk.length !== 16) {
+        return { replyText: tr(`La clave tiene *16 caracteres*. Revisá e ingresala de nuevo.`, `Clave oguereko *16 caracteres*.`, `A chave tem *16 caracteres*. Verifique e digite de novo.`, `The key has *16 characters*. Check and re-enter it.`) };
+      }
+      const match = user.recoveryKeyHash ? await bcrypt.compare(rk, user.recoveryKeyHash) : false;
+      if (!match) {
+        return { replyText: tr(`Esa Clave de Recuperación no coincide. Verificá que sea la que anotaste en el registro.`, `Ko clave ndoikói.`, `Essa Chave de Recuperação não confere. Verifique se é a que você anotou no cadastro.`, `That Recovery Key doesn't match. Make sure it's the one you saved at registration.`) };
+      }
+      await updateState('RECOVER_PIN_NEWPIN', { recKey: rk });
+      return {
+        replyText: tr(
+          `✅ *Clave verificada.*\n\n🔐 Creá tu *PIN nuevo de 4 dígitos*.`,
+          `✅ *Clave oĩporã.*\n\n🔐 Emoheñói *PIN pyahu 4 papapýgui*.`,
+          `✅ *Chave verificada.*\n\n🔐 Crie seu *novo PIN de 4 dígitos*.`,
+          `✅ *Key verified.*\n\n🔐 Create your *new 4-digit PIN*.`
+        ),
+      };
+    }
+
+    if (state === 'RECOVER_PIN_NEWPIN') {
+      const m = cleanText.match(/\b\d{4}\b/);
+      if (!m) {
+        return { replyText: tr(`El PIN nuevo debe tener *4 dígitos*.`, `PIN pyahu oguerekova'erã *4 papapy*.`, `O novo PIN deve ter *4 dígitos*.`, `The new PIN must be *4 digits*.`) };
+      }
+      const newPin = m[0];
+      const tmp = getTempData();
+      const rk: string = tmp.recKey || '';
+      let oldPin: string | null = null;
+      try {
+        const shards = await prisma.recoveryShard.findMany({
+          where: { userId: user.id },
+          orderBy: { shardIndex: 'asc' },
+        });
+        const sealed = shards.map((s) => s.shardData).join('');
+        if (sealed && user.encryptionSalt) {
+          oldPin = ZeroKnowledgeSecurity.openWithRecoveryKey(sealed, rk, user.encryptionSalt);
+        }
+      } catch (e: any) {
+        console.error('[recover] no se pudo abrir el envelope:', e?.message);
+      }
+
+      const newSalt = ZeroKnowledgeSecurity.generateSalt(16);
+      let newBlob: string;
+      try {
+        const plain =
+          oldPin && user.encryptedMedicalBlob && user.encryptionSalt
+            ? ZeroKnowledgeSecurity.decryptWithPin(user.encryptedMedicalBlob, oldPin, user.encryptionSalt)
+            : { fullName: user.fullName, recoveredAt: new Date().toISOString(), consultationHistory: [] };
+        newBlob = ZeroKnowledgeSecurity.encryptWithPin(plain, newPin, newSalt);
+      } catch (e: any) {
+        console.error('[recover] blob no recuperable, se crea uno nuevo:', e?.message);
+        newBlob = ZeroKnowledgeSecurity.encryptWithPin(
+          { fullName: user.fullName, recoveredAt: new Date().toISOString(), blobResetOnRecovery: true, consultationHistory: [] },
+          newPin,
+          newSalt
+        );
+      }
+
+      const newPinHash = await ZeroKnowledgeSecurity.hashPin(newPin);
+      const resealed = ZeroKnowledgeSecurity.sealWithRecoveryKey(newPin, rk, newSalt);
+      const mid = Math.ceil(resealed.length / 2);
+
+      await prisma.user.update({
+        where: { id: user.id },
+        data: {
+          pinHash: newPinHash,
+          encryptionSalt: newSalt,
+          encryptedMedicalBlob: newBlob,
+          webVaultInitialized: false,
+          failedPinAttempts: 0,
+          pinLockedUntil: null,
+          onboardingState: user.status === 'ACTIVE' ? 'ACTIVE_MEMBER' : 'STEP8_PAYMENT',
+          onboardingData: null,
+        },
+      });
+      await prisma.recoveryShard.deleteMany({ where: { userId: user.id } });
+      await prisma.recoveryShard.createMany({
+        data: [
+          { userId: user.id, shardIndex: 0, shardData: resealed.slice(0, mid) },
+          { userId: user.id, shardIndex: 1, shardData: resealed.slice(mid) },
+        ],
+      });
+
+      return {
+        replyText: tr(
+          `✅ *PIN restablecido.*\n\nYa podés usar tu nuevo PIN de 4 dígitos en la web y para desbloquear tu ficha.\n\n_Escribí *MENU* para ver tus opciones._`,
+          `✅ *PIN oñemoambue.*\n\nIkatúma reiporu nde PIN pyahu.\n\n_Ehai *MENU*._`,
+          `✅ *PIN redefinido.*\n\nJá pode usar seu novo PIN de 4 dígitos na web e para desbloquear sua ficha.\n\n_Escreva *MENU* para ver as opções._`,
+          `✅ *PIN reset.*\n\nYou can now use your new 4-digit PIN on the web and to unlock your card.\n\n_Type *MENU* to see your options._`
+        ),
       };
     }
 
@@ -148,21 +516,80 @@ export class BotStateMachine {
 
     // STEP 1: WELCOME & LANGUAGE
     if (state === 'STEP1_WELCOME' || state === 'UNREGISTERED') {
-      const isGuarani = cleanText === '2' || cleanText.toLowerCase().includes('guarani');
-      await updateState('STEP2_DOCUMENT', { language: isGuarani ? 'GN' : 'ES' }, { language: isGuarani ? 'GN' : 'ES' });
+      const c = norm(cleanText);
+      // [1] ES · [2] GN · [3] PT · [4] EN
+      const dbLang: 'ES' | 'GN' | 'PT' | 'EN' =
+        c === '2' || c.includes('guarani') ? 'GN'
+        : c === '3' || c.includes('portug') || c.includes('brasil') ? 'PT'
+        : c === '4' || c.includes('ingl') || c.includes('english') ? 'EN'
+        : 'ES';
+      await updateState('STEP1B_TERMS', { language: dbLang }, { language: dbLang });
 
-      if (isGuarani) {
-        return {
-          replyText: `✅ *Mba'éichapa! Jahecha nde Cédula de Identidad (CI).*\n\n` +
-            `📷 Emondo peteĩ ta'anga potĩ ne Cédula rehegua (ambos lados) térã ehai ne número de Cédula ha nde réra tee.`,
-        };
-      }
+      const termsUrl = `${config.baseUrl}/api/legal/terminos`;
+      const idiomaMsg =
+        dbLang === 'GN' ? "✅ *Ñe'ẽ: Guaraní.*"
+        : dbLang === 'PT' ? '✅ *Idioma: Português.*'
+        : dbLang === 'EN' ? '✅ *Language: English.*'
+        : '✅ *Idioma: Español.*';
 
       return {
-        replyText: `✅ *Idioma configurado: Español.*\n\n` +
-          `📸 *Paso 2/8 (Documento de Identidad):*\n` +
-          `Envía una *foto NÍTIDA de tu Cédula de Identidad (CI)* por ambos lados.\n\n` +
-          `_Nuestro sistema OCR extraerá tus datos automáticamente, o puedes escribir directamente tu Nombre Completo y Cédula (Ej: Juan Perez, 4.892.310)._`,
+        replyText:
+          `${idiomaMsg}\n\n` +
+          trLang(dbLang, {
+            es:
+              `📄 *Términos y Condiciones*\n` +
+              `Antes de empezar, leé y aceptá nuestros Términos:\n${termsUrl}\n\n` +
+              `Respondé *ACEPTO* para continuar.`,
+            gn:
+              `📄 *Términos ha Condiciones*\n` +
+              `Eñepyrũ mboyve, emoñe'ẽ ha eñemoneĩ ore Términos:\n${termsUrl}\n\n` +
+              `Embohovái *ACEPTO* rehóvo.`,
+            pt:
+              `📄 *Termos e Condições*\n` +
+              `Antes de começar, leia e aceite nossos Termos:\n${termsUrl}\n\n` +
+              `Responda *ACEITO* para continuar.`,
+            en:
+              `📄 *Terms & Conditions*\n` +
+              `Before we start, please read and accept our Terms:\n${termsUrl}\n\n` +
+              `Reply *I ACCEPT* to continue.`,
+          }),
+      };
+    }
+
+    // STEP 1B: TERMS & CONDITIONS ACCEPTANCE (check obligatorio del PRD)
+    if (state === 'STEP1B_TERMS') {
+      const t = norm(cleanText);
+      const accepted = /\b(acepto|aceito|i accept|accept|de acuerdo|si acepto|sim aceito|yes)\b/.test(t) || t === '1';
+      if (!accepted) {
+        const termsUrl = `${config.baseUrl}/api/legal/terminos`;
+        return {
+          replyText: tr(
+            `Para usar Bio-Pass necesitás aceptar los Términos:\n${termsUrl}\n\nRespondé *ACEPTO* para continuar.`,
+            `Reiporu hag̃ua Bio-Pass eñemoneĩ va'erã Términos:\n${termsUrl}\n\nEmbohovái *ACEPTO*.`,
+            `Para usar o Bio-Pass você precisa aceitar os Termos:\n${termsUrl}\n\nResponda *ACEITO* para continuar.`,
+            `To use Bio-Pass you must accept the Terms:\n${termsUrl}\n\nReply *I ACCEPT* to continue.`
+          ),
+        };
+      }
+      await updateState('STEP2_DOCUMENT', {}, { termsAcceptedAt: new Date() });
+      return {
+        replyText: tr(
+          `✅ *Términos aceptados.*\n\n` +
+            `📸 *Paso 2/9 (Documento de Identidad):*\n` +
+            `Enviá una *foto NÍTIDA de tu Cédula / Documento de Identidad* (frente y dorso). ` +
+            `De ahí leemos tu nombre, número, fecha y lugar de nacimiento.`,
+          `✅ *Términos oñeñemoneĩ.*\n\n` +
+            `📸 *Paso 2/9 (Cédula):*\n` +
+            `Emondo *ta'anga potĩ nde Cédula rehegua* (henondépe ha ijatukupépe). Upégui rolee opa nde mba'ekuaa.`,
+          `✅ *Termos aceitos.*\n\n` +
+            `📸 *Passo 2/9 (Documento de Identidade):*\n` +
+            `Envie uma *foto NÍTIDA do seu documento* (frente e verso). ` +
+            `Daí lemos seu nome, número, data e local de nascimento.`,
+          `✅ *Terms accepted.*\n\n` +
+            `📸 *Step 2/9 (ID Document):*\n` +
+            `Send a *clear photo of your ID* (front and back). ` +
+            `We'll read your name, number, date and place of birth from it.`
+        ),
       };
     }
 
@@ -199,12 +626,26 @@ export class BotStateMachine {
         if (ai?.fullName) extractedName = keepBest(extractedName, String(ai.fullName));
         if (ai?.ciNumber) extractedCi = keepBest(extractedCi, String(ai.ciNumber).replace(/[^0-9]/g, ''));
         if (!extractedName || !extractedCi) {
-          const parts = cleanText.split(/[,:;-]/);
-          if (parts.length >= 2) {
+          const parts = cleanText.split(/[,:;]/);
+          const digitRun = (cleanText.match(/\d[\d.\s]{5,}\d/) || [])[0];
+          if (parts.length >= 2 && parts[0].trim()) {
             extractedName = keepBest(extractedName, parts[0]);
-            extractedCi = keepBest(extractedCi, parts[1].replace(/[^0-9]/g, ''));
-          } else if (!extractedName) {
+            extractedCi = keepBest(extractedCi, parts.slice(1).join(' ').replace(/[^0-9]/g, ''));
+          } else if (digitRun && !extractedCi) {
+            // Mandaron solo el número de cédula.
+            extractedCi = keepBest(extractedCi, digitRun.replace(/[^0-9]/g, ''));
+          } else if (!extractedName && !ai?.fullName && !ai?.ciNumber && looksLikeFullName(cleanText)) {
             extractedName = cleanText.trim();
+          } else if (!ai?.fullName && !ai?.ciNumber && !digitRun) {
+            // Saludo / audio de charla / texto sin datos → NO se guarda como nombre.
+            // Se le vuelve a pedir la foto de la cédula (no se toca el buffer).
+            await updateState('STEP2_DOCUMENT', { extractedName, extractedCi, ciPhotoUrl, extractedDob, extractedBirthPlace, extractedSex });
+            return {
+              replyText:
+                `📸 Para el *Paso 2* necesito una *foto de tu cédula* (frente y dorso). ` +
+                `De ahí saco tu nombre y número automáticamente.\n\n` +
+                `_Si preferís tipear: *Nombre y Apellido, Número de cédula* — ej: Carlos Benítez, 3500200_`,
+            };
           }
         }
       }
@@ -215,11 +656,11 @@ export class BotStateMachine {
         const falta = !extractedName && !extractedCi ? 'tu nombre y tu número de cédula' : !extractedName ? 'tu nombre completo' : 'tu número de cédula';
         return {
           replyText:
-            `😕 Me falta leer ${falta}.\n\n` +
+            `😕 No pude leer bien ${falta} de la foto.\n\n` +
             (extractedName ? `✅ Tengo: *${extractedName}*\n` : '') +
             (extractedCi ? `✅ Tengo cédula: *${extractedCi}*\n` : '') +
-            `\nMandá otra foto más nítida de la cédula, o escribí (o mandá un audio con) tu *Nombre Completo y Número de Cédula*.\n` +
-            `_Ejemplo: Carlos Benítez, 3500200_`,
+            `\n📸 Mandá una *foto más nítida de tu cédula* (bien iluminada, sin reflejos, que se lea todo). De ahí sacamos todos tus datos.\n` +
+            `_Si la cámara falla, podés escribir tu nombre y número de cédula._`,
         };
       }
 
@@ -244,43 +685,77 @@ export class BotStateMachine {
           `👤 *Nombre:* ${extractedName}\n` +
           `🆔 *Cédula:* ${extractedCi}\n` +
           (extraLines ? `${extraLines}\n` : '') +
-          `\n¿Son correctos? No hace falta escribir nada más de tu cédula.\n` +
+          `\n¿Son correctos?\n` +
           `*[1]* Sí, continuar ✅\n` +
-          `*[2]* No, corregir manualmente ✏️`,
+          `*[2]* No — mandar otra foto de la cédula 📸`,
       };
     }
 
     // STEP 2 CONFIRMATION
     if (state === 'STEP2_CONFIRM_CI') {
       const tempData = getTempData();
-      if (cleanText === '1' || cleanText.toLowerCase().includes('si') || cleanText.toLowerCase().includes('correcto')) {
-        await updateState('STEP3_CONTACT', {}, {
-          fullName: tempData.extractedName,
-          ciNumber: tempData.extractedCi,
-          ciFrontUrl: tempData.ciPhotoUrl,
-          dateOfBirth: tempData.extractedDob || undefined,
-          birthPlace: tempData.extractedBirthPlace || undefined,
-          sex: tempData.extractedSex || undefined,
-        });
 
+      // "No / corregir" → se limpia el buffer y se pide OTRA FOTO de la cédula.
+      // La foto trae todos los datos (nombre, Nº, fecha, lugar, sexo), así que no
+      // se le hace volver a tipear nada.
+      if (isNegative(cleanText)) {
+        await updateState('STEP2_DOCUMENT', {
+          extractedName: '',
+          extractedCi: '',
+          extractedDob: '',
+          extractedBirthPlace: '',
+          extractedSex: '',
+        });
         return {
           replyText: tr(
-            `✅ *Identidad registrada.*\n\n` +
-              `🚨 *Paso 3/8 (Contacto de Emergencia):*\n` +
-              `Escribí el nombre y teléfono de la persona a quien debemos avisar si te pasa algo.\n\n` +
-              `_Ejemplo: María Pérez, 0981-123-456 (Madre)_`,
-            `✅ *Nde identidad oñeguarda.*\n\n` +
-              `🚨 *Paso 3/8 (Contacto de Emergencia):*\n` +
-              `Ehai téra ha teléfono pe persóna romomarandúva'erãva oĩ ramo mba'e ndéve.\n\n` +
-              `_Techapyrã: María Pérez, 0981-123-456 (Sy)_`
+            `📸 Ok, mandá de nuevo una *foto nítida de tu cédula* (frente y, si podés, dorso). De ahí leemos todos tus datos.`,
+            `📸 Néi, emondo jey peteĩ *ta'anga potĩ nde cédula rehegua* (henondépe ha, ikatúramo, ijatukupépe). Upégui rolee opa nde mba'ekuaa.`
           ),
         };
-      } else {
-        await updateState('STEP2_DOCUMENT');
+      }
+
+      // Respuesta que no es un "sí" claro NI un "no" claro: NO se reinicia el paso
+      // (eso era un loop infinito "Datos detectados" ⇄ "escribí tu nombre"). Se
+      // vuelve a mostrar la MISMA pregunta de confirmación.
+      if (!isAffirmative(cleanText)) {
         return {
-          replyText: `✏️ Por favor, escribe tu *Nombre Completo y Número de Cédula* separados por coma:\n(Ej: Carlos Benitez, 3500200)`,
+          replyText:
+            `🔍 *Confirmá tus datos:*\n\n` +
+            `👤 *Nombre:* ${tempData.extractedName || '—'}\n` +
+            `🆔 *Cédula:* ${tempData.extractedCi || '—'}\n\n` +
+            `Respondé *1* si son correctos, o *2* para corregirlos.`,
         };
       }
+
+      await updateState('STEP3_CONTACT', {}, {
+        fullName: tempData.extractedName,
+        ciNumber: tempData.extractedCi,
+        ciFrontUrl: tempData.ciPhotoUrl,
+        dateOfBirth: tempData.extractedDob || undefined,
+        birthPlace: tempData.extractedBirthPlace || undefined,
+        sex: tempData.extractedSex || undefined,
+      });
+
+      return {
+        replyText: tr(
+          `✅ *Identidad registrada.*\n\n` +
+            `🚨 *Paso 3/9 (Contacto de Emergencia):*\n` +
+            `Escribí el nombre y teléfono de la persona a quien debemos avisar si te pasa algo.\n\n` +
+            `_Ejemplo: María Pérez, 0981-123-456 (Madre)_`,
+          `✅ *Nde identidad oñeguarda.*\n\n` +
+            `🚨 *Paso 3/9 (Contacto de Emergencia):*\n` +
+            `Ehai téra ha teléfono pe persóna romomarandúva'erãva oĩ ramo mba'e ndéve.\n\n` +
+            `_Techapyrã: María Pérez, 0981-123-456 (Sy)_`,
+          `✅ *Identidade registrada.*\n\n` +
+            `🚨 *Passo 3/9 (Contato de Emergência):*\n` +
+            `Escreva o nome e telefone da pessoa que devemos avisar se algo acontecer com você.\n\n` +
+            `_Exemplo: Maria Pérez, 0981-123-456 (Mãe)_`,
+          `✅ *Identity registered.*\n\n` +
+            `🚨 *Step 3/9 (Emergency Contact):*\n` +
+            `Type the name and phone of the person we should call if something happens to you.\n\n` +
+            `_Example: Maria Perez, 0981-123-456 (Mother)_`
+        ),
+      };
     }
 
     // STEP 3: EMERGENCY CONTACT
@@ -306,13 +781,21 @@ export class BotStateMachine {
       return {
         replyText: tr(
           `✅ *Contacto de emergencia guardado:* ${contactName} (${contactPhone})\n\n` +
-            `🏠 *Paso 4/8 (Domicilio):*\n` +
+            `🏠 *Paso 4/9 (Domicilio):*\n` +
             `Escribe tu dirección exacta (calle, número de casa, barrio y ciudad).\n\n` +
             `_Ejemplo: Avda. Mariscal López 1234, Barrio Villa Morra, Asunción_`,
           `✅ *Nde contacto de emergencia oñeguarda:* ${contactName} (${contactPhone})\n\n` +
-            `🏠 *Paso 4/8 (Nde róga renda):*\n` +
+            `🏠 *Paso 4/9 (Nde róga renda):*\n` +
             `Ehai nde dirección exacta (calle, tapỹi papapy, barrio ha táva).\n\n` +
-            `_Techapyrã: Avda. Mariscal López 1234, Barrio Villa Morra, Paraguay_`
+            `_Techapyrã: Avda. Mariscal López 1234, Barrio Villa Morra, Paraguay_`,
+          `✅ *Contato de emergência salvo:* ${contactName} (${contactPhone})\n\n` +
+            `🏠 *Passo 4/9 (Endereço):*\n` +
+            `Escreva seu endereço exato (rua, número, bairro e cidade).\n\n` +
+            `_Exemplo: Av. Mariscal López 1234, Villa Morra, Assunção_`,
+          `✅ *Emergency contact saved:* ${contactName} (${contactPhone})\n\n` +
+            `🏠 *Step 4/9 (Address):*\n` +
+            `Type your exact address (street, house number, neighborhood and city).\n\n` +
+            `_Example: Mariscal López Ave 1234, Villa Morra, Asunción_`
         ),
       };
     }
@@ -324,59 +807,87 @@ export class BotStateMachine {
       return {
         replyText: tr(
           `✅ *Domicilio registrado.*\n\n` +
-            `📧 *Paso 5/8 (Correo Electrónico):*\n` +
+            `📧 *Paso 5/9 (Correo Electrónico):*\n` +
             `Ingresa tu correo electrónico para enviarte facturas, comprobantes y tu respaldo histórico.\n\n` +
             `_Ejemplo: usuario@correo.com_`,
           `✅ *Nde róga renda oñeguarda.*\n\n` +
-            `📧 *Paso 5/8 (Correo Electrónico):*\n` +
+            `📧 *Paso 5/9 (Correo Electrónico):*\n` +
             `Ehai nde correo electrónico romondo hagua ndéve factura, comprobante ha nde respaldo.\n\n` +
-            `_Techapyrã: puruhára@correo.com_`
+            `_Techapyrã: puruhára@correo.com_`,
+          `✅ *Endereço registrado.*\n\n` +
+            `📧 *Passo 5/9 (E-mail):*\n` +
+            `Informe seu e-mail para enviarmos faturas, comprovantes e seu backup histórico.\n\n` +
+            `_Exemplo: usuario@email.com_`,
+          `✅ *Address registered.*\n\n` +
+            `📧 *Step 5/9 (Email):*\n` +
+            `Enter your email so we can send invoices, receipts and your historical backup.\n\n` +
+            `_Example: user@email.com_`
         ),
       };
     }
 
     // STEP 5: EMAIL
     if (state === 'STEP5_EMAIL') {
-      await updateState('STEP6_CONDITIONS', { email: cleanText }, { email: cleanText });
+      const opts = await getConditionOptions();
+      const noneIdx = opts.length + 1;
+      const listEs = opts.map((o, i) => `*[${i + 1}]* ${o.labelEs}`).join('\n') + `\n*[${noneIdx}]* Ninguna condición`;
+      const listGn = opts.map((o, i) => `*[${i + 1}]* ${o.labelGn}`).join('\n') + `\n*[${noneIdx}]* Mba'eve`;
+
+      await updateState(
+        'STEP6_CONDITIONS',
+        { email: cleanText, condLabels: opts.map((o) => o.labelEs), condNoneIdx: noneIdx },
+        { email: cleanText }
+      );
 
       return {
         replyText: tr(
           `✅ *Correo registrado:* ${cleanText}\n\n` +
-            `🩺 *Paso 6/8 (Datos Médicos Críticos de Emergencia):*\n` +
+            `🩺 *Paso 6/9 (Datos Médicos Críticos de Emergencia):*\n` +
             `Selecciona tus condiciones médicas preexistentes respondiendo con los números separados por coma:\n\n` +
-            `*[1]* Diabetes\n*[2]* Epilepsia\n*[3]* Hipertensión Arterial\n*[4]* Marcapasos / Cardiopatía\n*[5]* Ninguna condición\n\n` +
+            `${listEs}\n\n` +
             `_Luego escribe también tus alergias severas (ej: "1, 3 - Alergia a Penicilina e Ibuprofeno")_`,
           `✅ *Nde correo oñeguarda:* ${cleanText}\n\n` +
-            `🩺 *Paso 6/8 (Nde mba'asy oĩva - Emergencia):*\n` +
+            `🩺 *Paso 6/9 (Nde mba'asy oĩva - Emergencia):*\n` +
             `Eiporavo mba'asy reguerekóva, embohovái umi papapy coma rupive:\n\n` +
-            `*[1]* Diabetes\n*[2]* Epilepsia\n*[3]* Hipertensión\n*[4]* Marcapasos / Ñe'ãrasy\n*[5]* Mba'eve\n\n` +
-            `_Upéi ehai avei mba'épa nde alergia hatãva (techapyrã: "1, 3 - Alergia Penicilina ha Ibuprofeno")_`
+            `${listGn}\n\n` +
+            `_Upéi ehai avei mba'épa nde alergia hatãva (techapyrã: "1, 3 - Alergia Penicilina ha Ibuprofeno")_`,
+          `✅ *E-mail registrado:* ${cleanText}\n\n` +
+            `🩺 *Passo 6/9 (Dados Médicos Críticos de Emergência):*\n` +
+            `Selecione suas condições médicas preexistentes respondendo com os números separados por vírgula:\n\n` +
+            `${listEs}\n\n` +
+            `_Depois escreva também suas alergias graves (ex: "1, 3 - Alergia a Penicilina e Ibuprofeno")_`,
+          `✅ *Email registered:* ${cleanText}\n\n` +
+            `🩺 *Step 6/9 (Critical Emergency Medical Data):*\n` +
+            `Select your pre-existing medical conditions by replying with the numbers separated by commas:\n\n` +
+            `${listEs}\n\n` +
+            `_Then also type your severe allergies (e.g. "1, 3 - Allergy to Penicillin and Ibuprofen")_`
         ),
       };
     }
 
     // STEP 6: MEDICAL CONDITIONS & ALLERGIES
     if (state === 'STEP6_CONDITIONS') {
-      const conditionMap: Record<string, string> = {
-        '1': 'Diabetes',
-        '2': 'Epilepsia',
-        '3': 'Hipertensión',
-        '4': 'Marcapasos',
-        '5': 'Ninguna',
-      };
+      const tmp6 = getTempData();
+      const condLabels: string[] = Array.isArray(tmp6.condLabels) && tmp6.condLabels.length
+        ? tmp6.condLabels
+        : DEFAULT_CONDITIONS.map((o) => o.labelEs);
+      const noneIdx: number = tmp6.condNoneIdx || condLabels.length + 1;
 
+      const picked = (cleanText.match(/\d+/g) || []).map(Number);
       const selectedConditions: string[] = [];
-      for (const [key, label] of Object.entries(conditionMap)) {
-        if (cleanText.includes(key) && label !== 'Ninguna') {
-          selectedConditions.push(label);
+      for (const n of picked) {
+        if (n >= 1 && n <= condLabels.length && !selectedConditions.includes(condLabels[n - 1])) {
+          selectedConditions.push(condLabels[n - 1]);
         }
       }
+      // Si marcó "Ninguna", se ignoran las demás.
+      if (picked.includes(noneIdx)) selectedConditions.length = 0;
 
-      // Extract allergy text
-      let allergies = cleanText.replace(/[1-5,\-]/g, '').trim();
+      // Extract allergy text (lo que no son números / separadores de la selección)
+      let allergies = cleanText.replace(/[0-9,;\-]/g, ' ').replace(/\s+/g, ' ').trim();
       if (!allergies) allergies = 'Ninguna declarada';
 
-      await updateState('STEP7_PIN', { selectedConditions, allergies }, {
+      await updateState('STEP6B_BLOOD', { selectedConditions, allergies }, {
         emergencyConditions: JSON.stringify(selectedConditions),
         severeAllergies: allergies,
         contraindicatedMeds: allergies.toLowerCase().includes('penicilina') ? 'Penicilina, Betalactámicos' : 'Ninguno declarado',
@@ -385,13 +896,66 @@ export class BotStateMachine {
       return {
         replyText: tr(
           `✅ *Condiciones médicas y alergias registradas.*\n\n` +
-            `🔐 *Paso 7/8 (PIN de Seguridad Zero-Knowledge):*\n` +
-            `Crea un *PIN secreto de 4 dígitos* (Ej: 8492).\n\n` +
-            `🛡️ *Importante:* este PIN es tu llave privada. Ni nosotros ni los administradores podemos ver tus estudios sin él.`,
+            `🩸 *Paso 7/9 (Grupo Sanguíneo / RH):*\n` +
+            `Elegí tu grupo:\n*[1]* O+  *[2]* O−  *[3]* A+  *[4]* A−\n*[5]* B+  *[6]* B−  *[7]* AB+  *[8]* AB−\n*[9]* No lo sé`,
           `✅ *Nde mba'asy ha alergia oñeguarda.*\n\n` +
-            `🔐 *Paso 7/8 (PIN Seguridad Zero-Knowledge):*\n` +
+            `🩸 *Paso 7/9 (Nde ruguy grupo / RH):*\n` +
+            `Eiporavo:\n*[1]* O+  *[2]* O−  *[3]* A+  *[4]* A−\n*[5]* B+  *[6]* B−  *[7]* AB+  *[8]* AB−\n*[9]* Ndaikuaái`,
+          `✅ *Condições e alergias registradas.*\n\n` +
+            `🩸 *Passo 7/9 (Tipo Sanguíneo / RH):*\n` +
+            `Escolha:\n*[1]* O+  *[2]* O−  *[3]* A+  *[4]* A−\n*[5]* B+  *[6]* B−  *[7]* AB+  *[8]* AB−\n*[9]* Não sei`,
+          `✅ *Conditions and allergies saved.*\n\n` +
+            `🩸 *Step 7/9 (Blood Type / RH):*\n` +
+            `Choose:\n*[1]* O+  *[2]* O−  *[3]* A+  *[4]* A−\n*[5]* B+  *[6]* B−  *[7]* AB+  *[8]* AB−\n*[9]* I don't know`
+        ),
+      };
+    }
+
+    // STEP 6B: BLOOD TYPE / RH
+    if (state === 'STEP6B_BLOOD') {
+      const RH = ['O+', 'O-', 'A+', 'A-', 'B+', 'B-', 'AB+', 'AB-'];
+      const t = norm(cleanText).toUpperCase().replace(/\s+/g, '');
+      let bloodType: string | null = null;
+      const n = parseInt(cleanText.trim(), 10);
+      if (n >= 1 && n <= 8) bloodType = RH[n - 1];
+      else if (n === 9) bloodType = null;
+      else {
+        const m = t.match(/^(AB|A|B|O)\s*(\+|-|POS|NEG|POSITIVO|NEGATIVO)?$/);
+        if (m) {
+          const sign = /(-|NEG)/.test(m[2] || '') ? '-' : '+';
+          bloodType = `${m[1]}${sign}`;
+        }
+      }
+      if (!bloodType && n !== 9) {
+        return {
+          replyText: tr(
+            `Elegí un número del *1 al 9* para tu grupo sanguíneo (9 = no lo sé).`,
+            `Eiporavo peteĩ papapy *1 guive 9 peve* (9 = ndaikuaái).`,
+            `Escolha um número de *1 a 9* para o tipo sanguíneo (9 = não sei).`,
+            `Pick a number from *1 to 9* for your blood type (9 = I don't know).`
+          ),
+        };
+      }
+
+      await updateState('STEP7_PIN', { bloodType }, { bloodType: bloodType || undefined });
+      return {
+        replyText: tr(
+          `✅ *Grupo sanguíneo:* ${bloodType || 'sin especificar'}\n\n` +
+            `🔐 *Paso 8/9 (PIN de Seguridad Zero-Knowledge):*\n` +
+            `Creá un *PIN secreto de 4 dígitos* (Ej: 8492).\n\n` +
+            `🛡️ *Importante:* este PIN es tu llave privada. Nadie —ni los administradores— puede ver tus estudios sin él.`,
+          `✅ *Nde ruguy grupo:* ${bloodType || "ndaikuaái"}\n\n` +
+            `🔐 *Paso 8/9 (PIN Seguridad Zero-Knowledge):*\n` +
             `Emoheñói peteĩ *PIN ñemi 4 papapýgui* (Techapyrã: 8492).\n\n` +
-            `🛡️ *Iñimportánteva:* ko PIN ha'e nde llave privada. Ni ore ni administrador ndaikatúi rohecha nde estudio ndaipóri ramo.`
+            `🛡️ *Iñimportánteva:* ko PIN ha'e nde llave privada.`,
+          `✅ *Tipo sanguíneo:* ${bloodType || 'não especificado'}\n\n` +
+            `🔐 *Passo 8/9 (PIN de Segurança Zero-Knowledge):*\n` +
+            `Crie um *PIN secreto de 4 dígitos* (Ex: 8492).\n\n` +
+            `🛡️ *Importante:* este PIN é sua chave privada. Ninguém — nem os administradores — vê seus exames sem ele.`,
+          `✅ *Blood type:* ${bloodType || 'not specified'}\n\n` +
+            `🔐 *Step 8/9 (Zero-Knowledge Security PIN):*\n` +
+            `Create a *secret 4-digit PIN* (e.g. 8492).\n\n` +
+            `🛡️ *Important:* this PIN is your private key. Nobody — not even admins — can see your studies without it.`
         ),
       };
     }
@@ -459,13 +1023,77 @@ export class BotStateMachine {
         salt
       );
 
-      await updateState('STEP8_PAYMENT', { pinSet: true }, {
+      // Recovery Key de 16 — se muestra UNA vez. Guardamos: hash (verificación) y el
+      // "envelope" del PIN cifrado con la clave, partido en 2 filas RecoveryShard.
+      const recoveryKey = ZeroKnowledgeSecurity.generateRecoveryKey();
+      const recoveryKeyHash = await ZeroKnowledgeSecurity.hashPin(
+        ZeroKnowledgeSecurity.normalizeRecoveryKey(recoveryKey)
+      );
+      const sealed = ZeroKnowledgeSecurity.sealWithRecoveryKey(pin, recoveryKey, salt);
+      const mid = Math.ceil(sealed.length / 2);
+
+      await updateState('STEP7B_RECOVERY', { pinSet: true }, {
         pinHash,
         encryptionSalt: salt,
         encryptedMedicalBlob: initialEncryptedBlob,
+        recoveryKeyHash,
+      });
+      await prisma.recoveryShard.deleteMany({ where: { userId: user.id } });
+      await prisma.recoveryShard.createMany({
+        data: [
+          { userId: user.id, shardIndex: 0, shardData: sealed.slice(0, mid) },
+          { userId: user.id, shardIndex: 1, shardData: sealed.slice(mid) },
+        ],
       });
 
-      // Precios en vivo (editables desde /admin → Contenido).
+      return {
+        replyText: tr(
+          `🔒 *¡PIN cifrado con éxito!*\n\n` +
+            `🗝️ *Paso 8B — Clave de Recuperación (MUY IMPORTANTE)*\n` +
+            `Si algún día olvidás tu PIN, esta es la ÚNICA forma de recuperarlo:\n\n` +
+            `\`${recoveryKey}\`\n\n` +
+            `Anotala en un lugar seguro (papel, gestor de contraseñas). *No la guardes solo en este chat.*\n` +
+            `Nadie de Bio-Pass puede verla ni regenerarla.\n\n` +
+            `Cuando la tengas guardada, respondé *YA GUARDÉ MI CLAVE*.`,
+          `🔒 *Nde PIN oñecifra porã!*\n\n` +
+            `🗝️ *Paso 8B — Clave de Recuperación (TUICHA IMPORTANTE)*\n` +
+            `Nde resaráiramo nde PIN, kóva ha'e pe único forma rerecupera hag̃ua:\n\n` +
+            `\`${recoveryKey}\`\n\n` +
+            `Ehai peteĩ hendápe segúrova. *Ani reñongatu ko chat-pe año.*\n\n` +
+            `Reñongatu rire, embohovái *YA GUARDÉ MI CLAVE*.`,
+          `🔒 *PIN criptografado com sucesso!*\n\n` +
+            `🗝️ *Passo 8B — Chave de Recuperação (MUITO IMPORTANTE)*\n` +
+            `Se um dia esquecer seu PIN, esta é a ÚNICA forma de recuperá-lo:\n\n` +
+            `\`${recoveryKey}\`\n\n` +
+            `Anote em local seguro (papel, gerenciador de senhas). *Não guarde só neste chat.*\n` +
+            `Ninguém do Bio-Pass pode vê-la ou gerá-la de novo.\n\n` +
+            `Quando tiver guardado, responda *JÁ GUARDEI MINHA CHAVE*.`,
+          `🔒 *PIN encrypted successfully!*\n\n` +
+            `🗝️ *Step 8B — Recovery Key (VERY IMPORTANT)*\n` +
+            `If you ever forget your PIN, this is the ONLY way to recover it:\n\n` +
+            `\`${recoveryKey}\`\n\n` +
+            `Write it somewhere safe (paper, password manager). *Don't keep it only in this chat.*\n` +
+            `Nobody at Bio-Pass can see it or regenerate it.\n\n` +
+            `Once saved, reply *I SAVED MY KEY*.`
+        ),
+      };
+    }
+
+    // STEP 7B: RECOVERY KEY CONFIRMATION
+    if (state === 'STEP7B_RECOVERY') {
+      const t = norm(cleanText);
+      const saved = /\b(ya guarde|guarde mi clave|guardada|listo|ok|hecho|ja guardei|guardei|i saved|saved|done)\b/.test(t);
+      if (!saved) {
+        return {
+          replyText: tr(
+            `Respondé *YA GUARDÉ MI CLAVE* cuando hayas anotado tu Clave de Recuperación en un lugar seguro.`,
+            `Embohovái *YA GUARDÉ MI CLAVE* rehai rire nde Clave de Recuperación peteĩ hendápe segúrova.`,
+            `Responda *JÁ GUARDEI MINHA CHAVE* quando tiver anotado sua Chave de Recuperação em local seguro.`,
+            `Reply *I SAVED MY KEY* once you've written your Recovery Key somewhere safe.`
+          ),
+        };
+      }
+
       const pr = await PaymentService.getPlanPrices();
       const gs = (n: number) => `Gs. ${n.toLocaleString('es-PY')}`;
       const rs = (n: number) => `R$ ${n.toLocaleString('pt-BR')}`;
@@ -473,18 +1101,29 @@ export class BotStateMachine {
         `🇵🇾 *Paraguay:*\n*[1]* Plan Mensual (${gs(pr.PY.MONTHLY)} / mes)\n*[2]* Plan Anual (${gs(pr.PY.ANNUAL)} / año)\n\n` +
         `🇧🇷 *Brasil:*\n*[3]* Plano Mensal (${rs(pr.BR.MONTHLY)} / mês)\n*[4]* Plano Anual (${rs(pr.BR.ANNUAL)} / ano)\n\n`;
 
+      await updateState('STEP8_PAYMENT', {});
       return {
         replyText: tr(
-          `🔒 *¡PIN de seguridad cifrado con éxito!*\n\n` +
-            `💳 *Paso 8/8 (Activación y Pago):*\n` +
+          `✅ *Clave de recuperación confirmada.*\n\n` +
+            `💳 *Paso 9/9 (Activación y Pago):*\n` +
             `Elegí tu país y plan para activar tu Bio-Pass y generar tu QR de rescate:\n\n` +
             menu +
             `_Respondé 1, 2, 3 o 4 para recibir el link de pago y el código PIX / Alias._`,
-          `🔒 *Nde PIN oñecifra porã!*\n\n` +
-            `💳 *Paso 8/8 (Activación ha Pago):*\n` +
-            `Eiporavo nde tetã ha plan remoañete hagua nde Bio-Pass ha emoheñói nde QR:\n\n` +
+          `✅ *Clave de recuperación oñeñemoneĩ.*\n\n` +
+            `💳 *Paso 9/9 (Activación ha Pago):*\n` +
+            `Eiporavo nde tetã ha plan:\n\n` +
             menu +
-            `_Embohovái 1, 2, 3 térã 4 rehupyty hagua link de pago ha código PIX / Alias._`
+            `_Embohovái 1, 2, 3 térã 4._`,
+          `✅ *Chave de recuperação confirmada.*\n\n` +
+            `💳 *Passo 9/9 (Ativação e Pagamento):*\n` +
+            `Escolha seu país e plano para ativar seu Bio-Pass e gerar seu QR:\n\n` +
+            menu +
+            `_Responda 1, 2, 3 ou 4 para receber o link de pagamento e o código PIX / Alias._`,
+          `✅ *Recovery key confirmed.*\n\n` +
+            `💳 *Step 9/9 (Activation & Payment):*\n` +
+            `Choose your country and plan to activate your Bio-Pass and generate your rescue QR:\n\n` +
+            menu +
+            `_Reply 1, 2, 3 or 4 to get the payment link and PIX / Alias code._`
         ),
       };
     }
@@ -553,10 +1192,35 @@ export class BotStateMachine {
         });
 
         if (lastOrder) {
-          // Bancard / PIX / transferencia manual: la confirmación autoritativa llega por webhook.
-          // Este "PAGAR" es el atajo manual del usuario.
-          await PaymentService.handlePaymentSuccess(lastOrder.referenceCode);
-          return { replyText: `✅ *Pago procesado con éxito.*` };
+          // "PAGAR" ya NO activa a ciegas. Se consulta el pago REAL:
+          //  - Bancard: get_confirmation sobre cada shop_process_id de la orden.
+          //  - PIX / transferencia / alias: no hay verificación automática → queda
+          //    pendiente hasta el webhook o la confirmación del admin.
+          let approved = false;
+          try {
+            const ids: string[] = lastOrder.bancardProcessIds
+              ? JSON.parse(lastOrder.bancardProcessIds)
+              : [];
+            for (const pid of ids) {
+              const r = await BancardService.confirm({ shopProcessId: String(pid) }).catch(() => null);
+              if (r?.approved) { approved = true; break; }
+            }
+          } catch {
+            /* sin process ids / error de red → approved queda false */
+          }
+
+          if (approved) {
+            await PaymentService.handlePaymentSuccess(lastOrder.referenceCode);
+            return { replyText: `✅ *¡Pago confirmado!* Tu Bio-Pass está activo. Te envío tu QR y el kit de stickers.` };
+          }
+
+          return {
+            replyText:
+              `⏳ *Todavía no veo tu pago acreditado.*\n\n` +
+              `Si pagaste con *tarjeta/Bancard*, puede tardar 1–2 minutos: se activa solo.\n` +
+              `Si pagaste por *transferencia / PIX / alias*, lo confirmamos manualmente apenas impacta.\n\n` +
+              `_Escribí *PAGAR* de nuevo en un rato para reintentar._`,
+          };
         }
       }
 
@@ -682,8 +1346,9 @@ export class BotStateMachine {
             studyType: 'PRESCRIPTION',
             studyDate: rx.studyDate || new Date(),
             fileUrl: saved.fileUrl,
-            ocrRawText: rx.rawText,
-            aiSummary: rx.aiSummary,
+            ocrRawText: ZeroKnowledgeSecurity.kmsEncrypt(rx.rawText),
+            aiSummary: ZeroKnowledgeSecurity.kmsEncrypt(rx.aiSummary),
+            contentEncrypted: !!process.env.KMS_KEY,
           },
         });
         return rx;
@@ -732,8 +1397,9 @@ export class BotStateMachine {
             studyType: st,
             studyDate: studyOcr.studyDate || new Date(),
             fileUrl: saved.fileUrl,
-            ocrRawText: studyOcr.rawText,
-            aiSummary: studyOcr.aiSummary,
+            ocrRawText: ZeroKnowledgeSecurity.kmsEncrypt(studyOcr.rawText),
+            aiSummary: ZeroKnowledgeSecurity.kmsEncrypt(studyOcr.aiSummary),
+            contentEncrypted: !!process.env.KMS_KEY,
           },
         });
         const findingsBlock = studyOcr.keyFindings.length
@@ -1102,10 +1768,15 @@ export class BotStateMachine {
         };
       }
       if (cleanText === '6' || lc.includes('descargar qr') || lc.includes('sticker') || lc.includes('kit')) {
+        const org = user.organizationId
+          ? await prisma.organization.findUnique({ where: { id: user.organizationId } })
+          : null;
         const sticker = await QrPdfService.generateStickerPdf({
           emergencyToken: user.emergencyToken,
           userName: user.fullName || 'Usuario Bio-Pass',
           bloodType: user.bloodType || 'O Positivo',
+          organizationName: org?.name,
+          organizationLogoUrl: org?.logoUrl || undefined,
         });
 
         return {
@@ -1150,18 +1821,27 @@ export class BotStateMachine {
 
         const where: any = { userId: user.id };
         if (wantsRx) where.studyType = 'PRESCRIPTION';
-        if (term) {
-          where.OR = [
-            { title: { contains: term, mode: 'insensitive' } },
-            { aiSummary: { contains: term, mode: 'insensitive' } },
-            { ocrRawText: { contains: term, mode: 'insensitive' } },
-          ];
-        }
-        const found = await prisma.medicalStudy.findMany({
+        // ocrRawText/aiSummary pueden estar cifrados at-rest → el filtro por texto
+        // se hace en memoria tras descifrar (no con `contains` de la DB).
+        const all = await prisma.medicalStudy.findMany({
           where,
           orderBy: [{ studyDate: 'desc' }, { createdAt: 'desc' }],
-          take: 5,
         });
+        const decrypted = all.map((s) => ({
+          ...s,
+          aiSummary: ZeroKnowledgeSecurity.kmsDecrypt(s.aiSummary),
+          ocrRawText: ZeroKnowledgeSecurity.kmsDecrypt(s.ocrRawText),
+        }));
+        const termLc = term.toLowerCase();
+        const found = (term
+          ? decrypted.filter(
+              (s) =>
+                s.title.toLowerCase().includes(termLc) ||
+                (s.aiSummary || '').toLowerCase().includes(termLc) ||
+                (s.ocrRawText || '').toLowerCase().includes(termLc)
+            )
+          : decrypted
+        ).slice(0, 5);
 
         if (!found.length) {
           return {

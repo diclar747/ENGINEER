@@ -13,8 +13,14 @@ import { PushController } from '../controllers/push.controller';
 import { VaultController } from '../controllers/vault.controller';
 import { authMiddleware, optionalAuthMiddleware } from '../security/jwt';
 import { authLimiter, otpRequestLimiter, emergencyLimiter, registerLimiter } from '../security/rate-limit';
+import { TERMS_HTML } from '../legal/terms';
 
 const router = Router();
+
+// Términos y Condiciones (enlazado por el bot en el registro y por la web).
+router.get('/legal/terminos', (_req, res) => {
+  res.type('html').send(TERMS_HTML);
+});
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 25 * 1024 * 1024 }, // 25MB max

@@ -13,6 +13,7 @@ export class StorageService {
       path.join(this.uploadDir, 'qr_stickers'),
       path.join(this.uploadDir, 'exports'),
       path.join(this.uploadDir, 'logos'),
+      path.join(this.uploadDir, 'recovery_selfies'),
     ];
 
     for (const dir of dirs) {
@@ -24,7 +25,7 @@ export class StorageService {
   }
 
   public static async saveFile(
-    folder: 'ci_documents' | 'medical_studies' | 'qr_stickers' | 'exports' | 'logos',
+    folder: 'ci_documents' | 'medical_studies' | 'qr_stickers' | 'exports' | 'logos' | 'recovery_selfies',
     filename: string,
     buffer: Buffer
   ): Promise<{ fileUrl: string; localPath: string }> {

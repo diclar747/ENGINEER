@@ -11,6 +11,21 @@ export interface StickerOptions {
   bloodType?: string;
   organizationName?: string;
   organizationLogoPath?: string;
+  /** URL guardada en Organization.logoUrl (…/uploads/logos/xxx.png). Se resuelve a un path local. */
+  organizationLogoUrl?: string;
+}
+
+/** Devuelve un path de archivo local legible para un logoUrl/path de co-branding, o null. */
+function resolveLogoPath(opts: StickerOptions): string | null {
+  const direct = opts.organizationLogoPath;
+  if (direct && fs.existsSync(direct)) return direct;
+  const url = opts.organizationLogoUrl || '';
+  const m = url.match(/\/uploads\/logos\/([^/?#]+)$/);
+  if (m) {
+    const p = path.join(config.storage.uploadDir, 'logos', m[1]);
+    if (fs.existsSync(p)) return p;
+  }
+  return null;
 }
 
 export class QrPdfService {
@@ -80,10 +95,18 @@ export class QrPdfService {
         doc.fontSize(10).font('Helvetica')
            .text(`Grupo Sanguíneo: ${options.bloodType || 'Registrado'}   |   Token: ${options.emergencyToken.slice(0, 8)}...`, 30, 105);
 
-        // Co-branding tag if present
+        // Co-branding: nombre + LOGO de la entidad (club/empresa) junto al encabezado.
         if (options.organizationName) {
           doc.fillColor('#e11d48').fontSize(9).font('Helvetica-Bold')
-             .text(`Entidad Asociada: ${options.organizationName.toUpperCase()}`, 380, 90, { align: 'right', width: 185 });
+             .text(`Entidad Asociada: ${options.organizationName.toUpperCase()}`, 360, 88, { align: 'right', width: 205 });
+        }
+        const logoPath = resolveLogoPath(options);
+        if (logoPath) {
+          try {
+            doc.image(logoPath, 470, 34, { fit: [90, 38], align: 'right', valign: 'center' });
+          } catch (e) {
+            console.warn('[sticker] no se pudo estampar el logo de co-branding:', (e as any)?.message);
+          }
         }
 
         // Divider
