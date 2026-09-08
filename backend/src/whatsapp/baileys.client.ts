@@ -17,6 +17,24 @@ import { BotStateMachine } from './bot-state-machine';
 import { NiroService } from '../services/niro.service';
 import { prisma } from '../database/prisma';
 
+/**
+ * Vacía la carpeta de sesión de Baileys SIN borrar la carpeta en sí — `authDir`
+ * suele ser un mount point de un volumen de Docker y `rmdir` sobre él tira EBUSY.
+ */
+function clearAuthDir(dir: string): void {
+  try {
+    if (!fs.existsSync(dir)) {
+      fs.mkdirSync(dir, { recursive: true });
+      return;
+    }
+    for (const entry of fs.readdirSync(dir)) {
+      fs.rmSync(path.join(dir, entry), { recursive: true, force: true });
+    }
+  } catch (e: any) {
+    console.warn('⚠️ [WHATSAPP BOT] No se pudo limpiar authDir:', e?.message);
+  }
+}
+
 export class BaileysClient {
   private sock: WASocket | null = null;
   private qrCodeDataUrl: string | null = null;
@@ -115,7 +133,7 @@ export class BaileysClient {
               return;
             }
             console.warn('⚠️ [WHATSAPP BOT] Logged out. Clearing session — re-pair from /bot-connect.');
-            try { fs.rmSync(authDir, { recursive: true, force: true }); } catch { /* noop */ }
+            clearAuthDir(authDir);
             this.qrRaw = null;
             this.reconnectAttempts = 0;
             setTimeout(() => this.start(), 3_000);
@@ -523,12 +541,8 @@ export class BaileysClient {
     // reintento manual, borramos la sesión para arrancar una vinculación limpia.
     const err = (this.lastError || '').toLowerCase();
     if (err.includes('401') || err.includes('logged out') || err.includes('logout')) {
-      try {
-        fs.rmSync(config.baileys.authDir, { recursive: true, force: true });
-        console.log('🧹 [WHATSAPP BOT] Sesión inválida (401) borrada — se generará un QR nuevo para vincular.');
-      } catch (e: any) {
-        console.warn('⚠️ [WHATSAPP BOT] No se pudo borrar authDir:', e?.message);
-      }
+      clearAuthDir(config.baileys.authDir);
+      console.log('🧹 [WHATSAPP BOT] Sesión inválida (401) borrada — se generará un QR nuevo para vincular.');
       this.qrRaw = null;
       this.qrCodeDataUrl = null;
       this.lastError = null;

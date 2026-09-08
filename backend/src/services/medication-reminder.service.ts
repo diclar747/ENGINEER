@@ -81,18 +81,109 @@ export class MedicationReminderService {
     return { medication: name, dose: dose || undefined, times };
   }
 
+  /**
+   * Parsea un turno/consulta médica: "turno con el cardiólogo el 15/10 a las 14:30",
+   * "cita mañana 9am", "consulta el lunes 10hs". Devuelve { note, whenAt } o null.
+   * Requiere una palabra tipo turno/cita/consulta + una fecha + una hora.
+   */
+  static parseAppointment(text: string): { note: string; whenAt: Date } | null {
+    if (!text) return null;
+    const t = text.toLowerCase();
+    if (!/\b(turno|cita|consulta|hora m[eé]dica|control m[eé]dico|cita m[eé]dica|appointment)\b/.test(t)) return null;
+
+    const times = extractTimes(text);
+    if (!times.length) return null;
+    const [hh, mm] = times[0].split(':').map(Number);
+
+    const tz = config.timezone || 'America/Asuncion';
+    const nowParts = new Date().toLocaleDateString('en-CA', { timeZone: tz }).split('-').map(Number);
+    let y = nowParts[0];
+    let mo = nowParts[1];
+    let d = nowParts[2];
+
+    const dm = t.match(/\b([0-3]?\d)[\/.\-]([01]?\d)(?:[\/.\-](\d{2,4}))?\b/);
+    const months = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto', 'septiembre', 'setiembre', 'octubre', 'noviembre', 'diciembre'];
+    const dName = t.match(/\b(\d{1,2})\s+de\s+([a-záéíóú]+)/);
+    const weekdays = ['domingo', 'lunes', 'martes', 'mi[eé]rcoles', 'jueves', 'viernes', 's[aá]bado'];
+
+    if (dm) {
+      d = parseInt(dm[1], 10);
+      mo = parseInt(dm[2], 10);
+      if (dm[3]) y = dm[3].length === 2 ? 2000 + parseInt(dm[3], 10) : parseInt(dm[3], 10);
+    } else if (dName) {
+      d = parseInt(dName[1], 10);
+      const mi = months.findIndex((m) => dName[2].startsWith(m.slice(0, 4)));
+      if (mi >= 0) mo = (mi === 10 ? 9 : mi > 10 ? mi - 1 : mi) + 1; // "setiembre" alias
+    } else if (/\bmañana\b/.test(t)) {
+      const dt = new Date();
+      dt.setDate(dt.getDate() + 1);
+      const p = dt.toLocaleDateString('en-CA', { timeZone: tz }).split('-').map(Number);
+      [y, mo, d] = p;
+    } else if (/\bpasado\s+mañana\b/.test(t)) {
+      const dt = new Date();
+      dt.setDate(dt.getDate() + 2);
+      const p = dt.toLocaleDateString('en-CA', { timeZone: tz }).split('-').map(Number);
+      [y, mo, d] = p;
+    } else if (!/\bhoy\b/.test(t)) {
+      const wi = weekdays.findIndex((w) => new RegExp(`\\b${w}\\b`).test(t));
+      if (wi >= 0) {
+        const today = new Date().toLocaleString('en-US', { timeZone: tz, weekday: 'long' });
+        const map: Record<string, number> = { Sunday: 0, Monday: 1, Tuesday: 2, Wednesday: 3, Thursday: 4, Friday: 5, Saturday: 6 };
+        const cur = map[today] ?? 0;
+        let add = (wi - cur + 7) % 7;
+        if (add === 0) add = 7;
+        const dt = new Date();
+        dt.setDate(dt.getDate() + add);
+        const p = dt.toLocaleDateString('en-CA', { timeZone: tz }).split('-').map(Number);
+        [y, mo, d] = p;
+      } else {
+        return null; // sin fecha reconocible
+      }
+    }
+
+    // Construye la fecha en hora local PY (-03:00 fijo; PY no usa DST desde 2024).
+    const iso = `${y}-${String(mo).padStart(2, '0')}-${String(d).padStart(2, '0')}T${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}:00-03:00`;
+    const whenAt = new Date(iso);
+    if (isNaN(whenAt.getTime()) || whenAt.getTime() < Date.now() - 3600_000) return null;
+
+    let note = text
+      .replace(/\b(recorda(?:r|torio|me)?|recu[eé]rdame|el|la|los|las|a\s+las?|de|para|mi|un[a]?)\b/gi, ' ')
+      .replace(/\b[0-3]?\d[\/.\-][01]?\d(?:[\/.\-]\d{2,4})?\b/g, ' ')
+      .replace(/\b\d{1,2}(?::[0-5]\d)?\s*(a\.?m\.?|p\.?m\.?|h|hs|hrs|horas)?\b/gi, ' ')
+      .replace(/\b(mañana|pasado|hoy|lunes|martes|mi[eé]rcoles|jueves|viernes|s[aá]bado|domingo)\b/gi, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+    if (note.length < 3) note = 'Consulta médica';
+
+    return { note: note.slice(0, 120), whenAt };
+  }
+
   /** Lista legible de recordatorios para WhatsApp. */
-  static format(rows: Array<{ medication: string; dose: string | null; times: string; active: boolean }>): string {
+  static format(
+    rows: Array<{ kind?: string; medication: string; dose: string | null; times: string; whenAt?: Date | null; active: boolean }>
+  ): string {
     if (!rows.length) return '';
     return rows
       .map((r, i) => {
+        const state = r.active ? '' : ' _(pausado)_';
+        if (r.kind === 'APPOINTMENT') {
+          const w = r.whenAt
+            ? new Date(r.whenAt).toLocaleString('es-PY', {
+                timeZone: config.timezone || 'America/Asuncion',
+                day: '2-digit',
+                month: '2-digit',
+                hour: '2-digit',
+                minute: '2-digit',
+              })
+            : '';
+          return `*${i + 1}.* 🩺 *${r.medication}* — 📅 ${w}${state}`;
+        }
         let hs: string[] = [];
         try {
           hs = JSON.parse(r.times);
         } catch {
           /* noop */
         }
-        const state = r.active ? '' : ' _(pausado)_';
         return `*${i + 1}.* 💊 *${r.medication}*${r.dose ? ` (${r.dose})` : ''} — ⏰ ${hs.join(', ')}${state}`;
       })
       .join('\n');
@@ -121,8 +212,50 @@ export class MedicationReminderService {
       include: { user: { select: { phoneNumber: true, whatsappJid: true, status: true, language: true } } },
     });
 
+    const nowMs = Date.now();
+
     for (const r of reminders) {
       if (!r.user || (r.user.status !== 'ACTIVE' && r.user.status !== 'EXPIRED')) continue;
+      const gnU = r.user.language === 'GN';
+      const target = r.user.whatsappJid || r.user.phoneNumber;
+
+      // --- Turno / consulta médica (una sola vez) ---
+      if (r.kind === 'APPOINTMENT') {
+        if (!r.whenAt) continue;
+        const whenMs = new Date(r.whenAt).getTime();
+        const dtLocal = new Date(r.whenAt).toLocaleString('es-PY', {
+          timeZone: config.timezone || 'America/Asuncion',
+          weekday: 'long', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit',
+        });
+        // Aviso 24 h antes
+        if (r.lastSentSlot !== 'D-1' && whenMs - nowMs <= 24 * 3600_000 && whenMs - nowMs > 22 * 3600_000) {
+          const msg = gnU
+            ? `📅 *Momandu'a: turno* ko'ẽrõ\n\n*${r.medication}*\n🕒 ${dtLocal}`
+            : `📅 *Recordatorio: turno mañana*\n\n*${r.medication}*\n🕒 ${dtLocal}`;
+          await whatsappBot.sendMessage(target, msg).catch(() => {});
+          await prisma.medicationReminder.update({ where: { id: r.id }, data: { lastSentAt: new Date(), lastSentSlot: 'D-1' } });
+          sent++;
+          continue;
+        }
+        // Aviso el día del turno (2 h antes hasta la hora)
+        if (r.lastSentSlot !== 'DAY' && whenMs - nowMs <= 2 * 3600_000 && whenMs - nowMs > -15 * 60_000) {
+          const msg = gnU
+            ? `📅 *Turno ko'ág̃a*\n\n*${r.medication}*\n🕒 ${dtLocal}`
+            : `📅 *Tu turno médico es hoy*\n\n*${r.medication}*\n🕒 ${dtLocal}\n\n_No faltes. Escribí *MENU* para tus opciones._`;
+          await whatsappBot.sendMessage(target, msg).catch(() => {});
+          await prisma.medicationReminder.update({
+            where: { id: r.id },
+            data: { lastSentAt: new Date(), lastSentSlot: 'DAY', active: whenMs > nowMs },
+          });
+          sent++;
+        }
+        // Desactivar turnos ya pasados
+        if (whenMs < nowMs - 3600_000) {
+          await prisma.medicationReminder.update({ where: { id: r.id }, data: { active: false } });
+        }
+        continue;
+      }
+
       let slots: string[] = [];
       try {
         slots = JSON.parse(r.times);

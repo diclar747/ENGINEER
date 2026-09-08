@@ -141,17 +141,20 @@ model AiPrompt {
   updatedAt DateTime @updatedAt
 }
 
-/// Recordatorio de toma de medicación. `times` = JSON array de "HH:MM" en hora local PY.
+/// Recordatorio. kind=MED: toma de medicación recurrente (`times` = JSON ["08:00","20:00"]
+/// en hora local PY). kind=APPOINTMENT: turno/consulta médica única en `whenAt`.
 model MedicationReminder {
   id           String    @id @default(uuid())
   userId       String
   user         User      @relation(fields: [userId], references: [id], onDelete: Cascade)
-  medication   String
+  kind         String    @default("MED")      // MED | APPOINTMENT
+  medication   String                          // med: nombre del fármaco · appointment: descripción del turno
   dose         String?
-  times        String                        // JSON: ["08:00","20:00"]
+  times        String    @default("[]")        // MED: JSON ["08:00","20:00"]
+  whenAt       DateTime?                        // APPOINTMENT: fecha y hora del turno
   active       Boolean   @default(true)
   lastSentAt   DateTime?
-  lastSentSlot String?                        // "HH:MM|YYYY-MM-DD" del último enviado (anti-repetición)
+  lastSentSlot String?                          // "HH:MM|YYYY-MM-DD" o "APPT" del último enviado
   createdAt    DateTime  @default(now())
   updatedAt    DateTime  @updatedAt
 

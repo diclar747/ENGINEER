@@ -607,7 +607,7 @@ export class BotStateMachine {
             `*[2]* 📄 Cargar *receta* médica\n` +
             `*[3]* 🧪 Cargar *estudio* / evaluación médica\n` +
             `*[4]* 📁 Ver mi *perfil médico*\n` +
-            `*[5]* ⏰ *Recordatorios* de medicación\n` +
+            `*[5]* ⏰ *Recordatorios* de medicación y *turnos*\n` +
             `*[6]* 🏷️ Descargar Kit de Stickers (3x3 cm) y QR\n` +
             `*[7]* ✏️ Modificar datos de emergencia / alergias\n` +
             `*[8]* 💬 Hablar con soporte\n\n` +
@@ -919,7 +919,7 @@ export class BotStateMachine {
           prisma.medicationReminder.findMany({
             where: { userId: user!.id },
             orderBy: { createdAt: 'asc' },
-            select: { id: true, medication: true, dose: true, times: true, active: true },
+            select: { id: true, kind: true, medication: true, dose: true, times: true, whenAt: true, active: true },
           });
 
         let rows = await list();
@@ -928,14 +928,13 @@ export class BotStateMachine {
             ? MedicationReminderService.format(current)
             : tr('_No tenés recordatorios configurados._', '_Ndaipóri momandu\'a._');
           return (
-            `⏰ *${tr('Recordatorios de medicación', "Momandu'a pohã")}*\n\n${body}\n\n` +
+            `⏰ *${tr('Recordatorios y turnos', "Momandu'a ha turno")}*\n\n${body}\n\n` +
             tr(
-              'Para *agregar*: escribí o mandá un audio con *medicamento + horarios*.\n' +
+              '💊 *Medicación* — escribí o mandá un audio: *nombre + horarios*\n' +
                 '_Ej: "Losartán 50 mg 08:00 y 20:00"_\n' +
-                'Para *borrar*: escribí *borrar 2*. Para *pausar/activar*: *pausar 1* / *activar 1*.\n' +
-                '_Escribí *LISTO* para volver._',
-              'Embojoapy hag̃ua: ehai *pohã + hora*.\n_Techapyrã: "Losartán 08:00 ha 20:00"_\n' +
-                'Embogue hag̃ua: *borrar 2*. _Ehai *LISTO* rehóvo._'
+                '🩺 *Turno médico* — *"turno con cardiólogo el 15/10 a las 14:30"*\n\n' +
+                '_Borrar: "borrar 2" · Pausar: "pausar 1" · Volver: *LISTO*_',
+              '💊 Pohã: *réra + hora*. 🩺 Turno: *"turno 15/10 14:30"*\n_Ehai *LISTO* rehóvo._'
             )
           );
         };
@@ -958,12 +957,35 @@ export class BotStateMachine {
 
         // agregar (texto tecleado o transcripto de audio)
         if (cleanText && !/^\d{1,2}$/.test(cleanText)) {
+          // ¿es un turno / consulta médica?
+          const appt = MedicationReminderService.parseAppointment(cleanText);
+          if (appt) {
+            await prisma.medicationReminder.create({
+              data: { userId: user.id, kind: 'APPOINTMENT', medication: appt.note, whenAt: appt.whenAt, times: '[]' },
+            });
+            rows = await list();
+            const w = appt.whenAt.toLocaleString('es-PY', {
+              timeZone: config.timezone,
+              weekday: 'long', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit',
+            });
+            return {
+              replyText:
+                tr(
+                  `✅ *Turno agendado:* 🩺 ${appt.note}\n📅 ${w}\nTe voy a recordar 24 h antes y el día del turno.`,
+                  `✅ *Turno oñeguarda:* 🩺 ${appt.note}\n📅 ${w}`
+                ) +
+                '\n\n' +
+                showList(rows),
+            };
+          }
+
           const parsed = MedicationReminderService.parse(cleanText);
           if (!parsed) {
             return {
               replyText: tr(
-                '😕 Necesito el *medicamento* y al menos un *horario*.\n_Ej: "Enalapril 10 mg 08:00 y 21:00"_',
-                '😕 Aikotevẽ *pohã* ha *hora*.\n_Techapyrã: "Enalapril 08:00 ha 21:00"_'
+                '😕 Para *medicación*: *nombre + horarios* — _"Enalapril 10 mg 08:00 y 21:00"_\n' +
+                  'Para un *turno*: *"turno con cardiólogo el 15/10 a las 14:30"_',
+                '😕 Pohã: *réra + hora*.\nTurno: *"turno cardiólogo 15/10 14:30"*'
               ),
             };
           }
@@ -1064,17 +1086,18 @@ export class BotStateMachine {
         const rms = await prisma.medicationReminder.findMany({
           where: { userId: user.id },
           orderBy: { createdAt: 'asc' },
-          select: { medication: true, dose: true, times: true, active: true },
+          select: { kind: true, medication: true, dose: true, times: true, whenAt: true, active: true },
         });
         return {
           replyText:
-            `⏰ *${tr('Recordatorios de medicación', "Momandu'a pohã")}*\n\n` +
+            `⏰ *${tr('Recordatorios y turnos', "Momandu'a ha turno")}*\n\n` +
             (rms.length ? MedicationReminderService.format(rms) + '\n\n' : '') +
             tr(
-              'Escribí o mandá un *audio* con *medicamento + horarios* para agregar uno.\n' +
-                '_Ej: "Metformina 850 mg 08:00 y 21:00"_\n' +
+              'Escribí o mandá un *audio*:\n' +
+                '💊 *Medicación:* "Metformina 850 mg 08:00 y 21:00"\n' +
+                '🩺 *Turno médico:* "turno con traumatólogo el 20/10 a las 10:00"\n\n' +
                 '_Borrar: "borrar 2" · Pausar: "pausar 1" · Volver: *LISTO*_',
-              'Ehai *pohã + hora* embojoapy hag̃ua.\n_Techapyrã: "Metformina 08:00 ha 21:00"_\n_Ehai *LISTO* rehóvo._'
+              '💊 "Metformina 08:00 ha 21:00" · 🩺 "turno 20/10 10:00"\n_Ehai *LISTO* rehóvo._'
             ),
         };
       }
@@ -1107,6 +1130,83 @@ export class BotStateMachine {
         return {
           replyText: `👨‍⚕️ *Soporte Técnico Doorway Cortex Bio-Pass:*\n\n` +
             `Para asistencia médica, corporativa o reclamos de facturación, escribí a soporte@bio-pass.com o llamá al +595 21 500 000.`,
+        };
+      }
+
+      // Consulta de estudios/recetas en lenguaje natural (también por audio):
+      // "pasame mi estudio de próstata", "mandame los análisis de sangre", "mostrame la receta del cardiólogo".
+      const askDoc = cleanText.match(
+        /\b(pasame|pas[aá]|mandame|mand[aá]|env[ií]ame|env[ií]a|mostrame|mostr[aá]|dame|quiero ver|necesito|busc[aá]r?|ver|descargar|tra[eé]me|buscame)\b[\s\S]*?\b(estudios?|an[aá]lisis|resultados?|informes?|recetas?|radiograf\w*|tomograf\w*|laboratorio|placas?|ecograf\w*|electro\w*|ex[aá]menes?)\b/i
+      );
+      if (askDoc) {
+        const wantsRx = /receta/i.test(askDoc[2]);
+        // término de búsqueda: lo que sigue a "de/sobre/del/de la/de mi"
+        const after = cleanText.slice((askDoc.index || 0) + askDoc[0].length);
+        const termMatch = after.match(/\b(?:de|sobre|del|de la|de mi|para)\s+(.{2,60})/i);
+        const term = (termMatch ? termMatch[1] : '')
+          .replace(/[?¿!¡.]+$/g, '')
+          .replace(/\b(por favor|porfa|gracias|mio|m[ií]a|mis|mi)\b/gi, '')
+          .trim();
+
+        const where: any = { userId: user.id };
+        if (wantsRx) where.studyType = 'PRESCRIPTION';
+        if (term) {
+          where.OR = [
+            { title: { contains: term, mode: 'insensitive' } },
+            { aiSummary: { contains: term, mode: 'insensitive' } },
+            { ocrRawText: { contains: term, mode: 'insensitive' } },
+          ];
+        }
+        const found = await prisma.medicalStudy.findMany({
+          where,
+          orderBy: [{ studyDate: 'desc' }, { createdAt: 'desc' }],
+          take: 5,
+        });
+
+        if (!found.length) {
+          return {
+            replyText: tr(
+              `🔍 No encontré ${wantsRx ? 'recetas' : 'estudios'}${term ? ` sobre *${term}*` : ''} en tu perfil.\n` +
+                `Podés cargarlos con la opción *[${wantsRx ? '2' : '3'}]* del menú.`,
+              `🔍 Ndajuhúi mba'eve${term ? ` "*${term}*"` : ''}. Emombe'u opción *[${wantsRx ? '2' : '3'}]* rupive.`
+            ),
+          };
+        }
+
+        const lines = found
+          .map(
+            (s) =>
+              `• *${s.title}* — ${(s.studyDate || s.createdAt).toLocaleDateString('es-PY', { timeZone: config.timezone })}\n  ${s.aiSummary ? `_${s.aiSummary.slice(0, 140)}_\n  ` : ''}${s.fileUrl}`
+          )
+          .join('\n\n');
+
+        // Adjuntar el archivo del más reciente (vive en /uploads/medical_studies/<name>).
+        const first = found[0];
+        let mediaAttachment: BotResponse['mediaAttachment'];
+        try {
+          const name = first.fileUrl.split('/').pop() || '';
+          const buf = name ? await StorageService.getFile('medical_studies', name) : null;
+          if (buf && buf.length) {
+            const isPdf = /\.pdf$/i.test(name);
+            mediaAttachment = {
+              buffer: buf,
+              filename: `${first.title}`.replace(/[^\p{L}\p{N}\s.-]/gu, '').slice(0, 60) + (isPdf ? '.pdf' : '.jpg'),
+              mimetype: isPdf ? 'application/pdf' : 'image/jpeg',
+              kind: isPdf ? 'document' : 'image',
+              caption: `${first.title} — ${(first.studyDate || first.createdAt).toLocaleDateString('es-PY', { timeZone: config.timezone })}`,
+            };
+          }
+        } catch {
+          /* si falla el adjunto, quedan los links */
+        }
+
+        return {
+          replyText:
+            tr(
+              `📂 Encontré ${found.length} ${wantsRx ? (found.length === 1 ? 'receta' : 'recetas') : found.length === 1 ? 'estudio' : 'estudios'}${term ? ` sobre *${term}*` : ''}:\n\n${lines}`,
+              `📂 Ajuhu ${found.length}${term ? ` "*${term}*"` : ''}:\n\n${lines}`
+            ) + tr('\n\n_Te adjunto el más reciente._', '\n\n_Amondo pe ipyahuvéva._'),
+          mediaAttachment,
         };
       }
 
