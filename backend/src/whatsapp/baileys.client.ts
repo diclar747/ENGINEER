@@ -6,6 +6,7 @@ import makeWASocket, {
   WASocket,
   proto,
   downloadMediaMessage,
+  normalizeMessageContent,
 } from '@whiskeysockets/baileys';
 import pino from 'pino';
 import fs from 'fs';
@@ -224,11 +225,26 @@ export class BaileysClient {
     // have unless they also register from the web with their actual number.
     const rawPhone = rawId;
 
+    // WhatsApp nests the real payload for several common cases the web simulator
+    // never hits: disappearing-messages chats (ephemeralMessage), "ver una vez"
+    // media (viewOnceMessage / viewOnceMessageV2), and — muy habitual con una
+    // cédula — la foto enviada como *archivo adjunto* con epígrafe
+    // (documentWithCaptionMessage). Sin desanidar, `msg.message.imageMessage` /
+    // `documentMessage` quedan undefined y el bot actúa como si no hubiera llegado
+    // nada. normalizeMessageContent los desenvuelve para que el manejo de
+    // imagen/documento/audio sea idéntico al del simulador.
+    const content = normalizeMessageContent(msg.message) || msg.message || undefined;
+    const normMsg = { ...msg, message: content } as proto.IWebMessageInfo;
+    const imageMessage = content?.imageMessage;
+    const documentMessage = content?.documentMessage;
+    const audioMessage = content?.audioMessage;
+
     // Extract text
     let body =
-      msg.message?.conversation ||
-      msg.message?.extendedTextMessage?.text ||
-      msg.message?.imageMessage?.caption ||
+      content?.conversation ||
+      content?.extendedTextMessage?.text ||
+      imageMessage?.caption ||
+      documentMessage?.caption ||
       '';
 
     let mediaBuffer: Buffer | undefined;
@@ -237,15 +253,10 @@ export class BaileysClient {
 
     // Nota de voz / audio → transcribir con Niro y tratarlo como si el usuario hubiera escrito.
     // Así el audio funciona en TODO el flujo (registro, menú, preguntas) sin tocar el motor.
-    if (msg.message?.audioMessage) {
+    if (audioMessage) {
       try {
-        const audioBuf = (await downloadMediaMessage(
-          msg,
-          'buffer',
-          {},
-          { logger: pino({ level: 'silent' }), reuploadRequest: this.sock!.updateMediaMessage }
-        )) as Buffer;
-        const mime = msg.message.audioMessage.mimetype || 'audio/ogg';
+        const audioBuf = await this.downloadWithRetry(normMsg);
+        const mime = audioMessage.mimetype || 'audio/ogg';
         const ext = mime.includes('mp4') || mime.includes('m4a')
           ? 'm4a'
           : mime.includes('mpeg') || mime.includes('mp3')
@@ -253,50 +264,57 @@ export class BaileysClient {
             : mime.includes('wav')
               ? 'wav'
               : 'ogg';
-        const transcript = await NiroService.transcribeAudio(audioBuf, `wa_audio_${Date.now()}.${ext}`);
+        const transcript = audioBuf
+          ? await NiroService.transcribeAudio(audioBuf, `wa_audio_${Date.now()}.${ext}`)
+          : null;
         if (transcript) {
           body = body ? `${body} ${transcript}` : transcript;
           console.log('[WHATSAPP BOT] audio transcrito:', transcript.slice(0, 140));
         } else {
-          console.warn('[WHATSAPP BOT] no se pudo transcribir el audio (Niro devolvió vacío)');
+          console.warn('[WHATSAPP BOT] no se pudo transcribir el audio (descarga vacía o Niro sin texto)');
         }
       } catch (e) {
         console.warn('Could not download/transcribe audio message:', e);
       }
     }
 
-    // Check for image or document media
-    if (msg.message?.imageMessage) {
+    // Imagen o documento (foto de cédula, PDF escaneado, estudio médico…).
+    if (imageMessage || documentMessage) {
+      const isDoc = !imageMessage;
+      const declaredMime =
+        (isDoc ? documentMessage?.mimetype : imageMessage?.mimetype) ||
+        (isDoc ? 'application/pdf' : 'image/jpeg');
       try {
-        mediaBuffer = (await downloadMediaMessage(
-          msg,
-          'buffer',
-          {},
-          {
-            logger: pino({ level: 'silent' }),
-            reuploadRequest: this.sock!.updateMediaMessage,
-          }
-        )) as Buffer;
-        mediaMimeType = msg.message.imageMessage.mimetype || 'image/jpeg';
-        mediaFilename = `wa_img_${Date.now()}.jpg`;
+        mediaBuffer = await this.downloadWithRetry(normMsg);
       } catch (e) {
-        console.warn('Could not download image media buffer from Baileys:', e);
+        console.warn('[WHATSAPP BOT] no se pudo descargar el adjunto:', (e as any)?.message || e);
       }
-    } else if (msg.message?.documentMessage) {
-      try {
-        mediaBuffer = (await downloadMediaMessage(
-          msg,
-          'buffer',
-          {},
-          {
-            logger: pino({ level: 'silent' }),
-            reuploadRequest: this.sock!.updateMediaMessage,
-          }
-        )) as Buffer;
-        mediaMimeType = msg.message.documentMessage.mimetype || 'application/pdf';
-        mediaFilename = msg.message.documentMessage.fileName || `doc_${Date.now()}.pdf`;
-      } catch (e) {
-        console.warn('Could not download document media buffer from Baileys:', e);
+
+      // Un buffer vacío / minúsculo = descarga fallida (media vencida en los
+      // servers de WhatsApp, error de descifrado, etc.). Antes esto se guardaba
+      // igual y el OCR devolvía texto vacío → "no transcribe nada". Ahora se
+      // descarta y, si no vino texto junto, se le pide al usuario que reenvíe.
+      if (mediaBuffer && mediaBuffer.length > 512) {
+        mediaMimeType = declaredMime;
+        const ext = extFromMime(declaredMime);
+        mediaFilename = isDoc
+          ? documentMessage?.fileName || `wa_doc_${Date.now()}.${ext}`
+          : `wa_img_${Date.now()}.${ext}`;
+      } else {
+        console.warn(
+          `[WHATSAPP BOT] adjunto ${isDoc ? 'documento' : 'imagen'} sin bytes utilizables ` +
+            `(len=${mediaBuffer?.length ?? 0}) — pido reenvío`
+        );
+        mediaBuffer = undefined;
+        if (!body.trim()) {
+          await this.sendMessage(
+            remoteJid,
+            '📷 Recibí tu archivo pero no pude abrirlo. Por favor reenviá la *foto de la cédula* ' +
+              '(mejor como foto, no como documento), o escribí tu *Nombre Completo y Número de Cédula*.'
+          );
+          this.sock?.sendPresenceUpdate('paused', remoteJid).catch(() => {});
+          return;
+        }
       }
     }
 
@@ -346,6 +364,31 @@ export class BaileysClient {
     } finally {
       this.sock?.sendPresenceUpdate('paused', remoteJid).catch(() => {});
     }
+  }
+
+  /**
+   * Descarga el adjunto de un mensaje a un Buffer, con UN reintento. La primera
+   * descarga después de recibir un mensaje falla de vez en cuando
+   * ("failed to decrypt" / media aún no replicada en el CDN de WhatsApp); un
+   * segundo intento con `reuploadRequest` la recupera. Devuelve undefined si
+   * ambos intentos fallan o el resultado viene vacío.
+   */
+  private async downloadWithRetry(msg: proto.IWebMessageInfo): Promise<Buffer | undefined> {
+    const opts = {
+      logger: pino({ level: 'silent' }),
+      reuploadRequest: this.sock!.updateMediaMessage,
+    };
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      try {
+        const buf = (await downloadMediaMessage(msg, 'buffer', {}, opts)) as Buffer;
+        if (buf && buf.length) return buf;
+        console.warn(`[WHATSAPP BOT] descarga de media vacía (intento ${attempt}/2)`);
+      } catch (e) {
+        console.warn(`[WHATSAPP BOT] descarga de media falló (intento ${attempt}/2):`, (e as any)?.message || e);
+      }
+      if (attempt === 1) await new Promise((r) => setTimeout(r, 800));
+    }
+    return undefined;
   }
 
   /**
@@ -471,8 +514,43 @@ export class BaileysClient {
     this.gaveUp = false;
     this.lastLogoutAt = 0; // re-vinculado manual: no lo cuentes como "loop"
     if (this.isConnected || this.isConnecting) return;
+
+    // Si la última caída fue un logout / 401, las credenciales en disco ya no
+    // sirven. El guard de "logout en loop" frena la reconexión pero NO limpia la
+    // carpeta, así que un `start()` posterior vuelve a cargar esas credenciales
+    // muertas → Baileys intenta *reanudar* la sesión (no emite QR) → 401 de nuevo.
+    // Resultado: el botón "Generar nuevo QR" nunca mostraba un QR. Acá, en el
+    // reintento manual, borramos la sesión para arrancar una vinculación limpia.
+    const err = (this.lastError || '').toLowerCase();
+    if (err.includes('401') || err.includes('logged out') || err.includes('logout')) {
+      try {
+        fs.rmSync(config.baileys.authDir, { recursive: true, force: true });
+        console.log('🧹 [WHATSAPP BOT] Sesión inválida (401) borrada — se generará un QR nuevo para vincular.');
+      } catch (e: any) {
+        console.warn('⚠️ [WHATSAPP BOT] No se pudo borrar authDir:', e?.message);
+      }
+      this.qrRaw = null;
+      this.qrCodeDataUrl = null;
+      this.lastError = null;
+    }
+
     await this.start();
   }
+}
+
+/**
+ * Extensión de archivo a partir del mimetype real que declara WhatsApp. Antes el
+ * nombre se fijaba siempre a `.jpg`, así que un PNG o un PDF de la cédula llegaban
+ * al OCR con la extensión equivocada y `OcrAiService.guessMime()` los mandaba como
+ * image/jpeg (o Tesseract intentaba rasterizar un PDF).
+ */
+function extFromMime(mime: string): string {
+  const m = (mime || '').toLowerCase();
+  if (m.includes('png')) return 'png';
+  if (m.includes('webp')) return 'webp';
+  if (m.includes('pdf')) return 'pdf';
+  if (m.includes('heic') || m.includes('heif')) return 'heic';
+  return 'jpg';
 }
 
 export const whatsappBot = new BaileysClient();
