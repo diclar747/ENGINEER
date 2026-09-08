@@ -93,6 +93,42 @@ function guessMime(filename: string): string {
   return ext === '.png' ? 'image/png' : ext === '.pdf' ? 'application/pdf' : 'image/jpeg';
 }
 
+const DOSE_RE = /\b\d+(?:[.,]\d+)?\s?(?:mg|mcg|µg|g|ml|ui|u|%|comp(?:rimidos?)?|caps?(?:ulas?)?|gotas?|puff)\b/i;
+const FREQ_RE =
+  /\b(?:cada\s+\d+\s?(?:h(?:oras?)?|d[ií]as?)|\d+\s?(?:x|veces?)\s?(?:\/|al|por)?\s?d[ií]a|(?:una|dos|tres|1|2|3)\s?(?:vez|veces)\s?(?:al|por)\s?d[ií]a|c\/\d+\s?h|q\.?d\.?|b\.?i\.?d\.?|t\.?i\.?d\.?|antes de dormir|en ayunas|por la (?:mañana|noche))\b/i;
+
+/**
+ * Parser de respaldo (sin IA) para la medicación tecleada por el usuario.
+ * Separa por renglones y por "," / ";" / " y ", y de cada fragmento saca
+ * nombre + dosis + frecuencia con heurísticas simples.
+ */
+function parseMedicationText(text: string): Array<{ name: string; dose?: string; frequency?: string }> {
+  const out: Array<{ name: string; dose?: string; frequency?: string }> = [];
+  const chunks = text
+    .split(/\r?\n|;|·|•|\s+-\s+|\s+y\s+|,(?!\s?\d)/i)
+    .map((c) => c.trim())
+    .filter((c) => c.length > 1);
+
+  for (const chunk of chunks) {
+    const dose = chunk.match(DOSE_RE)?.[0]?.replace(/\s+/g, ' ').trim();
+    const frequency = chunk.match(FREQ_RE)?.[0]?.replace(/\s+/g, ' ').trim();
+    let name = chunk;
+    if (dose) name = name.replace(dose, ' ');
+    if (frequency) name = name.replace(frequency, ' ');
+    name = name
+      .replace(/\b(tomo|tomar|uso|usar|tom[eé]|dosis|de|el|la|los|las|cada|por|al)\b/gi, ' ')
+      .replace(/[()[\]{}]/g, ' ')
+      .replace(/[^\p{L}\p{N}\s/+.-]/gu, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+    // El nombre suele ser la o las 1-3 primeras palabras "de verdad".
+    const words = name.split(' ').filter((w) => w.length > 1 && !/^\d+$/.test(w));
+    name = words.slice(0, 3).join(' ').trim();
+    if (name.length >= 3) out.push({ name, dose: dose || undefined, frequency: frequency || undefined });
+  }
+  return out;
+}
+
 export class OcrAiService {
   /**
    * OCR + optional AI interpretation of a Cédula de Identidad.
@@ -338,7 +374,11 @@ export class OcrAiService {
           : Array.isArray(ai)
             ? (ai as any)
             : [];
-      return normalize(arr);
+      const fromAi = normalize(arr);
+      if (fromAi.length) return fromAi;
+      // Fallback sin IA: si Niro no está disponible / sin crédito, parseamos el
+      // texto tecleado por renglones/comas. "Losartán 50 mg, 1 vez al día".
+      return parseMedicationText(input.text);
     }
 
     if (input.buffer && AiVisionService.available) {
