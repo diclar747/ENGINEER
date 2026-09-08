@@ -780,6 +780,11 @@ export class BotStateMachine {
         return { replyText: `✅ ${tr('Listo.', 'Oĩma.')}\n\n${activeMenu()}` };
       }
 
+      // "MENU" / "opciones" / "hola" en el menú → mostrar el menú real (no la IA)
+      if (subMode === 'ACTIVE_MEMBER' && /^(menu|men[uú]|opciones|inicio|hola|buenas|0)$/i.test(cleanText)) {
+        return { replyText: activeMenu() };
+      }
+
       // Sub-modo: cargar medicamento (foto de la caja/blíster o texto)
       if (subMode === 'ACTIVE_UPLOAD_MED') {
         if (msg.mediaBuffer) {
@@ -917,10 +922,10 @@ export class BotStateMachine {
             select: { id: true, medication: true, dose: true, times: true, active: true },
           });
 
-        const rows = await list();
-        const showList = () => {
-          const body = rows.length
-            ? MedicationReminderService.format(rows)
+        let rows = await list();
+        const showList = (current = rows) => {
+          const body = current.length
+            ? MedicationReminderService.format(current)
             : tr('_No tenés recordatorios configurados._', '_Ndaipóri momandu\'a._');
           return (
             `⏰ *${tr('Recordatorios de medicación', "Momandu'a pohã")}*\n\n${body}\n\n` +
@@ -975,6 +980,7 @@ export class BotStateMachine {
             user.severeAllergies,
             user.contraindicatedMeds
           );
+          rows = await list();
           return {
             replyText:
               tr(
@@ -984,7 +990,7 @@ export class BotStateMachine {
               ) +
               (conflicts.length ? `\n\n⚠️ ${conflicts.map((c) => `• ${c}`).join('\n')}` : '') +
               '\n\n' +
-              showList(),
+              showList(rows),
           };
         }
 

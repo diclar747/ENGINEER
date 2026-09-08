@@ -31,10 +31,22 @@ function extractTimes(text: string): string[] {
   // "8hs" / "20 h" / "a las 9" / "cada 8 horas" NO (esa es frecuencia, no hora puntual)
   for (const m of t.matchAll(/\b(?:a\s+las\s+)?(\d{1,2})\s*(?:h|hs|hrs|horas)\b/g)) {
     const h = parseInt(m[1], 10);
-    // "cada 8 horas" → lo ignoramos si viene precedido de "cada"
     const idx = m.index ?? 0;
     if (/cada\s*$/.test(t.slice(Math.max(0, idx - 6), idx))) continue;
     if (h >= 0 && h <= 23) out.add(`${String(h).padStart(2, '0')}:00`);
+  }
+
+  // Números sueltos 0-23 unidos por "y"/","/"a las" cuando YA hay al menos un
+  // horario claro ("9 y 21hs", "a las 8, 14 y 22"). Se ignoran los que van
+  // pegados a una unidad de dosis (mg, ml…).
+  if (out.size > 0) {
+    for (const m of t.matchAll(/(^|[\s,(]|(?:a\s+las\s+)|y\s+)(\d{1,2})(?=$|[\s,)]|y\b)/g)) {
+      const idx = (m.index ?? 0) + m[1].length;
+      const after = t.slice(idx + m[2].length, idx + m[2].length + 5);
+      if (/^\s*(mg|mcg|µg|g|ml|ui|u\b|%|comp|caps?|gota)/i.test(after)) continue;
+      const h = parseInt(m[2], 10);
+      if (h >= 0 && h <= 23) out.add(`${String(h).padStart(2, '0')}:00`);
+    }
   }
   return Array.from(out).sort();
 }

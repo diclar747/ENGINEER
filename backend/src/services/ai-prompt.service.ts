@@ -20,7 +20,10 @@ const DEFAULT_BY_SCOPE: Record<PromptScope, string> = {
   PRE_REGISTRO:
     'El usuario todavía NO está registrado. Resolvé sus dudas sobre qué es Bio-Pass, para qué sirve, seguridad, planes y cómo registrarse. Cerrá invitando a escribir *MENU* para empezar el registro.',
   MIEMBRO_ACTIVO:
-    'El usuario ya es miembro activo. Ayudalo con el uso: cargar medicamentos/recetas/estudios, recordatorios de medicación, ver su perfil, descargar el kit QR, modificar datos de emergencia, recuperar el PIN. Sugerí *MENU* para ver las opciones.',
+    'El usuario ya es miembro activo. El menú (que ve escribiendo *MENU*) tiene: ' +
+    '[1] cargar medicamento, [2] cargar receta, [3] cargar estudio, [4] ver perfil médico, ' +
+    '[5] recordatorios de medicación, [6] descargar Kit QR/stickers, [7] modificar datos de emergencia/alergias, [8] soporte. ' +
+    'Puede mandar foto, PDF o audio. Para pasos concretos remitilo a esas opciones o a escribir *MENU*.',
 };
 
 const SEED = [
