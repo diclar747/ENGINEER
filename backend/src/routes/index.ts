@@ -95,6 +95,11 @@ router.patch('/admin/conditions/:id', requireAdmin, AdminController.updateCondit
 router.delete('/admin/conditions/:id', requireAdmin, AdminController.deleteCondition);
 router.get('/admin/settings', requireAdmin, AdminController.getSettings);
 router.put('/admin/settings', requireAdmin, AdminController.putSettings);
+router.delete('/admin/users/:id/reminders/:rid', requireAdmin, AdminController.deleteReminder);
+router.get('/admin/ai-prompts', requireAdmin, AdminController.listAiPrompts);
+router.post('/admin/ai-prompts', requireAdmin, AdminController.createAiPrompt);
+router.patch('/admin/ai-prompts/:id', requireAdmin, AdminController.updateAiPrompt);
+router.delete('/admin/ai-prompts/:id', requireAdmin, AdminController.deleteAiPrompt);
 
 
 export default router;

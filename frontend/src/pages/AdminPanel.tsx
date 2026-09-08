@@ -8,6 +8,7 @@ import {
   ShieldCheck, LogOut, Users, CreditCard, ListChecks, LayoutDashboard, CalendarClock,
   Loader2, Search, Check, X, RefreshCw, Plus, Trash2, Save, Smartphone, Download, Printer,
   KeyRound, Unlock, CalendarPlus, Pencil, ExternalLink, TrendingUp, DollarSign, UserPlus, Activity,
+  Sparkles,
 } from 'lucide-react';
 
 const STATUS_COLOR: Record<string, string> = {
@@ -20,9 +21,14 @@ const rangePreset = (days: number) => {
   return { from: from.toISOString().slice(0, 10), to: to.toISOString().slice(0, 10) };
 };
 
-type Tab = 'resumen' | 'clientes' | 'suscripciones' | 'pagos' | 'contenido';
+type Tab = 'resumen' | 'clientes' | 'suscripciones' | 'pagos' | 'contenido' | 'ia';
 const money = (n: number) => new Intl.NumberFormat('es-PY').format(Number(n) || 0);
 const fdate = (s?: string) => (s ? new Date(s).toLocaleDateString('es-PY') : '—');
+const parseMedsSafe = (raw: any): any[] => {
+  if (Array.isArray(raw)) return raw;
+  if (typeof raw === 'string' && raw.trim()) { try { const a = JSON.parse(raw); return Array.isArray(a) ? a : []; } catch { return []; } }
+  return [];
+};
 const fdatetime = (s?: string) => (s ? new Date(s).toLocaleString('es-PY') : '—');
 const STATUS: Record<string, string> = {
   ACTIVE: 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-300', PENDING_PAYMENT: 'bg-amber-500/15 text-amber-600 dark:text-amber-300',
@@ -59,6 +65,7 @@ export const AdminPanel: React.FC = () => {
     { id: 'suscripciones', label: 'Suscripciones', icon: <CalendarClock className="w-4 h-4" /> },
     { id: 'pagos', label: 'Pagos', icon: <CreditCard className="w-4 h-4" /> },
     { id: 'contenido', label: 'Contenido', icon: <ListChecks className="w-4 h-4" /> },
+    { id: 'ia', label: 'IA', icon: <Sparkles className="w-4 h-4" /> },
   ];
   return (
     <div className="min-h-screen bg-app text-fg">
@@ -84,6 +91,7 @@ export const AdminPanel: React.FC = () => {
         {tab === 'suscripciones' && <Suscripciones />}
         {tab === 'pagos' && <Pagos />}
         {tab === 'contenido' && <Contenido />}
+        {tab === 'ia' && <IA />}
       </main>
     </div>
   );
@@ -389,6 +397,23 @@ const UserDrawer: React.FC<{ userId: string; onClose: () => void; onChanged: () 
                 {(data.medicalStudies || []).slice(0, 8).map((m: any) => (
                   <div key={m.id} className="flex items-center justify-between border-b border-line/50 py-1">
                     <span>{m.title || m.studyType}</span><span className="text-fg-muted">{fdate(m.createdAt)}</span>
+                  </div>
+                ))}
+              </div>
+              <div>
+                <p className="text-[11px] font-bold text-fg-muted uppercase mb-1">Medicación actual ({parseMedsSafe(data.currentMedications).length})</p>
+                {parseMedsSafe(data.currentMedications).slice(0, 12).map((m: any, i: number) => (
+                  <div key={i} className="flex items-center justify-between border-b border-line/50 py-1">
+                    <span>{m.name}</span><span className="text-fg-muted">{[m.dose, m.frequency].filter(Boolean).join(' · ')}</span>
+                  </div>
+                ))}
+              </div>
+              <div>
+                <p className="text-[11px] font-bold text-fg-muted uppercase mb-1">Recordatorios ({(data.medicationReminders || []).length})</p>
+                {(data.medicationReminders || []).map((r: any) => (
+                  <div key={r.id} className="flex items-center justify-between border-b border-line/50 py-1 gap-2">
+                    <span className="truncate">💊 {r.medication}{r.dose ? ` (${r.dose})` : ''} · ⏰ {(() => { try { return JSON.parse(r.times).join(', '); } catch { return r.times; } })()}{r.active ? '' : ' · pausado'}</span>
+                    <button onClick={() => act(() => adminApi.delete(`/admin/users/${userId}/reminders/${r.id}`), 'Recordatorio eliminado.')} className="p-1 rounded bg-rose-600/15 text-rose-500 shrink-0"><Trash2 className="w-3 h-3" /></button>
                   </div>
                 ))}
               </div>
@@ -742,6 +767,114 @@ const Contenido: React.FC = () => {
             <button onClick={addCond} className="px-3 py-1.5 rounded-lg bg-teal-500 text-slate-950 font-bold text-xs inline-flex items-center gap-1"><Plus className="w-3.5 h-3.5" />Agregar</button>
           </div>
         </div>
+      </section>
+    </div>
+  );
+};
+
+/* ─────────────────────────────────  IA  ──────────────────────────────── */
+
+const SCOPES: { id: string; label: string }[] = [
+  { id: 'GENERAL', label: 'General (base para todo)' },
+  { id: 'PRE_REGISTRO', label: 'Antes de registrarse' },
+  { id: 'MIEMBRO_ACTIVO', label: 'Miembro activo' },
+];
+
+const IA: React.FC = () => {
+  const confirm = useConfirm();
+  const toast = useToast();
+  const [rows, setRows] = useState<any[]>([]);
+  const [settings, setSettings] = useState<Record<string, string>>({});
+  const [loading, setLoading] = useState(true);
+  const [nw, setNw] = useState({ name: '', scope: 'GENERAL', content: '', sortOrder: 0 });
+  const [savingPrd, setSavingPrd] = useState(false);
+
+  const load = useCallback(() => {
+    setLoading(true);
+    Promise.all([adminApi.get('/admin/ai-prompts'), adminApi.get('/admin/settings')])
+      .then(([p, s]) => { setRows(p.data.rows || []); setSettings(s.data.settings || {}); })
+      .finally(() => setLoading(false));
+  }, []);
+  useEffect(() => { load(); }, [load]);
+
+  const patch = async (id: string, data: any) => { await adminApi.patch(`/admin/ai-prompts/${id}`, data); load(); };
+  const del = async (id: string) => {
+    if (await confirm({ title: 'Eliminar prompt', danger: true, confirmText: 'Eliminar', message: '¿Eliminar este prompt de IA? El bot dejará de usarlo.' })) {
+      await adminApi.delete(`/admin/ai-prompts/${id}`); toast.success('Prompt eliminado.'); load();
+    }
+  };
+  const add = async () => {
+    if (!nw.name.trim() || !nw.content.trim()) { toast.error('Nombre y contenido son obligatorios.'); return; }
+    await adminApi.post('/admin/ai-prompts', nw);
+    setNw({ name: '', scope: 'GENERAL', content: '', sortOrder: 0 });
+    toast.success('Prompt creado. El bot lo usa en ~1 min.');
+    load();
+  };
+  const savePrd = async () => {
+    setSavingPrd(true);
+    try { await adminApi.put('/admin/settings', { 'prd.pendientes': settings['prd.pendientes'] || '' }); toast.success('Guardado.'); }
+    catch { toast.error('No se pudo guardar.'); }
+    finally { setSavingPrd(false); }
+  };
+
+  if (loading) return <div className="py-16 flex justify-center"><Loader2 className="w-6 h-6 animate-spin text-fg-muted" /></div>;
+  const inp = 'w-full bg-panel border border-line rounded-lg px-3 py-2 text-sm text-fg outline-none focus:border-teal-500';
+
+  return (
+    <div className="space-y-8">
+      <section>
+        <h3 className="text-sm font-black text-fg mb-1">Prompts de IA del asistente</h3>
+        <p className="text-xs text-fg-muted mb-3">
+          El bot arma su instrucción concatenando los prompts <b>activos</b> de tipo <i>General</i> + los del momento del usuario
+          (<i>antes de registrarse</i> o <i>miembro activo</i>). Se aplican en ~1 minuto, sin reiniciar nada.
+        </p>
+        <div className="space-y-3">
+          {rows.map((p) => (
+            <div key={p.id} className="bg-card border border-line rounded-2xl p-4 space-y-2">
+              <div className="flex flex-wrap items-center gap-2">
+                <input defaultValue={p.name} onBlur={(e) => e.target.value !== p.name && patch(p.id, { name: e.target.value })}
+                  className="flex-1 min-w-[160px] bg-panel border border-line rounded-lg px-2.5 py-1.5 text-sm font-bold text-fg" />
+                <select defaultValue={p.scope} onChange={(e) => patch(p.id, { scope: e.target.value })}
+                  className="bg-panel border border-line rounded-lg px-2 py-1.5 text-xs text-fg">
+                  {SCOPES.map((s) => <option key={s.id} value={s.id}>{s.label}</option>)}
+                </select>
+                <input type="number" defaultValue={p.sortOrder} onBlur={(e) => Number(e.target.value) !== p.sortOrder && patch(p.id, { sortOrder: Number(e.target.value) })}
+                  className="w-14 bg-panel border border-line rounded-lg px-2 py-1.5 text-xs text-fg" title="Orden" />
+                <button onClick={() => patch(p.id, { active: !p.active })}
+                  className={`px-2.5 py-1 rounded-lg text-[11px] font-bold ${p.active ? 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-300' : 'bg-muted text-fg-muted'}`}>
+                  {p.active ? 'Activo' : 'Inactivo'}
+                </button>
+                <button onClick={() => del(p.id)} className="p-1.5 rounded-lg bg-rose-600/20 text-rose-600 dark:text-rose-400 hover:bg-rose-600/30"><Trash2 className="w-3.5 h-3.5" /></button>
+              </div>
+              <textarea defaultValue={p.content} rows={5}
+                onBlur={(e) => e.target.value !== p.content && patch(p.id, { content: e.target.value })}
+                className={`${inp} font-mono text-xs leading-relaxed`} />
+            </div>
+          ))}
+        </div>
+
+        <div className="bg-card border border-dashed border-line rounded-2xl p-4 mt-3 space-y-2">
+          <p className="text-xs font-black text-fg-soft uppercase">Nuevo prompt</p>
+          <div className="flex flex-wrap gap-2">
+            <input value={nw.name} onChange={(e) => setNw({ ...nw, name: e.target.value })} placeholder="Nombre (ej. Preguntas frecuentes)" className="flex-1 min-w-[160px] bg-panel border border-line rounded-lg px-2.5 py-1.5 text-sm text-fg" />
+            <select value={nw.scope} onChange={(e) => setNw({ ...nw, scope: e.target.value })} className="bg-panel border border-line rounded-lg px-2 py-1.5 text-xs text-fg">
+              {SCOPES.map((s) => <option key={s.id} value={s.id}>{s.label}</option>)}
+            </select>
+            <input type="number" value={nw.sortOrder} onChange={(e) => setNw({ ...nw, sortOrder: Number(e.target.value) })} className="w-14 bg-panel border border-line rounded-lg px-2 py-1.5 text-xs text-fg" title="Orden" />
+          </div>
+          <textarea value={nw.content} onChange={(e) => setNw({ ...nw, content: e.target.value })} rows={5} placeholder="Contenido / conocimiento que la IA debe usar para responder…" className={`${inp} font-mono text-xs`} />
+          <button onClick={add} className="px-3.5 py-2 rounded-xl bg-teal-500 text-slate-950 font-bold text-sm inline-flex items-center gap-2"><Plus className="w-4 h-4" />Agregar prompt</button>
+        </div>
+      </section>
+
+      <section>
+        <h3 className="text-sm font-black text-fg mb-1">Pendientes / lo que falta (PRD)</h3>
+        <p className="text-xs text-fg-muted mb-3">Bitácora editable de lo que todavía falta implementar del documento de producto. Solo referencia interna.</p>
+        <textarea value={settings['prd.pendientes'] ?? ''} onChange={(e) => setSettings({ ...settings, 'prd.pendientes': e.target.value })}
+          rows={16} className={`${inp} font-mono text-xs leading-relaxed`} placeholder="- [ ] …" />
+        <button onClick={savePrd} disabled={savingPrd} className="mt-3 px-4 py-2 rounded-xl bg-teal-500 text-slate-950 font-bold text-sm inline-flex items-center gap-2 disabled:opacity-50">
+          {savingPrd ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />} Guardar
+        </button>
       </section>
     </div>
   );

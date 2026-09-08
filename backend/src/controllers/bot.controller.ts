@@ -2,6 +2,7 @@ import { Request, Response } from 'express';
 import { whatsappBot } from '../whatsapp/baileys.client';
 import { BotStateMachine } from '../whatsapp/bot-state-machine';
 import { CronService } from '../services/cron.service';
+import { NiroService } from '../services/niro.service';
 import { config } from '../config';
 
 export class BotController {
@@ -35,13 +36,26 @@ export class BotController {
       return;
     }
 
+    // Nota de voz / audio en el simulador: se transcribe con Niro y se trata como texto,
+    // igual que en WhatsApp — así se puede probar el flujo por voz de punta a punta.
+    let effectiveBody = body || '';
+    const isAudio = !!file && /^audio\//i.test(file.mimetype || '');
+    if (isAudio && file) {
+      try {
+        const transcript = await NiroService.transcribeAudio(file.buffer, file.originalname || 'audio.ogg');
+        if (transcript) effectiveBody = effectiveBody ? `${effectiveBody} ${transcript}` : transcript;
+      } catch (e: any) {
+        console.warn('[BOT SIM] no se pudo transcribir el audio:', e?.message);
+      }
+    }
+
     try {
       const response = await BotStateMachine.handleMessage({
         from,
-        body: body || '',
-        mediaBuffer: file?.buffer,
-        mediaMimeType: file?.mimetype,
-        mediaFilename: file?.originalname,
+        body: effectiveBody,
+        mediaBuffer: isAudio ? undefined : file?.buffer,
+        mediaMimeType: isAudio ? undefined : file?.mimetype,
+        mediaFilename: isAudio ? undefined : file?.originalname,
       });
 
       res.json({

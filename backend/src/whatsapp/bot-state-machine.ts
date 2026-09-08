@@ -13,6 +13,8 @@ import {
   formatMedications,
   medicationConflicts,
 } from '../services/medication.util';
+import { AiPromptService, PromptScope } from '../services/ai-prompt.service';
+import { MedicationReminderService } from '../services/medication-reminder.service';
 import { NlpHandler } from './nlp-handler';
 import { config } from '../config';
 
@@ -37,13 +39,6 @@ export interface BotResponse {
 }
 
 
-const NIRO_SYSTEM_PROMPT =
-  'Sos el asistente virtual de Bio-Pass, un pasaporte medico digital de emergencia (Paraguay). ' +
-  'Responde en espanol, breve y claro (maximo 4 lineas), tono cordial. Ayuda con dudas sobre: que es Bio-Pass, ' +
-  'como funciona la ficha de emergencia y el QR, planes y pagos, como subir estudios, seguridad de los datos. ' +
-  'No inventes precios exactos ni datos medicos; para pasos concretos sugerir escribir MENU. ' +
-  'Si preguntan algo fuera de tema, redirigir amablemente.';
-
 /** Decodes a `data:<mime>;base64,<...>` string (as produced by QRCode.toDataURL)
  *  into a BotResponse mediaAttachment ready to send as an inline image. */
 function qrAttachment(dataUrl: string | undefined | null, caption: string): BotResponse['mediaAttachment'] | undefined {
@@ -53,10 +48,18 @@ function qrAttachment(dataUrl: string | undefined | null, caption: string): BotR
   return { buffer: Buffer.from(m[2], 'base64'), mimetype: m[1], filename: 'pago-qr.png', caption, kind: 'image' };
 }
 
-async function askNiro(userText: string, name?: string): Promise<string | null> {
+/**
+ * Consulta libre a la IA. El system prompt sale de /admin → IA (AiPromptService),
+ * según el momento del usuario: PRE_REGISTRO (aún no registrado) o MIEMBRO_ACTIVO.
+ */
+async function askNiro(
+  userText: string,
+  opts: { name?: string; scope?: PromptScope } = {}
+): Promise<string | null> {
   if (!NiroService.enabled || !userText || userText.trim().length < 4) return null;
+  const system = await AiPromptService.getSystemPrompt(opts.scope || 'GENERAL');
   return NiroService.chat([
-    { role: 'system', content: NIRO_SYSTEM_PROMPT + (name ? ` El usuario se llama ${name}.` : '') },
+    { role: 'system', content: system + (opts.name ? ` El usuario se llama ${opts.name}.` : '') },
     { role: 'user', content: userText.trim() },
   ]);
 }
@@ -577,7 +580,8 @@ export class BotStateMachine {
         state === 'ACTIVE_UPLOAD_RX' ||
         state === 'ACTIVE_UPLOAD_STUDY' ||
         state === 'ACTIVE_RX_CONFIRM' ||
-        state === 'ACTIVE_ASK_CATEGORY'
+        state === 'ACTIVE_ASK_CATEGORY' ||
+        state === 'ACTIVE_REMINDER'
           ? state
           : 'ACTIVE_MEMBER';
 
@@ -603,20 +607,22 @@ export class BotStateMachine {
             `*[2]* 📄 Cargar *receta* médica\n` +
             `*[3]* 🧪 Cargar *estudio* / evaluación médica\n` +
             `*[4]* 📁 Ver mi *perfil médico*\n` +
-            `*[5]* 🏷️ Descargar Kit de Stickers (3x3 cm) y QR\n` +
-            `*[6]* ✏️ Modificar datos de emergencia / alergias\n` +
-            `*[7]* 💬 Hablar con soporte\n\n` +
-            `_Respondé con el número, o mandá directo una foto/PDF._`,
+            `*[5]* ⏰ *Recordatorios* de medicación\n` +
+            `*[6]* 🏷️ Descargar Kit de Stickers (3x3 cm) y QR\n` +
+            `*[7]* ✏️ Modificar datos de emergencia / alergias\n` +
+            `*[8]* 💬 Hablar con soporte\n\n` +
+            `_Respondé con el número, mandá una foto/PDF, o un audio._`,
           `👋 *Mba'éichapa, ${user!.fullName || 'Titular Bio-Pass'}*\n\n` +
             `Mba'épa rejaposéta ko'ág̃a?\n\n` +
             `*[1]* 💊 Emombe'u *pohã* reiporúva\n` +
             `*[2]* 📄 Emombe'u *receta* médica\n` +
             `*[3]* 🧪 Emombe'u *estudio* médico\n` +
             `*[4]* 📁 Ahecha che *perfil médico*\n` +
-            `*[5]* 🏷️ Kit Stickers (3x3 cm) ha QR\n` +
-            `*[6]* ✏️ Emoambue datos de emergencia / alergia\n` +
-            `*[7]* 💬 Soporte ndive\n\n` +
-            `_Embohovái papapy reheve, térã emondo peteĩ ta'anga/PDF._`
+            `*[5]* ⏰ *Momandu'a* pohã reheve\n` +
+            `*[6]* 🏷️ Kit Stickers (3x3 cm) ha QR\n` +
+            `*[7]* ✏️ Emoambue datos de emergencia / alergia\n` +
+            `*[8]* 💬 Soporte ndive\n\n` +
+            `_Embohovái papapy reheve, emondo ta'anga/PDF, térã ñe'ẽ._`
         );
 
       const medUpdateMsg = (r: {
@@ -902,6 +908,89 @@ export class BotStateMachine {
         return saveEstudio(buf, pend.name);
       }
 
+      // Sub-modo: recordatorios de medicación
+      if (subMode === 'ACTIVE_REMINDER') {
+        const list = async () =>
+          prisma.medicationReminder.findMany({
+            where: { userId: user!.id },
+            orderBy: { createdAt: 'asc' },
+            select: { id: true, medication: true, dose: true, times: true, active: true },
+          });
+
+        const rows = await list();
+        const showList = () => {
+          const body = rows.length
+            ? MedicationReminderService.format(rows)
+            : tr('_No tenés recordatorios configurados._', '_Ndaipóri momandu\'a._');
+          return (
+            `⏰ *${tr('Recordatorios de medicación', "Momandu'a pohã")}*\n\n${body}\n\n` +
+            tr(
+              'Para *agregar*: escribí o mandá un audio con *medicamento + horarios*.\n' +
+                '_Ej: "Losartán 50 mg 08:00 y 20:00"_\n' +
+                'Para *borrar*: escribí *borrar 2*. Para *pausar/activar*: *pausar 1* / *activar 1*.\n' +
+                '_Escribí *LISTO* para volver._',
+              'Embojoapy hag̃ua: ehai *pohã + hora*.\n_Techapyrã: "Losartán 08:00 ha 20:00"_\n' +
+                'Embogue hag̃ua: *borrar 2*. _Ehai *LISTO* rehóvo._'
+            )
+          );
+        };
+
+        // borrar N / pausar N / activar N
+        const cmd = cleanText.match(/^(borrar|eliminar|quitar|sacar|pausar|desactivar|activar|reactivar)\s+(\d{1,2})/i);
+        if (cmd) {
+          const idx = parseInt(cmd[2], 10) - 1;
+          const target = rows[idx];
+          if (!target) return { replyText: tr(`No hay un recordatorio *${idx + 1}*.`, `Ndaipóri momandu'a *${idx + 1}*.`) + '\n\n' + showList() };
+          const verb = cmd[1].toLowerCase();
+          if (/^(borrar|eliminar|quitar|sacar)/.test(verb)) {
+            await prisma.medicationReminder.delete({ where: { id: target.id } });
+            return { replyText: tr(`🗑️ Borré el recordatorio de *${target.medication}*.`, `🗑️ Aipe'a *${target.medication}* momandu'a.`) + '\n\n' + MedicationReminderService.format(await list()) };
+          }
+          const activate = /^(activar|reactivar)/.test(verb);
+          await prisma.medicationReminder.update({ where: { id: target.id }, data: { active: activate } });
+          return { replyText: tr(`${activate ? '▶️ Activé' : '⏸️ Pausé'} el recordatorio de *${target.medication}*.`, `*${target.medication}* ${activate ? 'oñemyendy' : 'oñembopyta'}.`) + '\n\n' + MedicationReminderService.format(await list()) };
+        }
+
+        // agregar (texto tecleado o transcripto de audio)
+        if (cleanText && !/^\d{1,2}$/.test(cleanText)) {
+          const parsed = MedicationReminderService.parse(cleanText);
+          if (!parsed) {
+            return {
+              replyText: tr(
+                '😕 Necesito el *medicamento* y al menos un *horario*.\n_Ej: "Enalapril 10 mg 08:00 y 21:00"_',
+                '😕 Aikotevẽ *pohã* ha *hora*.\n_Techapyrã: "Enalapril 08:00 ha 21:00"_'
+              ),
+            };
+          }
+          const created = await prisma.medicationReminder.create({
+            data: {
+              userId: user.id,
+              medication: parsed.medication,
+              dose: parsed.dose || null,
+              times: JSON.stringify(parsed.times),
+            },
+          });
+          const conflicts = medicationConflicts(
+            [{ name: parsed.medication, source: 'manual', addedAt: '' }],
+            user.severeAllergies,
+            user.contraindicatedMeds
+          );
+          return {
+            replyText:
+              tr(
+                `✅ Recordatorio creado: 💊 *${created.medication}*${created.dose ? ` (${created.dose})` : ''} — ⏰ ${parsed.times.join(', ')}\n` +
+                  `Te voy a avisar por acá a esos horarios, todos los días.`,
+                `✅ Momandu'a: 💊 *${created.medication}* — ⏰ ${parsed.times.join(', ')}`
+              ) +
+              (conflicts.length ? `\n\n⚠️ ${conflicts.map((c) => `• ${c}`).join('\n')}` : '') +
+              '\n\n' +
+              showList(),
+          };
+        }
+
+        return { replyText: showList() };
+      }
+
       // ===== A partir de acá subMode === 'ACTIVE_MEMBER' (menú) =====
 
       // Archivo suelto sin haber elegido opción → preguntar categoría
@@ -964,7 +1053,26 @@ export class BotStateMachine {
       if (cleanText === '4' || lc.includes('perfil médico') || lc.includes('perfil medico') || lc.includes('ver lo que tengo')) {
         return { replyText: await profileSummary() };
       }
-      if (cleanText === '5' || lc.includes('descargar qr') || lc.includes('sticker')) {
+      if (cleanText === '5' || lc.includes('recordatorio') || lc.includes('recordar')) {
+        await updateState('ACTIVE_REMINDER', {});
+        const rms = await prisma.medicationReminder.findMany({
+          where: { userId: user.id },
+          orderBy: { createdAt: 'asc' },
+          select: { medication: true, dose: true, times: true, active: true },
+        });
+        return {
+          replyText:
+            `⏰ *${tr('Recordatorios de medicación', "Momandu'a pohã")}*\n\n` +
+            (rms.length ? MedicationReminderService.format(rms) + '\n\n' : '') +
+            tr(
+              'Escribí o mandá un *audio* con *medicamento + horarios* para agregar uno.\n' +
+                '_Ej: "Metformina 850 mg 08:00 y 21:00"_\n' +
+                '_Borrar: "borrar 2" · Pausar: "pausar 1" · Volver: *LISTO*_',
+              'Ehai *pohã + hora* embojoapy hag̃ua.\n_Techapyrã: "Metformina 08:00 ha 21:00"_\n_Ehai *LISTO* rehóvo._'
+            ),
+        };
+      }
+      if (cleanText === '6' || lc.includes('descargar qr') || lc.includes('sticker') || lc.includes('kit')) {
         const sticker = await QrPdfService.generateStickerPdf({
           emergencyToken: user.emergencyToken,
           userName: user.fullName || 'Usuario Bio-Pass',
@@ -978,7 +1086,7 @@ export class BotStateMachine {
             `💡 *Recomendación:* Imprime en papel Contact (vinilo adhesivo) resistente al agua y pégalo en tu celular, casco o billetera.`,
         };
       }
-      if (cleanText === '6' || lc.includes('modificar')) {
+      if (cleanText === '7' || lc.includes('modificar')) {
         return {
           replyText: `✏️ *Actualización Inteligente de Perfil:*\n\n` +
             `Escribí en lenguaje natural lo que querés actualizar. Ejemplos:\n` +
@@ -989,7 +1097,7 @@ export class BotStateMachine {
             `_Escribí tu mensaje a continuación:_`,
         };
       }
-      if (cleanText === '7' || lc.includes('soporte')) {
+      if (cleanText === '8' || lc.includes('soporte')) {
         return {
           replyText: `👨‍⚕️ *Soporte Técnico Doorway Cortex Bio-Pass:*\n\n` +
             `Para asistencia médica, corporativa o reclamos de facturación, escribí a soporte@bio-pass.com o llamá al +595 21 500 000.`,
@@ -1034,7 +1142,7 @@ export class BotStateMachine {
       }
 
       {
-        const ai = await askNiro(cleanText, user.fullName || undefined);
+        const ai = await askNiro(cleanText, { name: user.fullName || undefined, scope: 'MIEMBRO_ACTIVO' });
         if (ai) return { replyText: ai + '\n\n_Escribí *MENU* para ver las opciones._' };
       }
 
@@ -1062,7 +1170,7 @@ export class BotStateMachine {
     }
 
     {
-      const ai = await askNiro(cleanText);
+      const ai = await askNiro(cleanText, { scope: 'PRE_REGISTRO' });
       if (ai) return { replyText: `${ai}\n\n_Escribí *MENU* para comenzar tu registro._` };
     }
     return {

@@ -118,6 +118,7 @@ model User {
   
   emergencyContacts     EmergencyContact[]
   medicalStudies        MedicalStudy[]
+  medicationReminders   MedicationReminder[]
   subscriptions         Subscription[]
   paymentOrders         PaymentOrder[]
   auditLogs             ScanAuditLog[]
@@ -125,6 +126,36 @@ model User {
 
   createdAt             DateTime            @default(now())
   updatedAt             DateTime            @updatedAt
+}
+
+/// Prompt de IA editable desde /admin → IA. El bot arma el system prompt para
+/// responder consultas (pre-registro / miembro activo) concatenando los activos.
+model AiPrompt {
+  id        String   @id @default(uuid())
+  name      String                          // etiqueta legible ("Base / conocimiento", "Pre-registro"…)
+  scope     String   @default("GENERAL")    // GENERAL | PRE_REGISTRO | MIEMBRO_ACTIVO
+  content   String   @db.Text
+  active    Boolean  @default(true)
+  sortOrder Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+/// Recordatorio de toma de medicación. `times` = JSON array de "HH:MM" en hora local PY.
+model MedicationReminder {
+  id           String    @id @default(uuid())
+  userId       String
+  user         User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  medication   String
+  dose         String?
+  times        String                        // JSON: ["08:00","20:00"]
+  active       Boolean   @default(true)
+  lastSentAt   DateTime?
+  lastSentSlot String?                        // "HH:MM|YYYY-MM-DD" del último enviado (anti-repetición)
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  @@index([active])
 }
 
 model EmergencyContact {

@@ -1,6 +1,7 @@
 import { Request, Response } from 'express';
 import { prisma } from '../database/prisma';
 import { adminCredentialsOk, generateAdminToken, AdminRequest } from '../security/admin';
+import { AiPromptService } from '../services/ai-prompt.service';
 
 const PAGE = 20;
 const qs = (v: unknown) => String(v ?? '').trim();
@@ -263,10 +264,48 @@ export class AdminController {
           orderBy: { createdAt: 'desc' },
           select: { id: true, title: true, studyType: true, fileUrl: true, createdAt: true },
         },
+        medicationReminders: { orderBy: { createdAt: 'asc' } },
       },
     });
     if (!user) { res.status(404).json({ error: 'No encontrado' }); return; }
     res.json({ user });
+  }
+
+  static async deleteReminder(req: AdminRequest, res: Response): Promise<void> {
+    await prisma.medicationReminder.deleteMany({ where: { id: req.params.rid, userId: req.params.id } });
+    res.json({ ok: true });
+  }
+
+  // ---- Prompts de IA (editables, los usa el bot para responder consultas) ----
+  static async listAiPrompts(_req: AdminRequest, res: Response): Promise<void> {
+    res.json({ rows: await prisma.aiPrompt.findMany({ orderBy: { sortOrder: 'asc' } }) });
+  }
+  static async createAiPrompt(req: AdminRequest, res: Response): Promise<void> {
+    const { name, scope, content, sortOrder, active } = req.body || {};
+    if (!name || !content) { res.status(400).json({ error: 'name y content son obligatorios' }); return; }
+    const s = ['GENERAL', 'PRE_REGISTRO', 'MIEMBRO_ACTIVO'].includes(scope) ? scope : 'GENERAL';
+    const row = await prisma.aiPrompt.create({
+      data: { name: String(name), scope: s, content: String(content), sortOrder: Number(sortOrder) || 0, active: active !== false },
+    });
+    AiPromptService.bust();
+    res.json({ row });
+  }
+  static async updateAiPrompt(req: AdminRequest, res: Response): Promise<void> {
+    const { name, scope, content, sortOrder, active } = req.body || {};
+    const data: any = {};
+    if (name !== undefined) data.name = String(name);
+    if (scope !== undefined && ['GENERAL', 'PRE_REGISTRO', 'MIEMBRO_ACTIVO'].includes(scope)) data.scope = scope;
+    if (content !== undefined) data.content = String(content);
+    if (sortOrder !== undefined) data.sortOrder = Number(sortOrder) || 0;
+    if (active !== undefined) data.active = !!active;
+    const row = await prisma.aiPrompt.update({ where: { id: req.params.id }, data });
+    AiPromptService.bust();
+    res.json({ row });
+  }
+  static async deleteAiPrompt(req: AdminRequest, res: Response): Promise<void> {
+    await prisma.aiPrompt.delete({ where: { id: req.params.id } });
+    AiPromptService.bust();
+    res.json({ ok: true });
   }
 
   static async setUserStatus(req: AdminRequest, res: Response): Promise<void> {
