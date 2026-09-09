@@ -618,6 +618,21 @@ export class MedicationReminderService {
       return `✅ Anotado que tomaste ahora.\n${lines.join('\n')}`;
     }
 
+    // --- "¿tengo alguna cita/turno?" / "¿cuándo es mi próximo turno?" (va primero: es menos ambiguo) ---
+    // NO cuando el mensaje trae fecha+hora (eso es agendar, no preguntar).
+    const mentionsAppt = /\b(turno|cita|consulta|hora\s+medica)\b/.test(t);
+    const asksAppt =
+      /(cuando|proxim|que\s+dia)/.test(t) ||
+      /\b(tengo|tenes|hay|ten(e|é)s)\b.{0,25}\b(turno|cita|consulta)\b/.test(t) ||
+      /\b(turno|cita|consulta)\b.{0,25}\b(reservad|agendad|programad|guardad|anotad|pendiente|para\s+(hoy|mañana|el))/.test(t) ||
+      /\bmi(s)?\s+(proxim\w*\s+)?(turno|cita|consulta)/.test(t) ||
+      /\b(alguna|algun|una)\s+(cita|turno|consulta)/.test(t);
+    if (mentionsAppt && asksAppt && !this.parseAppointment(text)) {
+      const nextAppt = appts.find((r) => new Date(r.whenAt!).getTime() > now.getTime() - 3600_000);
+      if (!nextAppt) return '🩺 No tenés turnos agendados. Para agendar uno decime, por ejemplo: _"turno con cardiólogo el 20/10 a las 10:00"_.';
+      return `🩺 *Tu próximo turno:*\n*${nextAppt.medication}*\n📅 ${fmtDateTime(new Date(nextAppt.whenAt!))}\nTe voy a avisar ${leadLabel(nextAppt.leadMinutes || 120)} antes.`;
+    }
+
     // --- "¿qué estoy tomando?" / "¿cómo se llama lo que tomo?" / "¿qué remedios tengo?" ---
     if (
       /(que\s+(medicament|remedio|pastilla|medicaci)|como\s+se\s+llama|mi\s+medicaci|que\s+estoy\s+tomando|que\s+tomo\b(?!\s+hoy)|que\s+remedios?\s+(tengo|uso|hay)|remedios?\s+que\s+(tomo|uso)|mis?\s+(remedios?|medicament|pastillas?)|lista\s+de\s+(remedios?|medic))/.test(t) &&
@@ -641,21 +656,6 @@ export class MedicationReminderService {
       }
       if (!parts.length) return 'Todavía no tenés medicación cargada. Escribí *1* para cargar un medicamento o *5* para programar un horario.';
       return parts.join('\n\n');
-    }
-
-    // --- "¿tengo alguna cita/turno?" / "¿cuándo es mi próximo turno?" ---
-    // Consulta de turno — NO cuando el mensaje trae fecha+hora (eso es agendar, no preguntar).
-    const mentionsAppt = /\b(turno|cita|consulta|hora\s+medica)\b/.test(t);
-    const asksAppt =
-      /(cuando|proxim|que\s+dia|a\s+que\s+hora)/.test(t) ||
-      /\b(tengo|tenes|hay|ten(e|é)s)\b.{0,25}\b(turno|cita|consulta)\b/.test(t) ||
-      /\b(turno|cita|consulta)\b.{0,25}\b(reservad|agendad|programad|guardad|anotad|pendiente|para\s+(hoy|mañana|el))/.test(t) ||
-      /\bmi(s)?\s+(proxim\w*\s+)?(turno|cita|consulta)/.test(t) ||
-      /\b(alguna|algun|una)\s+(cita|turno|consulta)/.test(t);
-    if (mentionsAppt && asksAppt && !this.parseAppointment(text)) {
-      const nextAppt = appts.find((r) => new Date(r.whenAt!).getTime() > now.getTime() - 3600_000);
-      if (!nextAppt) return '🩺 No tenés turnos agendados. Para agendar uno decime, por ejemplo: _"turno con cardiólogo el 20/10 a las 10:00"_.';
-      return `🩺 *Tu próximo turno:*\n*${nextAppt.medication}*\n📅 ${fmtDateTime(new Date(nextAppt.whenAt!))}\nTe voy a avisar ${leadLabel(nextAppt.leadMinutes || 120)} antes.`;
     }
 
     // Próximas tomas (una función común para "a qué hora" y "próxima toma").
