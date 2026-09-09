@@ -168,13 +168,13 @@ export class MedicalController {
     if (req.body?.endsAt) {
       const e = new Date(req.body.endsAt);
       if (!isNaN(e.getTime())) endsAt = e;
-    } else if (req.body?.durationDays && Number(req.body.durationDays) >= 1 && Number(req.body.durationDays) <= 365) {
+    } else if (req.body?.durationDays && Number(req.body.durationDays) >= 1 && Number(req.body.durationDays) <= 1095) {
       endsAt = new Date(Date.now() + Number(req.body.durationDays) * 86400_000);
     }
 
     if (scheduleKind === 'INTERVAL') {
       const intervalHours = parseInt(String(req.body?.intervalHours), 10);
-      if (!(intervalHours >= 1 && intervalHours <= 24)) { res.status(400).json({ error: 'Intervalo inválido (1 a 24 horas).' }); return; }
+      if (!(intervalHours >= 1 && intervalHours <= 720)) { res.status(400).json({ error: 'Intervalo inválido (1 hora a 30 días).' }); return; }
       const anchorAt = req.body?.anchorAt ? new Date(req.body.anchorAt) : new Date();
       if (isNaN(anchorAt.getTime())) { res.status(400).json({ error: 'Fecha de última toma inválida.' }); return; }
       const nextDoseAt = MedicationReminderService.computeNextDose(anchorAt, intervalHours);
@@ -224,7 +224,7 @@ export class MedicalController {
     const nextInterval = req.body?.intervalHours !== undefined ? parseInt(String(req.body.intervalHours), 10) : current.intervalHours;
     const nextAnchor = req.body?.anchorAt !== undefined ? new Date(req.body.anchorAt) : current.anchorAt;
     if ((req.body?.intervalHours !== undefined || req.body?.anchorAt !== undefined) && current.scheduleKind === 'INTERVAL') {
-      if (!(Number(nextInterval) >= 1 && Number(nextInterval) <= 24)) { res.status(400).json({ error: 'Intervalo inválido (1 a 24 horas).' }); return; }
+      if (!(Number(nextInterval) >= 1 && Number(nextInterval) <= 720)) { res.status(400).json({ error: 'Intervalo inválido (1 hora a 30 días).' }); return; }
       if (!nextAnchor || isNaN(new Date(nextAnchor).getTime())) { res.status(400).json({ error: 'Fecha de última toma inválida.' }); return; }
       data.intervalHours = Number(nextInterval);
       data.anchorAt = new Date(nextAnchor);

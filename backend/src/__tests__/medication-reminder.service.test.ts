@@ -24,6 +24,49 @@ describe('parseTreatmentEnd', () => {
   it('sin duración → null', () => {
     expect(parseTreatmentEnd('losartán cada 8 horas', from)).toBeNull();
   });
+  it('"por 10 días" (dígitos, cualquier número)', () => {
+    expect(parseTreatmentEnd('amoxicilina por 10 días', from)!.getTime()).toBe(from.getTime() + 10 * 86400_000);
+  });
+  it('"por 6 meses" → +180 días', () => {
+    expect(parseTreatmentEnd('metformina por 6 meses', from)!.getTime()).toBe(from.getTime() + 180 * 86400_000);
+  });
+  it('"durante 2 años" → +730 días', () => {
+    expect(parseTreatmentEnd('tratamiento durante 2 años', from)!.getTime()).toBe(from.getTime() + 730 * 86400_000);
+  });
+  it('"por veinte días" (número escrito)', () => {
+    expect(parseTreatmentEnd('por veinte días', from)!.getTime()).toBe(from.getTime() + 20 * 86400_000);
+  });
+  it('tope a 3 años ("por 10 años" → 1095 días)', () => {
+    expect(parseTreatmentEnd('por 10 años', from)!.getTime()).toBe(from.getTime() + 1095 * 86400_000);
+  });
+});
+
+describe('parseInterval — cualquier número, horas o días', () => {
+  it('"cada 6 horas" → 6', () => expect(MedicationReminderService.parseInterval('cada 6 horas')).toBe(6));
+  it('"cada 12 hs" → 12', () => expect(MedicationReminderService.parseInterval('ibuprofeno cada 12 hs')).toBe(12));
+  it('"cada 36 horas" → 36', () => expect(MedicationReminderService.parseInterval('cada 36 horas')).toBe(36));
+  it('"cada doce horas" (escrito) → 12', () => expect(MedicationReminderService.parseInterval('cada doce horas')).toBe(12));
+  it('"cada 2 días" → 48', () => expect(MedicationReminderService.parseInterval('cada 2 días')).toBe(48));
+  it('"cada tres días" → 72', () => expect(MedicationReminderService.parseInterval('tomar cada tres días')).toBe(72));
+  it('"a las 8" NO es un intervalo → null', () => expect(MedicationReminderService.parseInterval('tomar a las 8')).toBeNull());
+  it('tope 30 días ("cada 60 días" → null)', () => expect(MedicationReminderService.parseInterval('cada 60 días')).toBeNull());
+});
+
+describe('parseReminderRequest — intervalo arbitrario (Niro OFF)', () => {
+  it('"paracetamol cada 6 horas, tomé hace 1 hora, por 5 días"', async () => {
+    const d = await MedicationReminderService.parseReminderRequest('paracetamol cada 6 horas, tomé hace 1 hora, por 5 días');
+    expect(d.scheduleKind).toBe('INTERVAL');
+    expect(d.intervalHours).toBe(6);
+    expect(d.medication?.toLowerCase()).toContain('paracetamol');
+    expect(d.anchorAt).toBeTruthy();
+    expect(d.endsAt).toBeTruthy();
+  });
+  it('"vitamina D cada 3 días por 2 meses" → INTERVAL 72 h, fin +60 días', async () => {
+    const d = await MedicationReminderService.parseReminderRequest('tomar vitamina D cada 3 días por 2 meses');
+    expect(d.scheduleKind).toBe('INTERVAL');
+    expect(d.intervalHours).toBe(72);
+    expect(d.endsAt).toBeTruthy();
+  });
 });
 
 describe('answerQuery — "ya tomé" NO se dispara si además pide crear un recordatorio', () => {

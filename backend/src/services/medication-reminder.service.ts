@@ -27,27 +27,38 @@ export interface ReminderDraft {
   endsAt?: string; // ISO — fin del tratamiento ("por 3 días")
 }
 
-/** Número escrito o en dígitos → entero ("tres" → 3, "10" → 10). */
+/** Número escrito o en dígitos → entero ("tres" → 3, "10" → 10, "veintiuno" → 21). */
 const WORD_NUM: Record<string, number> = {
   un: 1, uno: 1, una: 1, dos: 2, tres: 3, cuatro: 4, cinco: 5, seis: 6, siete: 7, ocho: 8,
-  nueve: 9, diez: 10, once: 11, doce: 12, trece: 13, catorce: 14, quince: 15, veinte: 20, veinticuatro: 24,
+  nueve: 9, diez: 10, once: 11, doce: 12, trece: 13, catorce: 14, quince: 15, dieciseis: 16,
+  diecisiete: 17, dieciocho: 18, diecinueve: 19, veinte: 20, veintiuno: 21, veintiuna: 21,
+  veintidos: 22, veintitres: 23, veinticuatro: 24, veinticinco: 25, veintiseis: 26,
+  veintisiete: 27, veintiocho: 28, veintinueve: 29, treinta: 30, cuarenta: 40, sesenta: 60, noventa: 90,
 };
 function toNum(s: string): number {
-  const w = (s || '').toLowerCase().trim();
+  const w = (s || '').toLowerCase().trim().normalize('NFD').replace(/[̀-ͯ]/g, '');
   if (/^\d+$/.test(w)) return parseInt(w, 10);
   return WORD_NUM[w] ?? NaN;
 }
 
-/** "por 3 días" / "durante una semana" / "por diez dias" → Date de fin, o null. */
+/** Tope de duración de un tratamiento con recordatorio: 3 años. */
+const MAX_TREATMENT_DAYS = 1095;
+
+/**
+ * "por 3 días" / "durante una semana" / "por diez dias" / "por 6 meses" / "por 2 años"
+ * → Date de fin del tratamiento, o null. Acepta cualquier número (dígitos o escrito).
+ */
 export function parseTreatmentEnd(text: string, from: Date = new Date()): Date | null {
-  const t = (text || '').toLowerCase();
-  const m = t.match(/\b(?:por|durante|during)\s+(un[ao]?|dos|tres|cuatro|cinco|seis|siete|ocho|nueve|diez|once|doce|trece|catorce|quince|veinte|\d{1,3})\s*(d[ií]as?|semanas?|mes(?:es)?)\b/);
+  const t = (text || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
+  const m = t.match(
+    /\b(?:por|durante|during|x)\s+(un[ao]?s?|dos|tres|cuatro|cinco|seis|siete|ocho|nueve|diez|once|doce|trece|catorce|quince|dieci\w+|veinte|veinti\w+|treinta|cuarenta|sesenta|noventa|\d{1,4})\s*(d[ií]as?|semanas?|mes(?:es)?|an[io]s?|años?)\b/
+  );
   if (!m) return null;
   const n = toNum(m[1]);
-  if (!(n >= 1 && n <= 365)) return null;
+  if (!(n >= 1 && n <= 999)) return null;
   const unit = m[2];
-  const days = /semana/.test(unit) ? n * 7 : /mes/.test(unit) ? n * 30 : n;
-  return new Date(from.getTime() + days * 86400_000);
+  const days = /semana/.test(unit) ? n * 7 : /a[nñ]/.test(unit) ? n * 365 : /mes/.test(unit) ? n * 30 : n;
+  return new Date(from.getTime() + Math.min(days, MAX_TREATMENT_DAYS) * 86400_000);
 }
 
 // Vocabulario de dosis: mg/ml/gotas… + formas caseras (cucharada, sobre, ampolla, parche…).
@@ -117,9 +128,27 @@ function extractTimes(text: string): string[] {
   return Array.from(out).sort();
 }
 
-/** "cada 8 horas" / "cada 6hs" → 8 / 6. No confunde con una hora puntual ("a las 8"). */
+/**
+ * "cada 8 horas" / "cada 6hs" / "cada doce horas" / "cada 2 días" → intervalo en HORAS.
+ * Grupo 1 = número (dígitos o escrito), grupo 2 = unidad (horas | días).
+ * No confunde con una hora puntual ("a las 8").
+ */
 const INTERVAL_RE =
-  /\bcada\s+(dos|tres|cuatro|cinco|seis|siete|ocho|nueve|diez|doce|veinticuatro|\d{1,2})\s*(?:h|hs|hrs|horas)\b/i;
+  /\bcada\s+(un[ao]?|dos|tres|cuatro|cinco|seis|siete|ocho|nueve|diez|once|doce|trece|catorce|quince|dieci\w+|veinte|veinti\w+|treinta|\d{1,3})\s*(h|hs|hrs|horas?|d[ií]as?)\b/i;
+
+/** Tope de intervalo entre tomas: 30 días. */
+const MAX_INTERVAL_HOURS = 30 * 24;
+
+/** Intervalo del texto en HORAS (soporta "cada N horas" y "cada N días"), o null. */
+function parseIntervalHours(text: string): number | null {
+  const m = (text || '').match(INTERVAL_RE);
+  if (!m) return null;
+  let n = toNum(m[1]);
+  if (!(n >= 1)) return null;
+  if (/d[ií]a/i.test(m[2])) n *= 24; // "cada 2 días" → 48 h
+  if (n < 1 || n > MAX_INTERVAL_HOURS) return null;
+  return n;
+}
 
 /** Hora local (config.timezone) desglosada — el contenedor corre en UTC. */
 function nowLocal(from: Date = new Date()): { hhmm: string; minutes: number; hour: number; date: string } {
@@ -164,6 +193,14 @@ const LEAD_LABEL: Record<number, string> = {
 function leadLabel(mins: number): string {
   return LEAD_LABEL[mins] || (mins % 60 === 0 ? `${mins / 60} h` : `${mins} min`);
 }
+/** "cada 8 h" · "cada 2 días" (cuando el intervalo es múltiplo de 24). */
+function intervalLabel(hours: number): string {
+  if (hours % 24 === 0) {
+    const d = hours / 24;
+    return d === 1 ? 'cada 24 h' : `cada ${d} días`;
+  }
+  return `cada ${hours} h`;
+}
 /** Anticipación efectiva para un TURNO: nunca menos de 30 min (el default 10 del
  *  schema es para el pre-aviso de medicación, no para una consulta médica). */
 function apptLead(mins?: number | null): number {
@@ -189,9 +226,20 @@ function fmtHHMM(d: Date): string {
 function humanIn(ms: number): string {
   if (ms <= 60_000) return 'menos de 1 min';
   const totalMin = Math.round(ms / 60_000);
-  const h = Math.floor(totalMin / 60);
+  const d = Math.floor(totalMin / 1440);
+  const h = Math.floor((totalMin % 1440) / 60);
   const m = totalMin % 60;
+  if (d) return `${d} día${d > 1 ? 's' : ''}${h ? ` ${h} h` : ''}`;
   return h ? `${h} h${m ? ` ${m} min` : ''}` : `${m} min`;
+}
+/** Hora de la próxima toma: "~22:39" si es hoy, "mañana ~08:00", si no "12/09 ~08:00". */
+function fmtNextDose(d: Date, from: Date = new Date()): string {
+  const dayOf = (x: Date) => x.toLocaleDateString('en-CA', { timeZone: TZ() });
+  const hh = fmtHHMM(d);
+  if (dayOf(d) === dayOf(from)) return `~${hh}`;
+  const tomorrow = new Date(from.getTime() + 86_400_000);
+  if (dayOf(d) === dayOf(tomorrow)) return `mañana ~${hh}`;
+  return `${d.toLocaleDateString('es-PY', { timeZone: TZ(), day: '2-digit', month: '2-digit' })} ~${hh}`;
 }
 
 export class MedicationReminderService {
@@ -205,13 +253,10 @@ export class MedicationReminderService {
     if (!text || !text.trim()) return null;
     const raw = text.trim();
     let times = extractTimes(raw);
-    const intervalMatch = raw.match(INTERVAL_RE);
-    if (!times.length && intervalMatch) {
-      const interval = toNum(intervalMatch[1]);
-      if (interval >= 1 && interval <= 23) {
-        const startMatch = raw.match(/\b(?:desde|a partir de|empezando)\s+las?\s+(\d{1,2})/i);
-        times = intervalToTimes(interval, startMatch ? parseInt(startMatch[1], 10) : undefined);
-      }
+    const interval = parseIntervalHours(raw);
+    if (!times.length && interval && interval >= 1 && interval <= 23) {
+      const startMatch = raw.match(/\b(?:desde|a partir de|empezando)\s+las?\s+(\d{1,2})/i);
+      times = intervalToTimes(interval, startMatch ? parseInt(startMatch[1], 10) : undefined);
     }
     if (!times.length) return null;
 
@@ -357,6 +402,16 @@ export class MedicationReminderService {
     return leadLabel(mins);
   }
 
+  /** Etiqueta legible de un intervalo en horas ("cada 8 h", "cada 2 días"). */
+  static intervalLabel(hours: number): string {
+    return intervalLabel(hours);
+  }
+
+  /** "cada 8 horas" / "cada 2 días" → intervalo en HORAS (1 h a 30 días), o null. */
+  static parseInterval(text: string): number | null {
+    return parseIntervalHours(text);
+  }
+
   /** Próxima toma: menor `anchor + k·intervalHours` (k≥1) estrictamente futura respecto de `from`. */
   static computeNextDose(anchor: Date, intervalHours: number, from: Date = new Date()): Date {
     const stepMs = Math.max(1, intervalHours) * 3_600_000;
@@ -410,7 +465,7 @@ export class MedicationReminderService {
         const sk = String(ai.scheduleKind || '').toUpperCase();
         if (sk === 'INTERVAL' || sk === 'CLOCK') draft.scheduleKind = sk;
         const ih = parseInt(String(ai.intervalHours), 10);
-        if (ih >= 1 && ih <= 24) {
+        if (ih >= 1 && ih <= MAX_INTERVAL_HOURS) {
           draft.intervalHours = ih;
           draft.scheduleKind = draft.scheduleKind || 'INTERVAL';
         }
@@ -434,8 +489,8 @@ export class MedicationReminderService {
         }
         const lm = parseInt(String(ai.leadMinutes), 10);
         if (lm >= 5 && lm <= 10080) draft.leadMinutes = lm;
-        if (ai.durationDays && Number(ai.durationDays) >= 1 && Number(ai.durationDays) <= 365) {
-          draft.endsAt = new Date(Date.now() + Number(ai.durationDays) * 86400_000).toISOString();
+        if (ai.durationDays && Number(ai.durationDays) >= 1 && Number(ai.durationDays) <= 999) {
+          draft.endsAt = new Date(Date.now() + Math.min(Number(ai.durationDays), MAX_TREATMENT_DAYS) * 86400_000).toISOString();
         } else if (ai.endsAt && /^\d{4}-\d{2}-\d{2}/.test(String(ai.endsAt))) {
           const e = new Date(String(ai.endsAt));
           if (!isNaN(e.getTime()) && e.getTime() > Date.now()) draft.endsAt = e.toISOString();
@@ -462,6 +517,13 @@ export class MedicationReminderService {
       }
     }
     if ((!draft.medication || !draft.scheduleKind) && draft.kind !== 'APPOINTMENT') {
+      // "cada N horas" / "cada N días" tiene prioridad: es INTERVAL, no horarios fijos.
+      const ivh = parseIntervalHours(raw);
+      if (ivh && !draft.intervalHours) {
+        draft.intervalHours = ivh;
+        draft.scheduleKind = 'INTERVAL';
+        draft.kind = draft.kind || 'MED';
+      }
       const p = this.parse(raw);
       if (p) {
         draft.kind = draft.kind || 'MED';
@@ -470,14 +532,6 @@ export class MedicationReminderService {
         if (!draft.scheduleKind) {
           draft.scheduleKind = 'CLOCK';
           draft.times = draft.times && draft.times.length ? draft.times : p.times;
-        }
-      }
-      const im = raw.match(INTERVAL_RE);
-      if (im && !draft.intervalHours) {
-        const n = toNum(im[1]);
-        if (n >= 1 && n <= 24) {
-          draft.intervalHours = n;
-          draft.scheduleKind = 'INTERVAL';
         }
       }
     }
@@ -541,7 +595,7 @@ export class MedicationReminderService {
       const anchor = d.anchorAt ? new Date(d.anchorAt) : new Date();
       const next = this.computeNextDose(anchor, d.intervalHours || 8);
       const lead = d.leadMinutes && d.leadMinutes !== 10 ? ` · aviso ${leadLabel(d.leadMinutes)} antes` : '';
-      return `💊 *${this.cap(d.medication || '')}*${dose}\n🔁 cada ${d.intervalHours} h · próxima ~${fmtHHMM(next)}${lead}${until}`;
+      return `💊 *${this.cap(d.medication || '')}*${dose}\n🔁 ${intervalLabel(d.intervalHours || 8)} · próxima ${fmtNextDose(next)}${lead}${until}`;
     }
     return `💊 *${this.cap(d.medication || '')}*${dose}\n⏰ ${(d.times || []).join(', ')} todos los días${until}`;
   }
@@ -618,8 +672,8 @@ export class MedicationReminderService {
           return `*${i + 1}.* 🩺 *${r.medication}* — 📅 ${w}${state}`;
         }
         if (r.scheduleKind === 'INTERVAL') {
-          const nx = r.nextDoseAt ? ` · próxima ${fmtHHMM(new Date(r.nextDoseAt))}` : '';
-          return `*${i + 1}.* 💊 *${r.medication}*${r.dose ? ` (${r.dose})` : ''} — 🔁 cada ${r.intervalHours} h${nx}${until}${state}`;
+          const nx = r.nextDoseAt ? ` · próxima ${fmtNextDose(new Date(r.nextDoseAt))}` : '';
+          return `*${i + 1}.* 💊 *${r.medication}*${r.dose ? ` (${r.dose})` : ''} — 🔁 ${intervalLabel(r.intervalHours || 8)}${nx}${until}${state}`;
         }
         let hs: string[] = [];
         try {
@@ -745,7 +799,7 @@ export class MedicationReminderService {
             medReminders
               .map((r) =>
                 r.scheduleKind === 'INTERVAL'
-                  ? `• *${r.medication}*${r.dose ? ` (${r.dose})` : ''} — cada ${r.intervalHours} h`
+                  ? `• *${r.medication}*${r.dose ? ` (${r.dose})` : ''} — ${intervalLabel(r.intervalHours || 8)}`
                   : `• *${r.medication}*${r.dose ? ` (${r.dose})` : ''} — ${(JSON.parse(r.times || '[]') as string[]).join(', ')}`
               )
               .join('\n')
@@ -766,8 +820,8 @@ export class MedicationReminderService {
       const hit = medReminders.find((r) => q && (normName(r.medication).includes(q) || q.includes(normName(r.medication))));
       if (hit) {
         if (hit.scheduleKind === 'INTERVAL') {
-          const nx = hit.nextDoseAt ? fmtHHMM(new Date(hit.nextDoseAt)) : '—';
-          return `💊 *${hit.medication}*${hit.dose ? ` (${hit.dose})` : ''}: cada ${hit.intervalHours} h · próxima ~${nx}.`;
+          const nx = hit.nextDoseAt ? fmtNextDose(new Date(hit.nextDoseAt)) : '—';
+          return `💊 *${hit.medication}*${hit.dose ? ` (${hit.dose})` : ''}: ${intervalLabel(hit.intervalHours || 8)} · próxima ${nx}.`;
         }
         return `💊 *${hit.medication}*${hit.dose ? ` (${hit.dose})` : ''}: ${(JSON.parse(hit.times || '[]') as string[]).join(', ')} todos los días.`;
       }

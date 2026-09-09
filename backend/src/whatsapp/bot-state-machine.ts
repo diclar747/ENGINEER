@@ -1596,7 +1596,7 @@ export class BotStateMachine {
             return (
               '⏰ ¿Cada cuánto lo tomás?\n' +
               '*[1]* cada 2 h · *[2]* cada 4 h · *[3]* cada 6 h · *[4]* cada 8 h · *[5]* cada 12 h\n' +
-              '_O escribime los horarios fijos, ej: "08:00 y 20:00"._'
+              '_O escribime otro intervalo ("cada 10 horas", "cada 2 días") o los horarios fijos ("08:00 y 20:00")._'
             );
           case 'last':
             return '🕒 ¿Cuándo tomaste la última vez? (ej: _"hace 1 hora"_, _"recién"_, _"a las 14:00"_)';
@@ -1732,7 +1732,7 @@ export class BotStateMachine {
         for (const r of rms) {
           if (r.scheduleKind === 'INTERVAL' && r.nextDoseAt) {
             const nx = new Date(r.nextDoseAt).toLocaleTimeString('en-GB', { timeZone: tz, hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
-            pending.push(`💊 *${r.medication}*${r.dose ? ` (${r.dose})` : ''} — 🔁 cada ${r.intervalHours} h · próxima ${nx}`);
+            pending.push(`💊 *${r.medication}*${r.dose ? ` (${r.dose})` : ''} — 🔁 ${MedicationReminderService.intervalLabel(r.intervalHours || 8)} · próxima ${nx}`);
             continue;
           }
           let times: string[] = [];
@@ -2049,10 +2049,11 @@ export class BotStateMachine {
             draft.times = [];
             return advanceRemind(draft);
           }
-          const im = lc.match(/cada\s+(\d{1,2})/);
-          if (im && +im[1] >= 1 && +im[1] <= 24) {
+          // "cada 6 horas", "cada 12 hs", "cada 2 días", "cada tres horas", "36 horas"… cualquier número.
+          const ivh = MedicationReminderService.parseInterval(lc) ?? MedicationReminderService.parseInterval(`cada ${lc}`);
+          if (ivh) {
             draft.scheduleKind = 'INTERVAL';
-            draft.intervalHours = +im[1];
+            draft.intervalHours = ivh;
             draft.times = [];
             return advanceRemind(draft);
           }
@@ -2334,8 +2335,9 @@ export class BotStateMachine {
         /\b(necesito|quiero|voy\s+a|debo|tengo\s+que)\b.{0,45}\b(registrar|program\w*|configurar|anotar|poner|arm\w*|cargar\s+un\s+horario)\b.{0,30}\b(horario|recordatorio|toma\b|medic|remedio|pastilla)/.test(lc) ||
         /\bregistrar\s+(los\s+|el\s+|mi\s+|un\s+)?horario/.test(lc) ||
         (/\b(voy\s+a\s+tomar|tengo\s+que\s+tomar|debo\s+tomar|me\s+recetaron|me\s+indicaron)\b/.test(lc) &&
-          /\b(cada\s+\d{1,2}\s*(h|hora)|a\s+las?\s+\d|\d{1,2}:\d{2}|\d+\s*veces?\s+(al|por)\s+d[ií]a)\b/.test(lc)) ||
-        (/\b(a\s+las?\s+\d|cada\s+\d+\s*h|\d{1,2}:\d{2})\b/.test(lc) && !!MedicationReminderService.parse(cleanText)))
+          (/\bcada\s+(?:\d{1,3}|un[ao]?|dos|tres|cuatro|cinco|seis|siete|ocho|nueve|diez|once|doce|trece|catorce|quince|dieci\w+|veinte|veinti\w+|treinta)\s*(?:h|hs|hora|horas?|d[ií]as?)\b/.test(lc) ||
+            /\b(a\s+las?\s+\d|\d{1,2}:\d{2}|\d+\s*veces?\s+(al|por)\s+d[ií]a)\b/.test(lc))) ||
+        ((/\b(a\s+las?\s+\d|\d{1,2}:\d{2})\b/.test(lc) || !!MedicationReminderService.parseInterval(lc)) && !!MedicationReminderService.parse(cleanText)))
       ) {
         const parsedReq = await MedicationReminderService.parseReminderRequest(cleanText);
         return advanceRemind(parsedReq);
