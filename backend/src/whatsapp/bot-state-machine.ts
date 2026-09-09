@@ -217,9 +217,17 @@ export class BotStateMachine {
     const rawPhone = msg.from.replace(/[^0-9]/g, '');
     const cleanText = (msg.body || '').trim();
 
-    // 1. Fetch user or initialize placeholder
-    let user = await prisma.user.findUnique({
-      where: { phoneNumber: rawPhone },
+    // 1. Fetch user or initialize placeholder.
+    // Para contactos "@lid" (WhatsApp no expone el número real), `rawPhone`
+    // son los dígitos del lid, no un teléfono real. Si un admin corrigió
+    // después el `phoneNumber` a mano (para que el usuario pueda entrar a la
+    // web con su número real), el próximo mensaje de ese mismo lid ya no
+    // matchea por `phoneNumber` — pero SÍ matchea por `whatsappJid`, que
+    // guarda el jid completo ("<lid>@lid") que quedó grabado en un mensaje
+    // anterior. Sin este fallback, ese usuario quedaría "duplicado": el bot
+    // le crearía una cuenta nueva desde cero en su próximo mensaje.
+    let user = await prisma.user.findFirst({
+      where: { OR: [{ phoneNumber: rawPhone }, { whatsappJid: { startsWith: `${rawPhone}@` } }] },
       include: {
         emergencyContacts: true,
         subscriptions: { orderBy: { createdAt: 'desc' }, take: 1 },

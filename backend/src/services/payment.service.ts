@@ -348,7 +348,7 @@ export class PaymentService {
       `🌐 *Tu enlace público:* ${emergencyUrl}\n\n` +
       `📄 *Descarga tu Kit de Stickers (3x3 cm):*\n${sticker.fileUrl}\n\n` +
       (updatedUser.email ? `📧 Te enviamos el comprobante a ${updatedUser.email}.\n\n` : '') +
-      `⚙️ *Menú:* enviá *1* subir estudio · *2* editar perfil · *3* descargar QR · *4* soporte`;
+      `⚙️ Escribí *MENU* para ver todas tus opciones: cargar medicación, recetas y estudios (por separado), ver tu perfil médico, programar recordatorios de medicación y turnos, descargar tu Kit de Stickers/QR, modificar tus datos de emergencia, o hablar con soporte.`;
 
     await whatsappBot.sendMessage(updatedUser.whatsappJid || updatedUser.phoneNumber, welcomeMsg);
     return true;
