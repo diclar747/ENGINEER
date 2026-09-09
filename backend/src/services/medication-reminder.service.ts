@@ -27,12 +27,23 @@ export interface ReminderDraft {
   endsAt?: string; // ISO — fin del tratamiento ("por 3 días")
 }
 
-/** "por 3 días" / "durante una semana" / "por 10 dias" → Date de fin, o null. */
+/** Número escrito o en dígitos → entero ("tres" → 3, "10" → 10). */
+const WORD_NUM: Record<string, number> = {
+  un: 1, uno: 1, una: 1, dos: 2, tres: 3, cuatro: 4, cinco: 5, seis: 6, siete: 7, ocho: 8,
+  nueve: 9, diez: 10, once: 11, doce: 12, trece: 13, catorce: 14, quince: 15, veinte: 20, veinticuatro: 24,
+};
+function toNum(s: string): number {
+  const w = (s || '').toLowerCase().trim();
+  if (/^\d+$/.test(w)) return parseInt(w, 10);
+  return WORD_NUM[w] ?? NaN;
+}
+
+/** "por 3 días" / "durante una semana" / "por diez dias" → Date de fin, o null. */
 export function parseTreatmentEnd(text: string, from: Date = new Date()): Date | null {
   const t = (text || '').toLowerCase();
-  const m = t.match(/\b(?:por|durante|during)\s+(un[ao]?|\d{1,3})\s*(d[ií]as?|semanas?|mes(?:es)?)\b/);
+  const m = t.match(/\b(?:por|durante|during)\s+(un[ao]?|dos|tres|cuatro|cinco|seis|siete|ocho|nueve|diez|once|doce|trece|catorce|quince|veinte|\d{1,3})\s*(d[ií]as?|semanas?|mes(?:es)?)\b/);
   if (!m) return null;
-  const n = /^un/.test(m[1]) ? 1 : parseInt(m[1], 10);
+  const n = toNum(m[1]);
   if (!(n >= 1 && n <= 365)) return null;
   const unit = m[2];
   const days = /semana/.test(unit) ? n * 7 : /mes/.test(unit) ? n * 30 : n;
@@ -107,7 +118,8 @@ function extractTimes(text: string): string[] {
 }
 
 /** "cada 8 horas" / "cada 6hs" → 8 / 6. No confunde con una hora puntual ("a las 8"). */
-const INTERVAL_RE = /\bcada\s+(\d{1,2})\s*(?:h|hs|hrs|horas)\b/i;
+const INTERVAL_RE =
+  /\bcada\s+(dos|tres|cuatro|cinco|seis|siete|ocho|nueve|diez|doce|veinticuatro|\d{1,2})\s*(?:h|hs|hrs|horas)\b/i;
 
 /** Hora local (config.timezone) desglosada — el contenedor corre en UTC. */
 function nowLocal(from: Date = new Date()): { hhmm: string; minutes: number; hour: number; date: string } {
@@ -195,7 +207,7 @@ export class MedicationReminderService {
     let times = extractTimes(raw);
     const intervalMatch = raw.match(INTERVAL_RE);
     if (!times.length && intervalMatch) {
-      const interval = parseInt(intervalMatch[1], 10);
+      const interval = toNum(intervalMatch[1]);
       if (interval >= 1 && interval <= 23) {
         const startMatch = raw.match(/\b(?:desde|a partir de|empezando)\s+las?\s+(\d{1,2})/i);
         times = intervalToTimes(interval, startMatch ? parseInt(startMatch[1], 10) : undefined);
@@ -462,7 +474,7 @@ export class MedicationReminderService {
       }
       const im = raw.match(INTERVAL_RE);
       if (im && !draft.intervalHours) {
-        const n = parseInt(im[1], 10);
+        const n = toNum(im[1]);
         if (n >= 1 && n <= 24) {
           draft.intervalHours = n;
           draft.scheduleKind = 'INTERVAL';
@@ -472,10 +484,19 @@ export class MedicationReminderService {
     if (
       !draft.anchorAt &&
       draft.scheduleKind === 'INTERVAL' &&
-      /\b(reci[eé]n|hace\s+(un|media|\d)|a\s+las\s+\d|tom[eé]\s)/i.test(raw)
+      /\b(reci[eé]n|hace\s+(un|media|\d)|a\s+las\s+\d|tom[eé]\s|ya\s+tom)/i.test(raw)
     ) {
       draft.anchorAt = this.resolveLastTaken(raw).toISOString();
     }
+
+    // Si el pedido vino "completo" (nombre + esquema + ancla si aplica) pero sin dosis,
+    // NO trabar el flujo pidiéndola: se guarda sin dosis y el titular la agrega luego.
+    const richMed =
+      draft.kind === 'MED' &&
+      !!draft.medication &&
+      !!draft.scheduleKind &&
+      (draft.scheduleKind === 'CLOCK' ? !!(draft.times && draft.times.length) : !!(draft.intervalHours && draft.anchorAt));
+    if (richMed && draft.dose === undefined) draft.dose = null;
 
     // Nunca devuelve null: si no hay datos concretos, arranca un borrador vacío del
     // tipo detectado para que el diálogo guiado pregunte lo que falte.

@@ -2072,7 +2072,10 @@ export class BotStateMachine {
         }
 
         if (state === 'ACTIVE_REMIND_DOSE') {
-          draft.dose = /^(nada|no|no aplica|ningun[ao]?|omitir|skip|-)$/i.test(cleanText.trim()) ? null : cleanText.trim().slice(0, 60) || null;
+          // "nada" / "no" / "sí" / "ok" / "dale" → sin dosis (no lo tomamos literal).
+          draft.dose = /^(nada|no|no\s+aplica|ningun[ao]?|omitir|skip|-|s[ií]|ok+|dale|listo|sin\s+dosis)$/i.test(cleanText.trim())
+            ? null
+            : cleanText.trim().slice(0, 60) || null;
           return advanceRemind(draft);
         }
 
@@ -2108,6 +2111,14 @@ export class BotStateMachine {
             return { replyText: '👍 Descartado. Escribí de nuevo lo que querés programar, o *LISTO* para volver al menú.' };
           }
           if (!isAffirmative(cleanText)) {
+            // ¿Una consulta en medio de la confirmación? Respondela sin perder el borrador.
+            const q2 = await MedicationReminderService.answerQuery(user.id, cleanText, lang);
+            if (q2) {
+              return {
+                replyText:
+                  `${q2}\n\n———\n📋 *Y tu recordatorio pendiente de confirmar:*\n${MedicationReminderService.describeDraft(draft)}\n*[1]* Sí, guardar   *[2]* No`,
+              };
+            }
             return {
               replyText:
                 `📋 *Confirmá el recordatorio:*\n\n${MedicationReminderService.describeDraft(draft)}\n\n*[1]* Sí, guardar   *[2]* No`,
