@@ -348,6 +348,7 @@ export class PaymentService {
       `🌐 *Tu enlace público:* ${emergencyUrl}\n\n` +
       `📄 *Descarga tu Kit de Stickers (3x3 cm):*\n${sticker.fileUrl}\n\n` +
       (updatedUser.email ? `📧 Te enviamos el comprobante a ${updatedUser.email}.\n\n` : '') +
+      `🔔 *Activá notificaciones push en tu celular* (además del aviso acá por WhatsApp cada vez que alguien escanea tu QR):\n${config.frontendUrl}/push/${updatedUser.emergencyToken}\n\n` +
       `⚙️ Escribí *MENU* para ver todas tus opciones: cargar medicación, recetas y estudios (por separado), ver tu perfil médico, programar recordatorios de medicación y turnos, descargar tu Kit de Stickers/QR, modificar tus datos de emergencia, o hablar con soporte.`;
 
     await whatsappBot.sendMessage(updatedUser.whatsappJid || updatedUser.phoneNumber, welcomeMsg);

@@ -1284,6 +1284,7 @@ export class BotStateMachine {
             `*[6]* 🏷️ Descargar Kit de Stickers (3x3 cm) y QR\n` +
             `*[7]* ✏️ Modificar datos de emergencia / alergias\n` +
             `*[8]* 💬 Hablar con soporte\n\n` +
+            `🔔 _Escribí *NOTIFICACIONES* para activar alertas push en tu celular._\n` +
             `_Respondé con el número, mandá una foto/PDF, o un audio._`,
           `👋 *Mba'éichapa, ${user!.fullName || 'Titular Bio-Pass'}*\n\n` +
             `Mba'épa rejaposéta ko'ág̃a?\n\n` +
@@ -1295,6 +1296,7 @@ export class BotStateMachine {
             `*[6]* 🏷️ Kit Stickers (3x3 cm) ha QR\n` +
             `*[7]* ✏️ Emoambue datos de emergencia / alergia\n` +
             `*[8]* 💬 Soporte ndive\n\n` +
+            `🔔 _Ehai *NOTIFICACIONES* rehóvo emyendy hag̃ua alertas push._\n` +
             `_Embohovái papapy reheve, emondo ta'anga/PDF, térã ñe'ẽ._`
         );
 
@@ -1881,6 +1883,16 @@ export class BotStateMachine {
         return {
           replyText: `👨‍⚕️ *Soporte Técnico Doorway Cortex Bio-Pass:*\n\n` +
             `Para asistencia médica, corporativa o reclamos de facturación, escribí a soporte@bio-pass.com o llamá al +595 21 500 000.`,
+        };
+      }
+
+      // Activar notificaciones push del navegador (disponible en cualquier momento,
+      // no solo la única vez que se manda tras confirmar el pago).
+      if (/\b(notificaci[oó]n(es)?|alertas?\s*push|activar\s*push|push)\b/i.test(cleanText)) {
+        return {
+          replyText:
+            `🔔 *Activá notificaciones push en tu celular*\n\n` +
+            `Además del aviso acá por WhatsApp, te avisamos al instante en la pantalla cada vez que alguien escanea tu QR de emergencia. Abrí este link y aceptá:\n${config.frontendUrl}/push/${user.emergencyToken}`,
         };
       }
 

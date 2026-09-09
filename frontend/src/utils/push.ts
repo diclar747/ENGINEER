@@ -48,9 +48,11 @@ export async function getPushState(): Promise<PushState> {
 
 /**
  * Prompts for permission (if needed), subscribes, and registers with the backend.
- * Attaches to the logged-in user automatically when a token is present.
+ * Attaches to the logged-in user automatically when an auth token is present, or —
+ * for members who only ever registered by WhatsApp and have no web session — via an
+ * `emergencyToken` (the id in the `/push/:emergencyToken` link the bot sends).
  */
-export async function subscribeToPush(): Promise<PushState> {
+export async function subscribeToPush(emergencyToken?: string): Promise<PushState> {
   if (!pushSupported()) return 'unsupported';
 
   const { data: vapid } = await api.get('/push/vapid-public-key');
@@ -70,7 +72,7 @@ export async function subscribeToPush(): Promise<PushState> {
     });
   }
 
-  await api.post('/push/subscribe', { subscription: sub.toJSON() });
+  await api.post('/push/subscribe', { subscription: sub.toJSON(), emergencyToken });
   return 'subscribed';
 }
 

@@ -14,6 +14,7 @@ import { BotSimulator } from './pages/BotSimulator';
 import { BotConnect } from './pages/BotConnect';
 import { Checkout } from './pages/Checkout';
 import { EmergencyView } from './pages/EmergencyView';
+import { PushInvite } from './pages/PushInvite';
 import { AdminLogin } from './pages/AdminLogin';
 import { AdminPanel } from './pages/AdminPanel';
 import { FeedbackProvider } from './components/ui/Feedback';
@@ -49,6 +50,8 @@ const App: React.FC = () => {
       <Routes>
         {/* Public emergency card — full screen, no chrome */}
         <Route path="/e/:token" element={<EmergencyView />} />
+        {/* Link que manda el bot por WhatsApp para activar push sin necesitar login/PIN */}
+        <Route path="/push/:token" element={<PushInvite />} />
         <Route path="/admin/login" element={<AdminLogin />} />
         <Route path="/admin" element={<AdminPanel />} />
         {/* Admin-only, full-screen (sin barra de usuario). BotConnect/BotSimulator
