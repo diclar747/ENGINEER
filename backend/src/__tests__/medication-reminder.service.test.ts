@@ -337,6 +337,20 @@ describe('resolveWhen — respuesta tolerante en el paso "¿qué día y hora?"',
     expect(w.whenAt).toBeNull();
     expect(w.hadDate).toBe(false);
   });
+  it('"el viernes a las 10" → un viernes futuro a las 10:00', () => {
+    const w = MedicationReminderService.resolveWhen('el viernes a las 10', from);
+    expect(w.whenAt).toBeTruthy();
+    expect(w.whenAt!.toLocaleDateString('en-US', { timeZone: 'America/Asuncion', weekday: 'long' })).toBe('Friday');
+    expect(w.whenAt!.getTime()).toBeGreaterThan(from.getTime());
+    expect(hhmmPY(w.whenAt!)).toBe('10:00');
+  });
+  it('"el jueves" (solo día) → dateKey de un jueves futuro', () => {
+    const w = MedicationReminderService.resolveWhen('el jueves', from);
+    expect(w.hadTime).toBe(false);
+    expect(w.dateKey).toBeTruthy();
+    const dow = new Date(`${w.dateKey}T12:00:00-03:00`).toLocaleDateString('en-US', { timeZone: 'America/Asuncion', weekday: 'long' });
+    expect(dow).toBe('Thursday');
+  });
 });
 
 describe('draftNextStep', () => {

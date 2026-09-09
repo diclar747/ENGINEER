@@ -448,11 +448,10 @@ export class MedicationReminderService {
     } else if (relWord !== null) {
       shiftFrom(relWord); if (relWord === 0) explicitDate = false;
     } else if (wIdx >= 0) {
-      const cur = weekdays.indexOf(
-        new Date(from).toLocaleString('en-US', { timeZone: tz, weekday: 'long' }).toLowerCase().replace('é', 'e')
-      );
-      let add = (wIdx - (cur < 0 ? 0 : cur) + 7) % 7;
-      if (add === 0) add = 7;
+      const enDay: Record<string, number> = { Sunday: 0, Monday: 1, Tuesday: 2, Wednesday: 3, Thursday: 4, Friday: 5, Saturday: 6 };
+      const cur = enDay[new Date(from).toLocaleString('en-US', { timeZone: tz, weekday: 'long' })] ?? 0;
+      let add = (wIdx - cur + 7) % 7;
+      if (add === 0) add = 7; // "el jueves" dicho un jueves → el jueves que viene
       shiftFrom(add); explicitDate = true;
     } else if (elD) {
       d = +elD[1]; hadDate = true; usedElD = true;
