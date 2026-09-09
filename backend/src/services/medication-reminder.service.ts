@@ -61,6 +61,16 @@ function extractTimes(text: string): string[] {
     if (/\b(cada|hace|en|dentro de|por)\s*$/.test(t.slice(Math.max(0, idx - 12), idx))) continue;
     if (h >= 0 && h <= 23) out.add(`${String(h).padStart(2, '0')}:00`);
   }
+  // "a las 10", "a las 9 de la noche", "a las 3 de la tarde" — hora sin ":" ni "hs".
+  for (const m of t.matchAll(/\ba\s+las?\s+(\d{1,2})(?:[:.]([0-5]\d))?\s*(?:de\s+la\s+(mañana|manana|tarde|noche|madrugada))?/g)) {
+    let h = parseInt(m[1], 10);
+    const min = m[2] || '00';
+    const period = m[3];
+    if (period === 'tarde' && h < 12) h += 12;
+    else if (period === 'noche' && h <= 11) h += 12;
+    else if ((period === 'mañana' || period === 'manana' || period === 'madrugada') && h === 12) h = 0;
+    if (h >= 0 && h <= 23) out.add(`${String(h).padStart(2, '0')}:${min}`);
+  }
 
   // Números sueltos 0-23 unidos por "y"/","/"a las" cuando YA hay al menos un
   // horario claro ("9 y 21hs", "a las 8, 14 y 22"). Se ignoran los que van
@@ -185,6 +195,7 @@ export class MedicationReminderService {
     let name = raw
       .replace(/\b([01]?\d|2[0-3])[:.][0-5]\d\b/g, ' ')
       .replace(/\b\d{1,2}(?::[0-5]\d)?\s*(a\.?m\.?|p\.?m\.?)\b/gi, ' ')
+      .replace(/\ba\s+las?\s+\d{1,2}(?:[:.]\d{2})?(?:\s*de\s+la\s+(?:mañana|manana|tarde|noche|madrugada))?/gi, ' ')
       .replace(/\b(?:a\s+las\s+)?\d{1,2}\s*(?:h|hs|hrs|horas)\b/gi, ' ')
       .replace(/\b(?:desde|a partir de|empezando)\s+las?\s+\d{1,2}\b/gi, ' ');
     if (dose) name = name.replace(dose, ' ');
@@ -654,7 +665,9 @@ export class MedicationReminderService {
       /(que\s+(medicament|remedio|pastilla|medicaci)|como\s+se\s+llama|mi\s+medicaci|que\s+estoy\s+tomando|que\s+tomo\b(?!\s+hoy)|que\s+remedios?\s+(tengo|uso|hay)|remedios?\s+que\s+(tomo|uso)|mis?\s+(remedios?|medicament|pastillas?)|lista\s+de\s+(remedios?|medic))/.test(t) &&
       !/\bhoy\b/.test(t) &&
       !/a\s+que\s+hora/.test(t) &&
-      !/(proxim|cuanto\s+falta|ahora\b|tengo\s+que\s+tomar)/.test(t)
+      !/(proxim|cuanto\s+falta|ahora\b|tengo\s+que\s+tomar)/.test(t) &&
+      // NO si es un pedido de CARGAR / registrar un medicamento ("alzá mi remedio").
+      !/\b(cargar|carg|subir|sub[íi]|subime|alzar|alz|guardar|guard|agregar|agreg|anotar|anot|registrar|registr|adjuntar|dar\s+de\s+alta)\b/.test(t)
     ) {
       const parts: string[] = [];
       if (medList.length) parts.push(`💊 *Tu medicación cargada (${medList.length}):*\n${formatMedications(medList, { max: 20 })}`);

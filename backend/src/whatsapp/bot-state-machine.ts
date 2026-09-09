@@ -2302,15 +2302,17 @@ export class BotStateMachine {
       const wantsLoad = LOAD.test(lc) && !VIEW.test(lc);
 
       // Registrar recordatorio / turno / medicación hablando. ANTES del menú numerado.
+      // (NO si es un pedido de VER — eso va a la opción 5 más abajo.)
+      const wantsView = VIEW.test(lc) && /\b(recordatorios?|horarios?|alarmas?|avisos?|turnos?|citas?)\b/.test(lc);
       if (
+        !wantsView && (
         /\b(quiero|necesito|quisiera|pod[eé]s|puedes|me\s+gustar[ií]a)\b.{0,35}\b(record\w*|recu[eé]rd\w*|alarma|aviso|avis\w*|agend\w*|program\w*|arm[aá]r?\s+(una|un)?\s*(cita|turno))\b/.test(lc) ||
         /\bhacerme\s+recordar\b/.test(lc) ||
         /\b(record\w*|recu[eé]rd\w*)\b.{0,45}\b(tom(ar|e|é|o)|pastilla|remedio|medic|c[aá]psula|dosis|inyecci|gotas?|jarabe|cada\s+\d|a\s+las?\s+\d|\d{1,2}[:h]\d)/.test(lc) ||
         /\b(pon(er|é|eme)|crear|cre[aá]|arm(ar|á|ame)|hacer|hac[eé]me)\b.{0,20}\b(recordatorio|alarma|aviso)\b/.test(lc) ||
-        /\b(record\w*|recu[eé]rd\w*|alarma)\b.{0,10}$/.test(lc) ||
         /\b(tengo|sacar|saqu[eé]|agend\w*|reserv\w*|me\s+dieron|dan|me\s+agendaron|arm\w*|program\w*|anot\w*|registr\w*|pon\w*|crear|cre[aá])\b.{0,30}\b(cita|turno|consulta|hora\s+m[eé]dica)\b/.test(lc) ||
         /\b(cita|turno|consulta)\s+(nuev|m[eé]dic|con\s+(el|la|mi|dr|dra|doctor|traumat|cardi|ped|gine|derma|oftalm|neuro))/.test(lc) ||
-        (/\b(a\s+las?\s+\d|cada\s+\d+\s*h|\d{1,2}:\d{2})\b/.test(lc) && !!MedicationReminderService.parse(cleanText))
+        (/\b(a\s+las?\s+\d|cada\s+\d+\s*h|\d{1,2}:\d{2})\b/.test(lc) && !!MedicationReminderService.parse(cleanText)))
       ) {
         const parsedReq = await MedicationReminderService.parseReminderRequest(cleanText);
         return advanceRemind(parsedReq);
@@ -2335,9 +2337,10 @@ export class BotStateMachine {
       // Menú numerado
       if (
         cleanText === '1' ||
+        lc.includes('cargar medicamento') ||
         (wantsLoad &&
-          /\b(medicament|medicaci[oó]n|remedio|pastilla|comprimido|c[aá]psula|f[aá]rmaco|lo\s+que\s+(tomo|estoy\s+tomando))\b/.test(lc) &&
-          !/\b(record\w*|recu[eé]rd\w*|alarma|aviso|horario|cada\s+\d|a\s+las?\s+\d|receta|estudio|an[aá]lisis)\b/.test(lc))
+          /\b(medicament|medicaci[oó]n|remedio|pastilla|comprimido|c[aá]psula|f[aá]rmaco|lo\s+que\s+(tomo|estoy\s+tomando))/.test(lc) &&
+          !/\b(record|recu[eé]rd|alarma|aviso|horario|cada\s+\d|a\s+las?\s+\d|receta|estudio|an[aá]lisis)/.test(lc))
       ) {
         await updateState('ACTIVE_UPLOAD_MED', {});
         return {
@@ -2349,7 +2352,7 @@ export class BotStateMachine {
       }
       if (
         cleanText === '2' ||
-        (wantsLoad && /\b(recetas?|prescripci|indicaci[oó]n\s+m[eé]dica|f[oó]rmula\s+m[eé]dica)\b/.test(lc)) ||
+        (wantsLoad && /\b(recetas?|prescripci|indicaci[oó]n\s+m[eé]dica|f[oó]rmula\s+m[eé]dica)/.test(lc)) ||
         /\bcargar\s+receta\b/.test(lc)
       ) {
         await updateState('ACTIVE_UPLOAD_RX', {});
