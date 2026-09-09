@@ -776,7 +776,10 @@ export class MedicationReminderService {
     const mentionsAppt =
       /\b(turnos?|citas?|consultas?|hora\s+medica)\b/.test(t) ||
       /\b(ir|voy|ver|visitar|tengo\s+que\s+ir)\b.{0,18}\b(al\s+|a\s+la\s+|con\s+el\s+|con\s+la\s+)?(doctor|dr\b|dra\b|medic|especialista|dentista|odontolog|oftalmolog|cardiolog|traumatolog|dermatolog|pediatr|ginecolog|neurolog|urolog|kinesiolog|nutricionist|psicolog|hospital|sanatorio|clinic)/.test(t);
-    const isRegistrationVerb = /^(quiero|necesito|quisiera|agend|program|reserv|anot[aá]|pon[eé]r?me|cre[aá]r?|sac[aá]r?me\s+un)/.test(t);
+    // "quiero/necesito SABER/VER si tengo cita" es una PREGUNTA, no un pedido de agendar.
+    const isRegistrationVerb =
+      /^(quiero|necesito|quisiera|quer[ií]a|agend|program|reserv|anot[aá]|pon[eé]r?me|cre[aá]r?|sac[aá]r?me\s+un)/.test(t) &&
+      !/^(quiero|necesito|quisiera|quer[ií]a|me\s+gustaria|me\s+gustar[ií]a)\s+(saber|ver|consultar|conocer|revisar|chequear|checar|confirmar|averiguar|preguntar|fijar)/.test(t);
     const isEditVerb = /\b(borr|elimin|quit[aá]|cancel|cambi|modific|mov[eé]r?|reprogram)/.test(t);
     const asksAppt =
       isQuestion ||

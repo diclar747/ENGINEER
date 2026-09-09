@@ -233,6 +233,25 @@ describe('answerQuery — consulta de turnos/medicación (no debe caer en "carga
     expect(await MedicationReminderService.answerQuery('u1', 'quiero registrar una cita con el cardiólogo mañana 9:00')).toBeNull();
   });
 
+  it('"quiero saber si tengo una cita" → responde el turno (NO arranca alta)', async () => {
+    db.user = { currentMedications: null };
+    db.reminders = [
+      { id: 'a1', kind: 'APPOINTMENT', medication: 'Doctor Kodak', whenAt: new Date(Date.now() + 4 * 86400_000), leadMinutes: 120, active: true, scheduleKind: null, intervalHours: null, nextDoseAt: null, times: '[]', dose: null },
+    ];
+    const r = await MedicationReminderService.answerQuery('u1', 'quiero saber si tengo una cita');
+    expect(r).toMatch(/Doctor Kodak/);
+    expect(r).toMatch(/próximo turno/i);
+  });
+
+  it('"necesito saber si tengo cita" y "quiero ver si tengo cita agendada" → responden el turno', async () => {
+    db.user = { currentMedications: null };
+    db.reminders = [
+      { id: 'a1', kind: 'APPOINTMENT', medication: 'Doctor Kodak', whenAt: new Date(Date.now() + 4 * 86400_000), leadMinutes: 120, active: true, scheduleKind: null, intervalHours: null, nextDoseAt: null, times: '[]', dose: null },
+    ];
+    expect(await MedicationReminderService.answerQuery('u1', 'necesito saber si tengo cita')).toMatch(/Doctor Kodak/);
+    expect(await MedicationReminderService.answerQuery('u1', 'quiero ver si tengo cita agendada')).toMatch(/Doctor Kodak/);
+  });
+
   it('"tengo alguna cita?" sin turnos → dice que no hay (no null)', async () => {
     db.user = { currentMedications: null };
     db.reminders = [];

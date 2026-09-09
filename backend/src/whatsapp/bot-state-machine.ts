@@ -2323,8 +2323,19 @@ export class BotStateMachine {
       // Registrar recordatorio / turno / medicación hablando. ANTES del menú numerado.
       // (NO si es un pedido de VER — eso va a la opción 5 más abajo.)
       const wantsView = VIEW.test(lc) && /\b(recordatorios?|horarios?|alarmas?|avisos?|turnos?|citas?)\b/.test(lc);
+      // Una PREGUNTA por turnos/medicación SIN fecha/hora/intervalo NO arranca ningún alta
+      // ("¿tengo cita agendada?", "quiero saber si tengo turno"). La contesta answerQuery.
+      const looksLikeInfoQ =
+        (/[?¿]/.test(cleanText) ||
+          /^(que|qu[eé]|cual|cu[aá]l|cuando|cu[aá]ndo|tengo|ten[eé]s|hay|quiero\s+(saber|ver|consultar)|necesito\s+(saber|ver)|quisiera\s+(saber|ver)|me\s+gustar[ií]a\s+(saber|ver)|me\s+pod)/.test(lc)) &&
+        /\b(turno|cita|consulta|hora\s+m[eé]dica|remedio|pastilla|medicaci|medicament|tomar|tomo)\b/.test(lc) &&
+        !/\b(\d{1,2}[:h.]\d{2}|a\s+las?\s+\d{1,2}|\d{1,2}\s*\/\s*\d{1,2}|mañana|pasado\s+mañana|lunes|martes|mi[eé]rcoles|jueves|viernes|s[aá]bado|domingo|cada\s+\d|cada\s+(un[ao]?|dos|tres|cuatro|cinco|seis|siete|ocho|nueve|diez|once|doce)\b|por\s+\d+\s*(d[ií]a|semana|mes|a[nñ]o))\b/.test(lc);
+      if (looksLikeInfoQ && !VIEW.test(lc)) {
+        const infoAns = await MedicationReminderService.answerQuery(user.id, cleanText, lang);
+        if (infoAns) return { replyText: infoAns };
+      }
       if (
-        !wantsView && (
+        !wantsView && !looksLikeInfoQ && (
         /\b(quiero|necesito|quisiera|pod[eé]s|puedes|me\s+gustar[ií]a)\b.{0,35}\b(record\w*|recu[eé]rd\w*|alarma|aviso|avis\w*|agend\w*|program\w*|arm[aá]r?\s+(una|un)?\s*(cita|turno))\b/.test(lc) ||
         /\bhacerme\s+recordar\b/.test(lc) ||
         /\b(record\w*|recu[eé]rd\w*)\b.{0,45}\b(tom(ar|e|é|o)|pastilla|remedio|medic|c[aá]psula|dosis|inyecci|gotas?|jarabe|cada\s+\d|a\s+las?\s+\d|\d{1,2}[:h]\d)/.test(lc) ||
