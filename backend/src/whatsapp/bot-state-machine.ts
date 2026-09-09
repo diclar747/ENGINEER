@@ -1523,7 +1523,7 @@ export class BotStateMachine {
             .join('\n') || tr('_Nada cargado._', '_Ndaipóri._');
         const conflicts = medicationConflicts(meds, user!.severeAllergies, user!.contraindicatedMeds);
         const reminders = await prisma.medicationReminder.findMany({
-          where: { userId: user!.id, active: true },
+          where: { userId: user!.id },
           orderBy: { createdAt: 'asc' },
           select: {
             kind: true, scheduleKind: true, medication: true, dose: true, times: true,
