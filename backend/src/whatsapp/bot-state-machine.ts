@@ -28,6 +28,8 @@ export interface InboundMessage {
   mediaBuffer?: Buffer;
   mediaMimeType?: string;
   mediaFilename?: string;
+  /** true si el chat llega por "@lid" (WhatsApp no expone el número real) — ver ACTIVE_LINK_PHONE. */
+  isLid?: boolean;
 }
 
 export interface BotResponse {
@@ -1932,7 +1934,12 @@ export class BotStateMachine {
 
       // Vincular número real (para el login web) — ver el bloque ACTIVE_LINK_PHONE.
       if (/\b(vincular|entrar a la web|acceso web|no puedo entrar|login web|iniciar sesi[oó]n)\b/i.test(cleanText)) {
-        if (rawPhone === user.phoneNumber) {
+        // OJO: `rawPhone === user.phoneNumber` NO sirve para decidir esto — para una
+        // cuenta @lid sin arreglar, `phoneNumber` se guardó como el propio `rawPhone`
+        // (el id del lid) al crearse, así que esa comparación da "true" siempre y
+        // el bot terminaba devolviendo el número raro del lid como si fuera el real.
+        // La señal correcta es si ESTA conversación llega por @lid o no.
+        if (!msg.isLid) {
           return {
             replyText: `✅ Tu número ya está vinculado. Ya podés entrar a *bio-pass.cnid.com.py/login* con *${user.phoneNumber}* y tu PIN.`,
           };

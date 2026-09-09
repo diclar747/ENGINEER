@@ -523,6 +523,7 @@ export class BaileysClient {
         mediaBuffer,
         mediaMimeType,
         mediaFilename,
+        isLid,
       });
 
       // Reply to the exact JID the message arrived on (correct for both @s.whatsapp.net
