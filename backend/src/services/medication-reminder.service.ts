@@ -626,7 +626,7 @@ export class MedicationReminderService {
     // --- "¿qué cita tengo registrada?" / "¿tengo turno?" / "¿cuándo es mi próximo turno?" ---
     // Va primero (es menos ambiguo). NO cuando el mensaje trae fecha+hora (eso es agendar),
     // ni cuando es una orden de crear/borrar/mover.
-    const mentionsAppt = /\b(turno|cita|consulta|hora\s+medica)\b/.test(t);
+    const mentionsAppt = /\b(turnos?|citas?|consultas?|hora\s+medica)\b/.test(t);
     const isRegistrationVerb = /^(quiero|necesito|quisiera|agend|program|reserv|anot[aá]|pon[eé]r?me|cre[aá]r?|sac[aá]r?me\s+un)/.test(t);
     const isEditVerb = /\b(borr|elimin|quit[aá]|cancel|cambi|modific|mov[eé]r?|reprogram)/.test(t);
     const asksAppt =
