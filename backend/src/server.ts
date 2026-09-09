@@ -92,6 +92,19 @@ async function bootstrap() {
     console.warn('⚠️ WhatsApp Baileys start encountered notice:', err?.message || err);
   });
 
+  // Apagado ordenado: en un redeploy, soltar YA la sesión de WhatsApp para no
+  // quedar solapado con el contenedor nuevo (ese solape daba respuestas dobles).
+  let shuttingDown = false;
+  const gracefulExit = (sig: string) => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    console.log(`↩️  ${sig} recibido — cerrando WhatsApp y saliendo…`);
+    try { whatsappBot.stop(); } catch { /* noop */ }
+    setTimeout(() => process.exit(0), 400);
+  };
+  process.on('SIGTERM', () => gracefulExit('SIGTERM'));
+  process.on('SIGINT', () => gracefulExit('SIGINT'));
+
   // 6. Listen HTTP
   app.listen(config.port, () => {
     console.log(`\n======================================================`);

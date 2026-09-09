@@ -2081,11 +2081,42 @@ export class BotStateMachine {
         }
 
         if (state === 'ACTIVE_REMIND_WHEN') {
+          // Camino feliz: fecha + hora juntas en una frase reconocible.
           const appt = MedicationReminderService.parseAppointment(/\b(turno|cita|consulta)\b/i.test(lc) ? cleanText : `turno ${cleanText}`);
-          if (!appt) return { replyText: '📅 No entendí la fecha/hora. Probá: _"mañana 9:00"_, _"15/10 a las 14:30"_, _"el lunes 10:00"_.' };
-          draft.whenAt = appt.whenAt.toISOString();
-          if (!draft.medication || draft.medication === 'Consulta médica') draft.medication = appt.note;
-          return advanceRemind(draft);
+          if (appt) {
+            draft.whenAt = appt.whenAt.toISOString();
+            draft.whenPendingDate = undefined;
+            if (!draft.medication || draft.medication === 'Consulta médica') draft.medication = appt.note;
+            return advanceRemind(draft);
+          }
+          // Ya teníamos la FECHA y estábamos esperando la HORA → combinamos.
+          if (draft.whenPendingDate) {
+            const clk = MedicationReminderService.extractClock(cleanText);
+            if (clk) {
+              draft.whenAt = new Date(`${draft.whenPendingDate}T${clk}:00-03:00`).toISOString();
+              draft.whenPendingDate = undefined;
+              return advanceRemind(draft);
+            }
+            return { replyText: '📅 ¿A qué hora? (ej: _"14:30"_, _"3 de la tarde"_, _"9hs"_)' };
+          }
+          // Tolerante: quizá dio solo la hora, solo la fecha, "3 de la tarde", "15hs", "el 20".
+          const w = MedicationReminderService.resolveWhen(cleanText);
+          if (w.whenAt) {
+            draft.whenAt = w.whenAt.toISOString();
+            draft.whenPendingDate = undefined;
+            return advanceRemind(draft);
+          }
+          if (w.hadDate && !w.hadTime && w.dateKey) {
+            draft.whenPendingDate = w.dateKey;
+            await updateState('ACTIVE_REMIND_WHEN', { rdraft: draft });
+            const dm = w.dateKey.split('-');
+            return { replyText: `📅 Anotado el *${dm[2]}/${dm[1]}*. ¿A qué hora? (ej: _"14:30"_, _"3 de la tarde"_)` };
+          }
+          if (w.hadTime && !w.hadDate) {
+            // (no debería pasar: resolveWhen asume hoy) — pedimos la fecha
+            return { replyText: '📅 ¿Qué día? (ej: _"mañana"_, _"el 20/10"_, _"el viernes"_)' };
+          }
+          return { replyText: '📅 No entendí la fecha/hora. Probá: _"mañana 9:00"_, _"15/10 a las 14:30"_, _"el lunes 10:00"_, _"hoy a las 3 de la tarde"_.' };
         }
 
         if (state === 'ACTIVE_REMIND_LEAD') {

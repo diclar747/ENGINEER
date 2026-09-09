@@ -23,6 +23,7 @@ export interface ReminderDraft {
   intervalHours?: number;
   anchorAt?: string; // ISO — última toma (INTERVAL)
   whenAt?: string; // ISO — turno (APPOINTMENT)
+  whenPendingDate?: string; // YYYY-MM-DD — fecha del turno ya dada, esperando la hora
   leadMinutes?: number;
   endsAt?: string; // ISO — fin del tratamiento ("por 3 días")
 }
@@ -97,10 +98,13 @@ function extractTimes(text: string): string[] {
     if (h >= 0 && h <= 23) out.add(`${String(h).padStart(2, '0')}:00`);
   }
   // "a las 10", "a las 9 de la noche", "a las 3 de la tarde" — hora sin ":" ni "hs".
-  for (const m of t.matchAll(/\ba\s+las?\s+(\d{1,2})(?:[:.]([0-5]\d))?\s*(?:de\s+la\s+(mañana|manana|tarde|noche|madrugada))?/g)) {
-    let h = parseInt(m[1], 10);
-    const min = m[2] || '00';
-    const period = m[3];
+  // También "3 de la tarde", "9 y media de la noche" SIN "a las".
+  for (const m of t.matchAll(/\b(?:a\s+las?\s+(\d{1,2})|(\d{1,2}))(?:[:.]([0-5]\d)|\s+y\s+(media|cuarto))?\s*(?:de\s+la\s+(mañana|manana|tarde|noche|madrugada))?/g)) {
+    const anchored = m[1] !== undefined; // vino con "a las"
+    const period = m[5];
+    if (!anchored && !period) continue; // "3" a secas no es una hora acá
+    let h = parseInt(m[1] ?? m[2], 10);
+    const min = m[3] || (m[4] === 'media' ? '30' : m[4] === 'cuarto' ? '15' : '00');
     if (period === 'tarde' && h < 12) h += 12;
     else if (period === 'noche' && h <= 11) h += 12;
     else if ((period === 'mañana' || period === 'manana' || period === 'madrugada') && h === 12) h = 0;
@@ -362,6 +366,114 @@ export class MedicationReminderService {
     note = note.charAt(0).toUpperCase() + note.slice(1);
 
     return { note: note.slice(0, 120), whenAt };
+  }
+
+  /** "HH:MM" (24h) de un texto libre de turno: "a las 15", "3 de la tarde",
+   *  "9 y media", "14:30", "15hs", o —si `bareOk`— un número suelto ("15"). */
+  static extractClock(text: string, bareOk = true): string | null {
+    const s = (text || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
+    let m = s.match(/\b([01]?\d|2[0-3])[:.h]([0-5]\d)\b/); // 14:30 / 14.30 / 1430h→14:30
+    if (m) return `${m[1].padStart(2, '0')}:${m[2]}`;
+    m = s.match(/\b(\d{1,2})(?:\s+y\s+(media|cuarto))?\s*(?:de\s+la\s+)?(manana|tarde|noche|madrugada)\b/);
+    if (m) {
+      let h = +m[1];
+      const mn = m[2] === 'media' ? 30 : m[2] === 'cuarto' ? 15 : 0;
+      if ((m[3] === 'tarde' || m[3] === 'noche') && h < 12) h += 12;
+      if ((m[3] === 'manana' || m[3] === 'madrugada') && h === 12) h = 0;
+      if (h >= 0 && h <= 23) return `${String(h).padStart(2, '0')}:${String(mn).padStart(2, '0')}`;
+    }
+    m = s.match(/\ba\s+las?\s+(\d{1,2})(?:[:.h]([0-5]\d))?/) || s.match(/\b(\d{1,2})(?:[:.h]([0-5]\d))?\s*(?:hs?|hrs?|horas?)\b/);
+    if (m) {
+      const h = +m[1];
+      if (h >= 0 && h <= 23) return `${String(h).padStart(2, '0')}:${m[2] || '00'}`;
+    }
+    if (bareOk) {
+      m = s.match(/^\s*(\d{1,2})(?:[:.h]([0-5]\d))?\s*$/);
+      if (m) {
+        const h = +m[1];
+        if (h >= 0 && h <= 23) return `${String(h).padStart(2, '0')}:${m[2] || '00'}`;
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Interpreta con tolerancia una respuesta de "¿qué día y hora?" del diálogo
+   * guiado de turno: acepta solo hora ("a las 15", "3 de la tarde", "15hs", "15"),
+   * solo fecha ("el 20/10", "mañana", "el viernes"), o ambas. Con hora y sin fecha
+   * → hoy (o mañana si ya pasó). Devuelve `whenAt` si armó fecha+hora; si solo hubo
+   * fecha, `dateKey` (YYYY-MM-DD) para volver a preguntar la hora.
+   */
+  static resolveWhen(text: string, from: Date = new Date()): { whenAt: Date | null; hadTime: boolean; hadDate: boolean; dateKey?: string } {
+    const t = (text || '').trim().toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
+    const tz = config.timezone || 'America/Asuncion';
+    const keyOf = (dt: Date) => dt.toLocaleDateString('en-CA', { timeZone: tz });
+
+    const months = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto', 'septiembre', 'setiembre', 'octubre', 'noviembre', 'diciembre'];
+    const weekdays = ['domingo', 'lunes', 'martes', 'miercoles', 'jueves', 'viernes', 'sabado'];
+    const dm = t.match(/\b([0-3]?\d)\s*[\/.\-]\s*([01]?\d)(?:\s*[\/.\-]\s*(\d{2,4}))?\b/);
+    const dNameM = t.match(/\b([0-3]?\d)\s+de\s+([a-z]+)/);
+    const dName = dNameM && months.some((mo) => dNameM[2].startsWith(mo.slice(0, 4))) ? dNameM : null;
+    const enN = t.match(/\ben\s+(\d{1,3})\s*d[ií]as?\b/);
+    const wIdx = weekdays.findIndex((w) => new RegExp(`\\b${w}\\b`).test(t));
+    const relWord = /\bpasado\s+manana\b/.test(t) ? 2 : /\bmanana\b/.test(t) ? 1 : /\bhoy\b/.test(t) ? 0 : null;
+    const elD = t.match(/\bel\s+([0-3]?\d)\b(?!\s*[\/.\-:h])/);
+    // Si hay CUALQUIER indicio de fecha, un número suelto NO es la hora.
+    const hasDateHint = !!(dm || dName || enN || wIdx >= 0 || relWord !== null || elD);
+    const clock = this.extractClock(t, !hasDateHint);
+    const hadTime = !!clock;
+    const [hh, mm] = hadTime ? clock!.split(':').map(Number) : [12, 0];
+
+    const [ty, tmo, td] = keyOf(from).split('-').map(Number);
+    let y = ty, mo = tmo, d = td;
+    let hadDate = false;
+    let explicitDate = false;
+    let usedElD = false;
+    const shiftFrom = (n: number) => {
+      [y, mo, d] = keyOf(new Date(from.getTime() + n * 86_400_000)).split('-').map(Number);
+      hadDate = true;
+    };
+
+    if (dm) {
+      d = +dm[1]; mo = +dm[2];
+      if (dm[3]) y = dm[3].length === 2 ? 2000 + +dm[3] : +dm[3];
+      hadDate = explicitDate = true;
+    } else if (dName) {
+      const mi = months.findIndex((mo2) => dName[2].startsWith(mo2.slice(0, 4)));
+      d = +dName[1];
+      mo = (mi === 9 ? 8 : mi > 9 ? mi - 1 : mi) + 1; // "setiembre" alias
+      hadDate = explicitDate = true;
+    } else if (enN) {
+      shiftFrom(+enN[1]); explicitDate = true;
+    } else if (relWord !== null) {
+      shiftFrom(relWord); if (relWord === 0) explicitDate = false;
+    } else if (wIdx >= 0) {
+      const cur = weekdays.indexOf(
+        new Date(from).toLocaleString('en-US', { timeZone: tz, weekday: 'long' }).toLowerCase().replace('é', 'e')
+      );
+      let add = (wIdx - (cur < 0 ? 0 : cur) + 7) % 7;
+      if (add === 0) add = 7;
+      shiftFrom(add); explicitDate = true;
+    } else if (elD) {
+      d = +elD[1]; hadDate = true; usedElD = true;
+    }
+
+    const mk = (yy: number, MM: number, dd: number) =>
+      new Date(`${yy}-${String(MM).padStart(2, '0')}-${String(dd).padStart(2, '0')}T${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}:00-03:00`);
+    const dateKey = `${y}-${String(mo).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+
+    if (!hadTime) return { whenAt: null, hadTime: false, hadDate, dateKey: hadDate ? dateKey : undefined };
+
+    let whenAt = mk(y, mo, d);
+    if (!explicitDate && !usedElD && whenAt.getTime() < from.getTime() - 60_000) {
+      const [ny, nM, nd] = keyOf(new Date(from.getTime() + 86_400_000)).split('-').map(Number);
+      whenAt = mk(ny, nM, nd);
+    }
+    if (usedElD && whenAt.getTime() < from.getTime() - 3600_000) {
+      whenAt = mo === 12 ? mk(y + 1, 1, d) : mk(y, mo + 1, d);
+    }
+    if (isNaN(whenAt.getTime())) return { whenAt: null, hadTime, hadDate, dateKey };
+    return { whenAt, hadTime, hadDate: true, dateKey };
   }
 
   /** "hace 1 hora" / "recién" / "a las 14:00" / ISO → Date de la última toma. */

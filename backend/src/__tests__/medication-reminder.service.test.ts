@@ -293,6 +293,52 @@ describe('answerQuery — consulta de turnos/medicación (no debe caer en "carga
   });
 });
 
+describe('resolveWhen — respuesta tolerante en el paso "¿qué día y hora?"', () => {
+  const from = new Date('2026-09-10T08:00:00-03:00');
+  const hhmmPY = (d: Date) => d.toLocaleTimeString('en-GB', { timeZone: 'America/Asuncion', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
+  const dayPY = (d: Date) => d.toLocaleDateString('en-CA', { timeZone: 'America/Asuncion' });
+
+  it('solo hora "a las 15" → hoy 15:00', () => {
+    const w = MedicationReminderService.resolveWhen('a las 15', from);
+    expect(w.whenAt && hhmmPY(w.whenAt)).toBe('15:00');
+    expect(w.whenAt && dayPY(w.whenAt)).toBe('2026-09-10');
+  });
+  it('solo hora "3 de la tarde" → hoy 15:00', () => {
+    const w = MedicationReminderService.resolveWhen('3 de la tarde', from);
+    expect(w.whenAt && hhmmPY(w.whenAt)).toBe('15:00');
+  });
+  it('bare "15" → hoy 15:00', () => {
+    expect(MedicationReminderService.resolveWhen('15', from).whenAt && hhmmPY(MedicationReminderService.resolveWhen('15', from).whenAt!)).toBe('15:00');
+  });
+  it('hora ya pasada sin fecha → mañana', () => {
+    const w = MedicationReminderService.resolveWhen('a las 6', from); // 06:00 < 08:00
+    expect(w.whenAt && dayPY(w.whenAt)).toBe('2026-09-11');
+  });
+  it('solo fecha "el 20/10" → sin hora, devuelve dateKey para re-preguntar', () => {
+    const w = MedicationReminderService.resolveWhen('el 20/10', from);
+    expect(w.hadTime).toBe(false);
+    expect(w.hadDate).toBe(true);
+    expect(w.dateKey).toBe('2026-10-20');
+  });
+  it('extractClock: "a las 3 de la tarde" → 15:00 · "14:30" → 14:30 · "9hs" → 09:00 · "15" → 15:00', () => {
+    expect(MedicationReminderService.extractClock('a las 3 de la tarde')).toBe('15:00');
+    expect(MedicationReminderService.extractClock('14:30')).toBe('14:30');
+    expect(MedicationReminderService.extractClock('9hs')).toBe('09:00');
+    expect(MedicationReminderService.extractClock('15')).toBe('15:00');
+    expect(MedicationReminderService.extractClock('nada')).toBeNull();
+  });
+  it('"mañana a las 9" → 11/09 09:00', () => {
+    const w = MedicationReminderService.resolveWhen('mañana a las 9', from);
+    expect(w.whenAt && dayPY(w.whenAt)).toBe('2026-09-11');
+    expect(w.whenAt && hhmmPY(w.whenAt)).toBe('09:00');
+  });
+  it('nada reconocible → whenAt null, sin fecha ni hora', () => {
+    const w = MedicationReminderService.resolveWhen('no sé', from);
+    expect(w.whenAt).toBeNull();
+    expect(w.hadDate).toBe(false);
+  });
+});
+
 describe('draftNextStep', () => {
   it('MED: pide nombre, luego frecuencia, luego última toma (INTERVAL), luego dosis', () => {
     expect(MedicationReminderService.draftNextStep({ kind: 'MED' })).toBe('name');
