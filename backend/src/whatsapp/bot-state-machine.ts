@@ -127,6 +127,24 @@ function isSmallTalk(text: string): boolean {
   return /^(hola+|ola|oi|ey+|hey|holis|buenas|buen[oa]s? (dias?|tardes?|noches?)|buen dia|que tal|qué tal|como (estas|andas|va)|todo bien|saludos|gracias|test|prueba|probando|probrando|ping|hello|hi+|estas ahi|hay alguien|start|empezar|iniciar)$/.test(t);
 }
 
+/** Agradecimiento / muletilla ("gracias", "ok", "dale perfecto", "muchas gracias", 👍). */
+const ACK_WORDS = new Set([
+  'gracias', 'graciass', 'graciasss', 'ok', 'okk', 'oka', 'okey', 'okay', 'oki', 'dale', 'de', 'nada',
+  'perfecto', 'perfe', 'joya', 'barbaro', 'genial', 'buenisimo', 'buenazo', 'buenisima', 'entendido',
+  'copiado', 'recibido', 'vale', 'va', 'listo', 'bien', 'excelente', 'muchas', 'mil', 'muy', 'gracia',
+  'tuanis', 'aguyje', 'aguije', 'tranqui', 'oka', 'okis',
+]);
+function isAck(text: string): boolean {
+  const t = norm(text)
+    .replace(/[^\p{L}\s]/gu, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!t) return false;
+  const words = t.split(' ');
+  if (words.length < 1 || words.length > 4) return false;
+  return words.every((w) => ACK_WORDS.has(w));
+}
+
 /** ¿El texto parece un nombre y apellido reales (no un saludo ni un número)? */
 function looksLikeFullName(text: string): boolean {
   const t = (text || '').trim();
@@ -1625,18 +1643,14 @@ export class BotStateMachine {
         return { replyText: `${body}\n\n_${tr('Escribí *MENU* para ver las opciones.', 'Ehai *MENU* rehecha hag̃ua opciones.')}_` };
       }
 
-      // Agradecimiento / muletilla ("gracias", "ok", "dale", "listo?"…) → no se procesa
+      // Agradecimiento / muletilla ("gracias", "ok", "dale perfecto", 👍) → no se procesa
       // como dato en ningún sub-modo (antes "gracias" tras una respuesta daba error de
       // "no entendí el medicamento"). No cambia de estado.
-      if (
-        !msg.mediaBuffer &&
-        !subMode.startsWith('ACTIVE_REMIND_') &&
-        /^(gracias+|muchas\s+gracias|mil\s+gracias|ok+|oka|okey|okay|dale|de\s+nada|perfecto|joya|barbaro|b[aá]rbaro|genial|buen[ií]simo|entendido|copiado|recibido|vale|va|listo\s*[!¡]*\??|👍|🙏|👌|✅)[\s.!¡]*$/i.test(cleanText.trim())
-      ) {
+      if (!msg.mediaBuffer && !subMode.startsWith('ACTIVE_REMIND_') && (isAck(cleanText) || /^[\u{1F44D}\u{1F64F}\u{1F44C}✅😊🙂]+$/u.test(cleanText.trim()))) {
         return {
           replyText:
             subMode === 'ACTIVE_MEMBER'
-              ? '🙂 Acá estoy. Escribí *MENU* para ver las opciones.'
+              ? '🙂 Escribí *MENU* para ver las opciones.'
               : '🙂 Seguimos. Escribí *LISTO* para volver al menú.',
         };
       }
@@ -1763,9 +1777,11 @@ export class BotStateMachine {
           return { replyText: medUpdateMsg(r) + tr('\n\n_Mandá otro o escribí *LISTO*._', '\n\n_Emondo ambue térã ehai *LISTO*._') };
         }
         if (cleanText) {
-          // No ingerir preguntas / pedidos / frases como si fueran nombres de fármacos
-          // ("mostrame mi medicamento", "me gustaría ver si tengo cita", etc.).
+          // No ingerir preguntas / pedidos / frases / muletillas como si fueran fármacos
+          // ("mostrame mi medicamento", "me gustaría ver si tengo cita", "gracias", etc.).
           const looksLikeQuestion =
+            isAck(cleanText) ||
+            isSmallTalk(cleanText) ||
             /[?¿]/.test(cleanText) ||
             /\b(quiero|me\s+gustar[ií]a|podr[ií]a|pod[eé]s|mostr[aá]|mostrame|decime|ver\s+si|a\s+ver|necesito\s+saber|tengo\s+(alg|un|algun)|hay\s+(alg|un)|cu[aá]ndo|d[oó]nde|c[oó]mo\s|qu[eé]\s+(remedio|medic|cita|turno|tengo|debo|tomo))\b/i.test(cleanText) ||
             cleanText.split(/\s+/).length > 8;
