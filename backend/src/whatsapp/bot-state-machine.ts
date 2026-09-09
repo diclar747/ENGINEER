@@ -1747,6 +1747,22 @@ export class BotStateMachine {
           return { replyText: medUpdateMsg(r) + tr('\n\n_Mandá otro o escribí *LISTO*._', '\n\n_Emondo ambue térã ehai *LISTO*._') };
         }
         if (cleanText) {
+          // No ingerir preguntas / pedidos / frases como si fueran nombres de fármacos
+          // ("mostrame mi medicamento", "me gustaría ver si tengo cita", etc.).
+          const looksLikeQuestion =
+            /[?¿]/.test(cleanText) ||
+            /\b(quiero|me\s+gustar[ií]a|podr[ií]a|pod[eé]s|mostr[aá]|mostrame|decime|ver\s+si|a\s+ver|necesito\s+saber|tengo\s+(alg|un|algun)|hay\s+(alg|un)|cu[aá]ndo|d[oó]nde|c[oó]mo\s|qu[eé]\s+(remedio|medic|cita|turno|tengo|debo|tomo))\b/i.test(cleanText) ||
+            cleanText.split(/\s+/).length > 8;
+          if (looksLikeQuestion) {
+            const ans = await MedicationReminderService.answerQuery(user.id, cleanText, lang);
+            if (ans) return { replyText: ans };
+            return {
+              replyText: tr(
+                '💊 Estás en *Cargar medicamento*. Mandá el *nombre* (ej: _"Losartán 50 mg, 1 vez al día"_), una *foto*, o escribí *LISTO* para salir.',
+                '💊 Ehai pe pohã réra térã *LISTO*.'
+              ),
+            };
+          }
           const r = await ingestMedFromInput({ text: cleanText, source: 'manual' });
           if (!r) {
             return {

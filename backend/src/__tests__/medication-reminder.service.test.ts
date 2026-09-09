@@ -1,8 +1,13 @@
 import { describe, it, expect, vi } from 'vitest';
 
-// El servicio importa prisma / baileys / niro al cargar — los stubeamos porque acá
-// solo probamos las funciones puras (cálculo de horarios, parseo de última toma, dosis).
-vi.mock('../database/prisma', () => ({ prisma: {} }));
+// El servicio importa prisma / baileys / niro al cargar — los stubeamos.
+const db: { user: any; reminders: any[] } = { user: { currentMedications: null }, reminders: [] };
+vi.mock('../database/prisma', () => ({
+  prisma: {
+    user: { findUnique: async () => db.user },
+    medicationReminder: { findMany: async () => db.reminders, update: async () => ({}) },
+  },
+}));
 vi.mock('../whatsapp/baileys.client', () => ({ whatsappBot: { getStatus: () => ({ connected: false }), sendMessage: vi.fn() } }));
 vi.mock('../services/niro.service', () => ({ NiroService: { enabled: false, extractFields: vi.fn() } }));
 
@@ -123,6 +128,41 @@ describe('parseAppointment — limpieza de la nota', () => {
     expect(d.kind).toBe('APPOINTMENT');
     const hhmm = new Date(d.whenAt!).toLocaleTimeString('en-GB', { timeZone: 'America/Asuncion', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
     expect(hhmm).toBe('09:15');
+  });
+});
+
+describe('answerQuery — consulta de turnos/medicación (no debe caer en "cargar medicamento")', () => {
+  it('"tengo alguna cita medica reservada?" → responde el próximo turno', async () => {
+    db.user = { currentMedications: null };
+    db.reminders = [
+      { id: 'a1', kind: 'APPOINTMENT', medication: 'Cardiólogo', whenAt: new Date(Date.now() + 3 * 86400_000), leadMinutes: 60, active: true, scheduleKind: null, intervalHours: null, nextDoseAt: null, times: '[]', dose: null },
+    ];
+    const r = await MedicationReminderService.answerQuery('u1', 'tengo alguna cita medica reservada?');
+    expect(r).toBeTruthy();
+    expect(r).toMatch(/próximo turno/i);
+    expect(r).toMatch(/Cardiólogo/);
+  });
+
+  it('"tengo alguna cita?" sin turnos → dice que no hay (no null)', async () => {
+    db.user = { currentMedications: null };
+    db.reminders = [];
+    const r = await MedicationReminderService.answerQuery('u1', 'tenes alguna cita agendada para mi?');
+    expect(r).toBeTruthy();
+    expect(r).toMatch(/no tenés turnos/i);
+  });
+
+  it('"que remedio tengo que tomar?" → no devuelve null', async () => {
+    db.user = { currentMedications: JSON.stringify([{ name: 'Losartán', dose: '50 mg' }]) };
+    db.reminders = [];
+    const r = await MedicationReminderService.answerQuery('u1', 'que remedio tengo que tomar?');
+    expect(r).toBeTruthy();
+    expect(r).toMatch(/Losartán/);
+  });
+
+  it('un nombre de fármaco real NO se interpreta como consulta', async () => {
+    db.user = { currentMedications: null };
+    db.reminders = [];
+    expect(await MedicationReminderService.answerQuery('u1', 'Losartán 50 mg')).toBeNull();
   });
 });
 

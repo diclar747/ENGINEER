@@ -566,12 +566,23 @@ export class MedicationReminderService {
    * (para que el bot siga con su flujo normal). Determinístico (regex); sin costo de IA.
    */
   static async answerQuery(userId: string, text: string, _lang: string = 'es'): Promise<string | null> {
-    const t = (text || '').toLowerCase().trim();
+    const t = (text || '')
+      .toLowerCase()
+      .normalize('NFD')
+      .replace(/[̀-ͯ]/g, '') // sin tildes — el audio transcripto a veces no las trae
+      .trim();
     if (!t) return null;
     // Puerta barata: solo seguimos si el mensaje huele a consulta de medicación/turnos.
     // (Sin `\b` de cierre: son raíces — "proxima", "medicacion", "tomando"…)
-    if (!/\b(tom[aoe]|tomé|tomar|pastill|remedi|medicaci|medicament|dosis|turno|cita|consulta|pr[oó]xim|cu[aá]nto\s+falta|horario|a\s+qu[eé]\s+hora)/.test(t))
+    if (!/\b(tom[aoe]|tome|tomar|pastill|remedi|medicaci|medicament|dosis|turno|cita|consulta|proxim|cuanto\s+falta|horario|a\s+que\s+hora|agendad|reservad|programad)/.test(t))
       return null;
+
+    // ¿Es claramente una PREGUNTA / pedido de información? (empieza con interrogativo,
+    // trae "?", o verbos de consulta). Sirve para no dejarla caer en "cargar medicamento".
+    const isQuestion =
+      /[?¿]/.test(text || '') ||
+      /^(que|qué|cual|cuál|cuando|cuándo|como|cómo|donde|dónde|tengo|hay|tenes|tenés|me\s+pod|pod(e|é)s|podr|quiero\s+saber|me\s+dec|decime|mostra|mostrame|ver\s+si|a\s+ver)/.test(t) ||
+      /\b(tengo\s+(alg|un|algun)|hay\s+alg|me\s+gustaria\s+(ver|saber)|quiero\s+ver|puedo\s+ver)\b/.test(t);
 
     const [meds, reminders] = await Promise.all([
       prisma.user.findUnique({ where: { id: userId }, select: { currentMedications: true } }),
@@ -607,8 +618,13 @@ export class MedicationReminderService {
       return `✅ Anotado que tomaste ahora.\n${lines.join('\n')}`;
     }
 
-    // --- "¿qué estoy tomando?" / "¿cómo se llama lo que tomo?" ---
-    if (/\b(qu[eé]\s+(medicament|remedio|pastilla|medicaci)|c[oó]mo\s+se\s+llama|mi\s+medicaci[oó]n|qu[eé]\s+estoy\s+tomando|qu[eé]\s+tomo\b(?!\s+hoy))/.test(t) && !/\bhoy\b/.test(t) && !/a\s+qu[eé]\s+hora/.test(t)) {
+    // --- "¿qué estoy tomando?" / "¿cómo se llama lo que tomo?" / "¿qué remedios tengo?" ---
+    if (
+      /(que\s+(medicament|remedio|pastilla|medicaci)|como\s+se\s+llama|mi\s+medicaci|que\s+estoy\s+tomando|que\s+tomo\b(?!\s+hoy)|que\s+remedios?\s+(tengo|uso|hay)|remedios?\s+que\s+(tomo|uso)|mis?\s+(remedios?|medicament|pastillas?)|lista\s+de\s+(remedios?|medic))/.test(t) &&
+      !/\bhoy\b/.test(t) &&
+      !/a\s+que\s+hora/.test(t) &&
+      !/(proxim|cuanto\s+falta|ahora\b|tengo\s+que\s+tomar)/.test(t)
+    ) {
       const parts: string[] = [];
       if (medList.length) parts.push(`💊 *Tu medicación cargada (${medList.length}):*\n${formatMedications(medList, { max: 20 })}`);
       if (medReminders.length) {
@@ -627,16 +643,19 @@ export class MedicationReminderService {
       return parts.join('\n\n');
     }
 
-    // --- "¿cuándo es mi próximo turno?" ---
+    // --- "¿tengo alguna cita/turno?" / "¿cuándo es mi próximo turno?" ---
     // Consulta de turno — NO cuando el mensaje trae fecha+hora (eso es agendar, no preguntar).
-    if (
-      /\b(turno|cita|consulta)\b/.test(t) &&
-      /(cu[aá]ndo|pr[oó]xim|qu[eé]\s+d[ií]a|mi\s+(pr[oó]xim\w*\s+)?(turno|cita)|ten(?:go|és|es)\s+(?:alg[uú]n\s+)?turno|hay\s+alg[uú]n)/.test(t) &&
-      !this.parseAppointment(text)
-    ) {
+    const mentionsAppt = /\b(turno|cita|consulta|hora\s+medica)\b/.test(t);
+    const asksAppt =
+      /(cuando|proxim|que\s+dia|a\s+que\s+hora)/.test(t) ||
+      /\b(tengo|tenes|hay|ten(e|é)s)\b.{0,25}\b(turno|cita|consulta)\b/.test(t) ||
+      /\b(turno|cita|consulta)\b.{0,25}\b(reservad|agendad|programad|guardad|anotad|pendiente|para\s+(hoy|mañana|el))/.test(t) ||
+      /\bmi(s)?\s+(proxim\w*\s+)?(turno|cita|consulta)/.test(t) ||
+      /\b(alguna|algun|una)\s+(cita|turno|consulta)/.test(t);
+    if (mentionsAppt && asksAppt && !this.parseAppointment(text)) {
       const nextAppt = appts.find((r) => new Date(r.whenAt!).getTime() > now.getTime() - 3600_000);
-      if (!nextAppt) return 'No tenés turnos agendados. Escribí *5* y decime, por ejemplo: _"turno con cardiólogo el 20/10 a las 10:00"_.';
-      return `🩺 *Tu próximo turno:* ${nextAppt.medication}\n📅 ${fmtDateTime(new Date(nextAppt.whenAt!))}\nTe voy a avisar ${leadLabel(nextAppt.leadMinutes || 120)} antes.`;
+      if (!nextAppt) return '🩺 No tenés turnos agendados. Para agendar uno decime, por ejemplo: _"turno con cardiólogo el 20/10 a las 10:00"_.';
+      return `🩺 *Tu próximo turno:*\n*${nextAppt.medication}*\n📅 ${fmtDateTime(new Date(nextAppt.whenAt!))}\nTe voy a avisar ${leadLabel(nextAppt.leadMinutes || 120)} antes.`;
     }
 
     // Próximas tomas (una función común para "a qué hora" y "próxima toma").
@@ -659,8 +678,16 @@ export class MedicationReminderService {
     }
 
     // --- "¿qué tengo que tomar ahora?" / "¿cuál es mi próxima toma?" / "¿cuánto falta?" ---
-    if (/(pr[oó]xim|cu[aá]nto\s+falta|\bahora\b|qu[eé]\s+(tengo\s+que\s+|debo\s+)?tom|a\s+qu[eé]\s+hora|mis?\s+(remedios?|pastillas?|medic))/.test(t)) {
-      if (!upcoming.length) return 'No tenés medicación con horario cargada. Escribí *5* para programar una.';
+    // También cae acá cualquier PREGUNTA sobre remedios/medicación que no matcheó arriba
+    // (así nunca se interpreta como "cargar medicamento").
+    const asksDose =
+      /(proxim|cuanto\s+falta|\bahora\b|que\s+(tengo\s+que\s+|debo\s+)?tom|a\s+que\s+hora|mis?\s+(remedios?|pastillas?|medic)|que\s+remedio|remedio\s+.*(tomar|toca)|tengo\s+.*(remedio|pastilla|medic).*(tomar|programad|hoy|ahora)|toca\s+(tomar|el|algun))/.test(t);
+    if (asksDose || (isQuestion && /\b(remedi|pastill|medicaci|medicament|tom[ae]|tomar|dosis)\b/.test(t))) {
+      if (!upcoming.length) {
+        return medList.length
+          ? `💊 *Tu medicación cargada:*\n${formatMedications(medList, { max: 20 })}\n\n_No tenés horarios de aviso programados — escribí *5* para agregarlos._`
+          : 'No tenés medicación con horario cargada. Escribí *5* para programar una (ej: _"Losartán cada 8 horas"_).';
+      }
       const next = upcoming[0];
       const rest = upcoming.slice(1, 4).map((u) => `• ${u.label} — ${fmtHHMM(u.at)}`);
       return (

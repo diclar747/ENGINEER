@@ -98,19 +98,29 @@ const DOSE_RE =
 const FREQ_RE =
   /\b(?:cada\s+\d+\s?(?:h(?:oras?)?|d[ií]as?)|\d+\s?(?:x|veces?)\s?(?:\/|al|por)?\s?d[ií]a|(?:una|dos|tres|1|2|3)\s?(?:vez|veces)\s?(?:al|por)\s?d[ií]a|c\/\d+\s?h|q\.?d\.?|b\.?i\.?d\.?|t\.?i\.?d\.?|antes de dormir|en ayunas|por la (?:mañana|noche))\b/i;
 
+// Palabras que delatan que un "fragmento" es una frase / pregunta, no un fármaco.
+const NOT_A_DRUG_RE =
+  /\b(quiero|gustar[ií]a|podr[ií]a|pod[eé]s|puedo|mostr\w*|decime|ver(?:me|lo|la)?|saber|necesito|tengo|hay|cu[aá]ndo|d[oó]nde|c[oó]mo|porque|por\s+favor|gracias|hola|buenas|si\s+me|me\s+pod)\b/i;
+
 /**
  * Parser de respaldo (sin IA) para la medicación tecleada por el usuario.
  * Separa por renglones y por "," / ";" / " y ", y de cada fragmento saca
- * nombre + dosis + frecuencia con heurísticas simples.
+ * nombre + dosis + frecuencia con heurísticas simples. Rechaza fragmentos que
+ * parecen una frase/pregunta (para no crear medicamentos falsos como
+ * "me gustaría ver" o "mostrame mi medicamento").
  */
 function parseMedicationText(text: string): Array<{ name: string; dose?: string; frequency?: string }> {
   const out: Array<{ name: string; dose?: string; frequency?: string }> = [];
+  // Pregunta sin ninguna dosis → no hay medicación que extraer.
+  if (/[?¿]/.test(text) && !DOSE_RE.test(text)) return [];
+
   const chunks = text
     .split(/\r?\n|;|·|•|\s+-\s+|\s+y\s+|,(?!\s?\d)/i)
     .map((c) => c.trim())
     .filter((c) => c.length > 1);
 
   for (const chunk of chunks) {
+    if (NOT_A_DRUG_RE.test(chunk)) continue; // fragmento con verbos de frase → no es fármaco
     const dose = chunk.match(DOSE_RE)?.[0]?.replace(/\s+/g, ' ').trim();
     const frequency = chunk.match(FREQ_RE)?.[0]?.replace(/\s+/g, ' ').trim();
     let name = chunk;
@@ -360,7 +370,14 @@ export class OcrAiService {
               ? String(x.frecuencia).trim()
               : undefined,
         }))
-        .filter((m) => m.name);
+        // Descarta lo que no parece un fármaco (frases / preguntas que la IA a veces
+        // "extrae" de un mensaje que en realidad era una consulta).
+        .filter((m) => m.name && m.name.length >= 3 && m.name.split(/\s+/).length <= 4 && !NOT_A_DRUG_RE.test(m.name));
+
+    // El texto es una pregunta (signo ?) y no trae ninguna dosis → no hay nada que extraer.
+    if (input.text && /[?¿]/.test(input.text) && !DOSE_RE.test(input.text)) {
+      return [];
+    }
 
     if (input.text && input.text.trim()) {
       const ai = await NiroService.extractFields(
