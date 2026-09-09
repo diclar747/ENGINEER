@@ -140,7 +140,10 @@ export class AuthController {
       include: { emergencyContacts: true, subscriptions: { orderBy: { createdAt: 'desc' }, take: 1 } },
     });
     if (!user || !user.pinHash) {
-      res.status(404).json({ error: 'Usuario no encontrado. Registrate por WhatsApp primero.' });
+      res.status(404).json({
+        error:
+          'No encontramos ese número. Si ya te registraste por WhatsApp, escribile al bot *VINCULAR* para asociar tu número real al login (algunos WhatsApp no le pasan el número al chat). Si todavía no te registraste, escribile al bot para empezar.',
+      });
       return;
     }
     if (user.pinLockedUntil && user.pinLockedUntil > new Date()) {

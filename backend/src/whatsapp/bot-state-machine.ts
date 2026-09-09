@@ -18,6 +18,7 @@ import { AiPromptService, PromptScope } from '../services/ai-prompt.service';
 import { MedicationReminderService } from '../services/medication-reminder.service';
 import { EmailService } from '../services/email.service';
 import { NlpHandler } from './nlp-handler';
+import { whatsappBot } from './baileys.client';
 import { config } from '../config';
 import bcrypt from 'bcryptjs';
 
@@ -1254,7 +1255,8 @@ export class BotStateMachine {
         state === 'ACTIVE_RX_CONFIRM' ||
         state === 'ACTIVE_ASK_CATEGORY' ||
         state === 'ACTIVE_REMINDER' ||
-        state === 'ACTIVE_FREE_UPDATE'
+        state === 'ACTIVE_FREE_UPDATE' ||
+        state === 'ACTIVE_LINK_PHONE'
           ? state
           : 'ACTIVE_MEMBER';
 
@@ -1766,6 +1768,48 @@ export class BotStateMachine {
         };
       }
 
+      // Sub-modo: vincular el número real para poder entrar a la web. Algunos
+      // WhatsApp exponen el chat como "@lid" (identidad enlazada, por privacidad)
+      // en vez del número real — el bot igual funciona 100% por chat, pero el
+      // registro queda guardado con el id del lid, no con un número marcable, y
+      // el login web (que busca por número real) no lo encuentra. Este paso
+      // verifica, con `onWhatsApp()`, que el número que tipeó el usuario
+      // corresponde EXACTO a este mismo WhatsApp desde el que está escribiendo
+      // ahora, antes de guardarlo — así nadie puede robarse otra cuenta tipeando
+      // un número ajeno.
+      if (subMode === 'ACTIVE_LINK_PHONE') {
+        if (isResetCmd(cleanText)) {
+          await updateState('ACTIVE_MEMBER', {});
+          return { replyText: `${tr('Cancelado.', 'Oñemboyke.')}\n\n` };
+        }
+        const typed = cleanText.replace(/[^0-9]/g, '');
+        if (!/^\d{7,15}$/.test(typed)) {
+          return {
+            replyText: `Ese no parece un número válido. Escribilo completo, con código de país y sin espacios ni guiones (ej: *595981123456*), o *SALIR* para cancelar.`,
+          };
+        }
+        const lookup = await whatsappBot.lookupNumber(typed);
+        const typedLid = (lookup?.lid || '').split('@')[0];
+        if (!lookup || lookup.exists === false || !typedLid || typedLid !== rawPhone) {
+          return {
+            replyText: `😕 Ese número no coincide con el WhatsApp desde el que me estás escribiendo ahora mismo. Tiene que ser exactamente este mismo. Probá de nuevo o escribí *SALIR*.`,
+          };
+        }
+        const clash = await prisma.user.findFirst({ where: { phoneNumber: typed, NOT: { id: user.id } }, select: { id: true } });
+        if (clash) {
+          return {
+            replyText: `Ya existe otra cuenta con ese número en Bio-Pass. Escribí a soporte@bio-pass.com para que lo resolvamos.`,
+          };
+        }
+        await prisma.user.update({ where: { id: user.id }, data: { phoneNumber: typed, whatsappJid: lookup.lid || undefined } });
+        await updateState('ACTIVE_MEMBER', {});
+        return {
+          replyText:
+            `✅ *Listo, tu número quedó vinculado.*\n\n` +
+            `Ya podés entrar a *bio-pass.cnid.com.py/login* con el número *${typed}* y tu PIN — no hace falta registrarte de nuevo, es la misma cuenta que ya creaste por acá.`,
+        };
+      }
+
       // ===== A partir de acá subMode === 'ACTIVE_MEMBER' (menú) =====
 
       // Archivo suelto sin haber elegido opción → preguntar categoría
@@ -1883,6 +1927,21 @@ export class BotStateMachine {
         return {
           replyText: `👨‍⚕️ *Soporte Técnico Doorway Cortex Bio-Pass:*\n\n` +
             `Para asistencia médica, corporativa o reclamos de facturación, escribí a soporte@bio-pass.com o llamá al +595 21 500 000.`,
+        };
+      }
+
+      // Vincular número real (para el login web) — ver el bloque ACTIVE_LINK_PHONE.
+      if (/\b(vincular|entrar a la web|acceso web|no puedo entrar|login web|iniciar sesi[oó]n)\b/i.test(cleanText)) {
+        if (rawPhone === user.phoneNumber) {
+          return {
+            replyText: `✅ Tu número ya está vinculado. Ya podés entrar a *bio-pass.cnid.com.py/login* con *${user.phoneNumber}* y tu PIN.`,
+          };
+        }
+        await updateState('ACTIVE_LINK_PHONE', {});
+        return {
+          replyText:
+            `🔑 *Vincular tu número para el login web*\n\n` +
+            `Tu WhatsApp no le pasa tu número real al bot (pasa con algunas cuentas, por privacidad), así que la web todavía no reconoce tu número. Escribí tu número completo con código de país, sin espacios (ej: *595981123456*), y lo verifico.\n\n_Escribí *SALIR* para cancelar._`,
         };
       }
 
