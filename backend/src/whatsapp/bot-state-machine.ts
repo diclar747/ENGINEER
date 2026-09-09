@@ -1924,14 +1924,19 @@ export class BotStateMachine {
         // agregar (texto tecleado o transcripto de audio) → se interpreta con la IA
         // de Niro (+ regex de respaldo) y se pasa al diálogo guiado / confirmación.
         if (cleanText && !/^\d{1,2}$/.test(cleanText)) {
+          if (isSmallTalk(cleanText)) return { replyText: showList() };
           const parsed = await MedicationReminderService.parseReminderRequest(cleanText);
-          if (parsed) return advanceRemind(parsed);
-          return {
-            replyText: tr(
-              '😕 No te entendí. Decime el *medicamento y cada cuánto* — _"Losartán 50 mg cada 8 horas"_ o _"Enalapril 08:00 y 21:00"_ — o el *turno* — _"turno con cardiólogo el 15/10 a las 14:30"_.\n\n_O escribí *LISTO* para volver._',
-              '😕 Ndaikũmbýi. Pohã: *réra + hora*. Turno: *"turno 15/10 14:30"*.\n_Ehai *LISTO* rehóvo._'
-            ),
-          };
+          // Si no salió nada estructurado pero el texto parece un nombre de fármaco
+          // (una o dos palabras, sin verbos de pedido ni saludos), lo tomamos como el nombre.
+          if (
+            !parsed.medication && !parsed.whenAt && !parsed.times?.length && !parsed.intervalHours &&
+            parsed.kind === 'MED' &&
+            /^[\p{L}][\p{L}\s.\-]{2,40}$/u.test(cleanText.trim()) &&
+            !/\b(quiero|recuerd|recorda|recu[eé]rd|tomar|tomo|pastilla|medicament|remedio|alarma|avis|cada|hora|gracias|dale|listo|s[ií]|no|buenas?|hola|ok)\b/i.test(lc)
+          ) {
+            parsed.medication = cleanText.trim().slice(0, 80);
+          }
+          return advanceRemind(parsed);
         }
 
         return { replyText: showList() };
@@ -2200,6 +2205,25 @@ export class BotStateMachine {
         };
       }
 
+      // Registrar recordatorio / turno hablando ("quiero un recordatorio para tomar…",
+      // "recordame tomar…", "tengo una cita el…"). Debe ir ANTES del menú numerado,
+      // porque la opción [5] captura cualquier mensaje con "recordatorio"/"recordar".
+      // Arranca el diálogo guiado (pregunta lo que falte y pide confirmación).
+      if (
+        /\b(quiero|necesito|quisiera|pod[eé]s|puedes)\b.{0,35}\b(record\w*|recu[eé]rd\w*|alarma|aviso|avis\w*|agend\w*|program\w*)\b/.test(lc) ||
+        /\bhacerme\s+recordar\b/.test(lc) ||
+        /\b(record\w*|recu[eé]rd\w*)\b.{0,45}\b(tom(ar|e|é|o)|pastilla|remedio|medic|c[aá]psula|dosis|inyecci|gotas?|jarabe|cada\s+\d|a\s+las?\s+\d|\d{1,2}[:h]\d)/.test(lc) ||
+        /\b(record\w*|recu[eé]rd\w*|alarma)\b.{0,10}$/.test(lc) ||
+        /\b(tengo|sacar|saqu[eé]|agend[eé]?|reserv[eé]?|me\s+dieron|dan|me\s+agendaron)\b.{0,30}\b(cita|turno|consulta|hora\s+m[eé]dica)\b/.test(lc) ||
+        /\b(cita|turno|consulta)\s+(m[eé]dic|con\s+(el|la|mi|dr|dra|doctor|traumat|cardi|ped|gine|derma|oftalm|neuro))/.test(lc) ||
+        // frase que ya trae fármaco + horario explícito ("Enalapril 10 mg 08:00 y 21:00",
+        // "Ibuprofeno cada 8 horas") — se agenda como recordatorio, no como "cargar med".
+        (/\b(a\s+las?\s+\d|cada\s+\d+\s*h|\d{1,2}:\d{2})\b/.test(lc) && !!MedicationReminderService.parse(cleanText))
+      ) {
+        const parsedReq = await MedicationReminderService.parseReminderRequest(cleanText);
+        return advanceRemind(parsedReq);
+      }
+
       // "ya no tomo X" / "sacar X" → quitar de la medicación actual
       const stopMed = cleanText.match(/^\s*(?:ya no (?:tomo|uso)|dej[eé] de (?:tomar|usar)|sacar|quitar|eliminar|borrar)\s+(.{2,})/i);
       if (stopMed) {
@@ -2396,21 +2420,6 @@ export class BotStateMachine {
             ) + tr('\n\n_Te adjunto el más reciente._', '\n\n_Amondo pe ipyahuvéva._'),
           mediaAttachment,
         };
-      }
-
-      // Registrar recordatorio / turno hablando desde el menú general
-      // ("quiero un recordatorio para tomar...", "tengo una cita el...", "recordame tomar...").
-      // Arranca el diálogo guiado (que pregunta lo que falte y pide confirmación).
-      if (
-        /\bquiero\s+(registrar|poner|crear|programar|agregar|agendar)\b/.test(lc) ||
-        /\bhacerme\s+recordar\b/.test(lc) ||
-        /\brecord[aá]r?me\b.*\b(tom(ar|e|é|o)|pastilla|remedio|medic|c[aá]psula|dosis|inyecci|gotas?)\b/.test(lc) ||
-        /\b(record[aá]r?me|recordatorio|alarma)\b.*\bcada\s+\d/.test(lc) ||
-        /\b(tengo|sacar|saqu[eé]|agend[eé]?|reserv[eé]?|dan|me dieron)\b.{0,30}\b(cita|turno|consulta|hora m[eé]dica)\b/.test(lc) ||
-        /\b(cita|turno|consulta)\s+(m[eé]dic|con\s+(el|la|mi|dr))/.test(lc)
-      ) {
-        const parsedReq = await MedicationReminderService.parseReminderRequest(cleanText);
-        return advanceRemind(parsedReq || { kind: /\b(cita|turno|consulta)\b/.test(lc) ? 'APPOINTMENT' : 'MED' });
       }
 
       // Natural Language Processing of incoming text

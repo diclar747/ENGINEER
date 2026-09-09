@@ -154,7 +154,7 @@ export class EmergencyService {
     const medicationSchedule = reminders.map((r) => {
       if (r.scheduleKind === 'INTERVAL' && r.intervalHours) {
         const next = r.nextDoseAt
-          ? new Date(r.nextDoseAt).toLocaleTimeString('es-PY', { timeZone: config.timezone, hour: '2-digit', minute: '2-digit', hour12: false })
+          ? new Date(r.nextDoseAt).toLocaleTimeString('en-GB', { timeZone: config.timezone, hour: '2-digit', minute: '2-digit', hourCycle: 'h23' })
           : null;
         return { medication: r.medication, dose: r.dose || undefined, times: [`cada ${r.intervalHours} h${next ? ` · próxima ${next}` : ''}`] };
       }

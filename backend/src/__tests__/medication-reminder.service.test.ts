@@ -73,6 +73,41 @@ describe('parse() — dosis caseras y horarios', () => {
   });
 });
 
+describe('parseReminderRequest (fallback regex, Niro OFF)', () => {
+  it('nunca devuelve null y saca el envoltorio del pedido', async () => {
+    const d = await MedicationReminderService.parseReminderRequest('quiero que me recuerdes tomar una pastilla');
+    expect(d).toBeTruthy();
+    expect(d.kind).toBe('MED');
+    // "una pastilla" no es un fármaco concreto → sin medication, el bot lo preguntará
+    expect(d.medication).toBeFalsy();
+  });
+
+  it('arma un borrador INTERVAL completo de una frase', async () => {
+    const d = await MedicationReminderService.parseReminderRequest('Losartán 50 mg cada 6 horas, tomé hace 2 horas');
+    expect(d.kind).toBe('MED');
+    expect(d.scheduleKind).toBe('INTERVAL');
+    expect(d.intervalHours).toBe(6);
+    expect(d.medication?.toLowerCase()).toContain('losartán');
+    expect(d.anchorAt).toBeTruthy();
+  });
+
+  it('detecta un turno con fecha y hora', async () => {
+    const dt = new Date(Date.now() + 30 * 86400_000);
+    const dd = String(dt.getDate()).padStart(2, '0');
+    const mm = String(dt.getMonth() + 1).padStart(2, '0');
+    const d = await MedicationReminderService.parseReminderRequest(`turno con cardiólogo el ${dd}/${mm} a las 10:00`);
+    expect(d.kind).toBe('APPOINTMENT');
+    expect(d.whenAt).toBeTruthy();
+  });
+});
+
+describe('parseAppointment — limpieza de la nota', () => {
+  it('saca "tengo una cita con el" y capitaliza', () => {
+    const r = MedicationReminderService.parseAppointment('tengo una cita con el cardiologo el 15/12 a las 14:30');
+    expect(r?.note).toBe('Cardiologo');
+  });
+});
+
 describe('draftNextStep', () => {
   it('MED: pide nombre, luego frecuencia, luego última toma (INTERVAL), luego dosis', () => {
     expect(MedicationReminderService.draftNextStep({ kind: 'MED' })).toBe('name');

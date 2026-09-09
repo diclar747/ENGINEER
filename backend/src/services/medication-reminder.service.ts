@@ -48,11 +48,11 @@ function extractTimes(text: string): string[] {
     if (!pm && h === 12) h = 0;
     if (h >= 0 && h <= 23) out.add(`${String(h).padStart(2, '0')}:${min}`);
   }
-  // "8hs" / "20 h" / "a las 9" / "cada 8 horas" NO (esa es frecuencia, no hora puntual)
+  // "8hs" / "20 h" / "a las 9" — pero NO "cada 8 horas" ni "hace 2 horas" (frecuencia / relativo).
   for (const m of t.matchAll(/\b(?:a\s+las\s+)?(\d{1,2})\s*(?:h|hs|hrs|horas)\b/g)) {
     const h = parseInt(m[1], 10);
     const idx = m.index ?? 0;
-    if (/cada\s*$/.test(t.slice(Math.max(0, idx - 6), idx))) continue;
+    if (/\b(cada|hace|en|dentro de|por)\s*$/.test(t.slice(Math.max(0, idx - 12), idx))) continue;
     if (h >= 0 && h <= 23) out.add(`${String(h).padStart(2, '0')}:00`);
   }
 
@@ -124,23 +124,21 @@ function leadLabel(mins: number): string {
   return LEAD_LABEL[mins] || (mins % 60 === 0 ? `${mins / 60} h` : `${mins} min`);
 }
 
+const TZ = () => config.timezone || 'America/Asuncion';
 function fmtDateTime(d: Date): string {
   return d.toLocaleString('es-PY', {
-    timeZone: config.timezone || 'America/Asuncion',
+    timeZone: TZ(),
     weekday: 'long',
     day: '2-digit',
     month: '2-digit',
+    hourCycle: 'h23',
     hour: '2-digit',
     minute: '2-digit',
   });
 }
+/** "HH:MM" 24h siempre (en-GB evita el "24:37" de la medianoche en es-PY). */
 function fmtHHMM(d: Date): string {
-  return d.toLocaleTimeString('es-PY', {
-    timeZone: config.timezone || 'America/Asuncion',
-    hour: '2-digit',
-    minute: '2-digit',
-    hour12: false,
-  });
+  return d.toLocaleTimeString('en-GB', { timeZone: TZ(), hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
 }
 function humanIn(ms: number): string {
   if (ms <= 60_000) return 'menos de 1 min';
@@ -257,14 +255,19 @@ export class MedicationReminderService {
     if (isNaN(whenAt.getTime()) || whenAt.getTime() < Date.now() - 3600_000) return null;
 
     let note = text
+      .replace(
+        /^\s*(?:hola[,\s]+)?(?:tengo|ten[eé]s|hay|me\s+dieron|saqu[eé]|reserv[eé]|agend[eé]|me\s+agendaron)\s+(?:un[ao]?\s+)?(?:cita|turno|consulta|hora\s+m[eé]dica)\s*(?:con\s+(?:el|la|mi|un[ao]?)?\s*)?/i,
+        ''
+      )
       .replace(/\b(recorda(?:r|torio|me)?|recu[eé]rdame|el|la|los|las|a\s+las?|de|para|mi|un[a]?)\b/gi, ' ')
       .replace(/\b[0-3]?\d[\/.\-][01]?\d(?:[\/.\-]\d{2,4})?\b/g, ' ')
       .replace(/\b\d{1,2}(?::[0-5]\d)?\s*(a\.?m\.?|p\.?m\.?|h|hs|hrs|horas)?\b/gi, ' ')
       .replace(/\b(mañana|pasado|hoy|lunes|martes|mi[eé]rcoles|jueves|viernes|s[aá]bado|domingo)\b/gi, ' ')
-      .replace(/\b(avisame|avisar|antes|una|hora|horas|minutos?|d[ií]a\s+antes)\b/gi, ' ')
+      .replace(/\b(avisame|avis[aá]|avisar|antes|una|hora|horas|minutos?|d[ií]a\s+antes)\b/gi, ' ')
       .replace(/\s+/g, ' ')
       .trim();
     if (note.length < 3) note = 'Consulta médica';
+    note = note.charAt(0).toUpperCase() + note.slice(1);
 
     return { note: note.slice(0, 120), whenAt };
   }
@@ -322,15 +325,24 @@ export class MedicationReminderService {
    * de Niro; si Niro no está disponible o no devuelve nada, cae a los parsers regex.
    * Devuelve un borrador parcial — el bot completa lo que falte preguntando.
    */
-  static async parseReminderRequest(text: string): Promise<Partial<ReminderDraft> | null> {
-    const raw = (text || '').trim();
-    if (!raw) return null;
+  static async parseReminderRequest(text: string): Promise<Partial<ReminderDraft>> {
+    const original = (text || '').trim();
+    // Saca el "envoltorio" del pedido para que el parser regex vea solo el contenido:
+    // "quiero que me recuerdes tomar losartán…" → "losartán…".
+    const raw = original
+      .replace(
+        /^\s*(?:hola[,\s]+)?(?:por favor[,\s]+)?(?:quiero|necesito|me gustar[ií]a|quisiera|pod[eé]s|puedes)\s+(?:que\s+)?(?:me\s+)?(?:recuerd\w*|acuerdes|hacerme\s+recordar|program\w*|agend\w*|poner\w*|crear\w*|agregar|registr\w*|avis\w*)\s+(?:que\s+)?(?:tome?|tomar|de\s+tomar)?\s*/i,
+        ''
+      )
+      .replace(/^\s*(?:recu[eé]rdame|record[aá]me|acord[aá]te|avisame)\s+(?:que\s+)?(?:tome?|tomar|de\s+tomar)?\s*/i, '')
+      .trim();
+    if (!original) return { kind: 'MED' };
 
     const draft: Partial<ReminderDraft> = {};
 
     if (NiroService.enabled) {
       const ai = await NiroService.extractFields(
-        raw,
+        original,
         'De este pedido para programar un recordatorio de medicación o un turno médico, devolvé JSON con: ' +
           'kind ("MED" o "APPOINTMENT"); ' +
           'medication (nombre del medicamento, o para un turno la especialidad/descripción); ' +
@@ -406,12 +418,17 @@ export class MedicationReminderService {
         }
       }
     }
-    if (!draft.anchorAt && /\b(reci[eé]n|hace\s+\d|hace\s+un|a\s+las\s+\d)/i.test(raw) && draft.scheduleKind === 'INTERVAL') {
+    if (
+      !draft.anchorAt &&
+      draft.scheduleKind === 'INTERVAL' &&
+      /\b(reci[eé]n|hace\s+(un|media|\d)|a\s+las\s+\d|tom[eé]\s)/i.test(raw)
+    ) {
       draft.anchorAt = this.resolveLastTaken(raw).toISOString();
     }
 
-    if (!draft.kind && !draft.medication && !draft.whenAt) return null;
-    if (!draft.kind) draft.kind = draft.whenAt ? 'APPOINTMENT' : 'MED';
+    // Nunca devuelve null: si no hay datos concretos, arranca un borrador vacío del
+    // tipo detectado para que el diálogo guiado pregunte lo que falte.
+    if (!draft.kind) draft.kind = draft.whenAt || /\b(cita|turno|consulta|hora\s+m[eé]dica)\b/i.test(raw) ? 'APPOINTMENT' : 'MED';
     return draft;
   }
 
@@ -503,9 +520,10 @@ export class MedicationReminderService {
         if (r.kind === 'APPOINTMENT') {
           const w = r.whenAt
             ? new Date(r.whenAt).toLocaleString('es-PY', {
-                timeZone: config.timezone || 'America/Asuncion',
+                timeZone: TZ(),
                 day: '2-digit',
                 month: '2-digit',
+                hourCycle: 'h23',
                 hour: '2-digit',
                 minute: '2-digit',
               })
@@ -536,7 +554,8 @@ export class MedicationReminderService {
     const t = (text || '').toLowerCase().trim();
     if (!t) return null;
     // Puerta barata: solo seguimos si el mensaje huele a consulta de medicación/turnos.
-    if (!/\b(tom(ar|o|e|é|as|a)|pastilla|remedio|medicaci|medicament|dosis|turno|cita|consulta|pr[oó]xim|cu[aá]nto falta|horario|a que hora|a qué hora)\b/.test(t))
+    // (Sin `\b` de cierre: son raíces — "proxima", "medicacion", "tomando"…)
+    if (!/\b(tom[aoe]|tomé|tomar|pastill|remedi|medicaci|medicament|dosis|turno|cita|consulta|pr[oó]xim|cu[aá]nto\s+falta|horario|a\s+qu[eé]\s+hora)/.test(t))
       return null;
 
     const [meds, reminders] = await Promise.all([
@@ -594,7 +613,12 @@ export class MedicationReminderService {
     }
 
     // --- "¿cuándo es mi próximo turno?" ---
-    if (/\b(turno|cita|consulta)\b/.test(t) && /\b(pr[oó]xim|cu[aá]ndo|tengo|hay|mi)\b/.test(t)) {
+    // Consulta de turno — NO cuando el mensaje trae fecha+hora (eso es agendar, no preguntar).
+    if (
+      /\b(turno|cita|consulta)\b/.test(t) &&
+      /(cu[aá]ndo|pr[oó]xim|qu[eé]\s+d[ií]a|mi\s+(pr[oó]xim\w*\s+)?(turno|cita)|ten(?:go|és|es)\s+(?:alg[uú]n\s+)?turno|hay\s+alg[uú]n)/.test(t) &&
+      !this.parseAppointment(text)
+    ) {
       const nextAppt = appts.find((r) => new Date(r.whenAt!).getTime() > now.getTime() - 3600_000);
       if (!nextAppt) return 'No tenés turnos agendados. Escribí *5* y decime, por ejemplo: _"turno con cardiólogo el 20/10 a las 10:00"_.';
       return `🩺 *Tu próximo turno:* ${nextAppt.medication}\n📅 ${fmtDateTime(new Date(nextAppt.whenAt!))}\nTe voy a avisar ${leadLabel(nextAppt.leadMinutes || 120)} antes.`;
@@ -620,7 +644,7 @@ export class MedicationReminderService {
     }
 
     // --- "¿qué tengo que tomar ahora?" / "¿cuál es mi próxima toma?" / "¿cuánto falta?" ---
-    if (/\b(pr[oó]xim|cu[aá]nto\s+falta|ahora|qu[eé]\s+(tengo\s+que\s+|debo\s+)?tom|a\s+qu[eé]\s+hora)\b/.test(t)) {
+    if (/(pr[oó]xim|cu[aá]nto\s+falta|\bahora\b|qu[eé]\s+(tengo\s+que\s+|debo\s+)?tom|a\s+qu[eé]\s+hora|mis?\s+(remedios?|pastillas?|medic))/.test(t)) {
       if (!upcoming.length) return 'No tenés medicación con horario cargada. Escribí *5* para programar una.';
       const next = upcoming[0];
       const rest = upcoming.slice(1, 4).map((u) => `• ${u.label} — ${fmtHHMM(u.at)}`);
