@@ -143,6 +143,22 @@ describe('answerQuery — consulta de turnos/medicación (no debe caer en "carga
     expect(r).toMatch(/Cardiólogo/);
   });
 
+  it('"que cita tengo regitrado" (typo, sin ?) → responde el turno', async () => {
+    db.user = { currentMedications: null };
+    db.reminders = [
+      { id: 'a1', kind: 'APPOINTMENT', medication: 'Doctor Kodak', whenAt: new Date(Date.now() + 2 * 86400_000), leadMinutes: 10, active: true, scheduleKind: null, intervalHours: null, nextDoseAt: null, times: '[]', dose: null },
+    ];
+    const r = await MedicationReminderService.answerQuery('u1', 'que cita tengo regitrado');
+    expect(r).toMatch(/Doctor Kodak/);
+    expect(r).toMatch(/2 horas antes/); // leadMinutes 10 → se normaliza a 120
+  });
+
+  it('"quiero registrar una cita con el cardiólogo mañana 9:00" → NO lo trata como consulta (deja pasar a registrar)', async () => {
+    db.user = { currentMedications: null };
+    db.reminders = [];
+    expect(await MedicationReminderService.answerQuery('u1', 'quiero registrar una cita con el cardiólogo mañana 9:00')).toBeNull();
+  });
+
   it('"tengo alguna cita?" sin turnos → dice que no hay (no null)', async () => {
     db.user = { currentMedications: null };
     db.reminders = [];

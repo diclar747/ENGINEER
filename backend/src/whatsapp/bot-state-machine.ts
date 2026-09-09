@@ -64,8 +64,17 @@ async function askNiro(
 ): Promise<string | null> {
   if (!NiroService.enabled || !userText || userText.trim().length < 4) return null;
   const system = await AiPromptService.getSystemPrompt(opts.scope || 'GENERAL');
+  // Nota de capacidades — los prompts guardados en /admin pueden estar desactualizados
+  // (hacían que la IA respondiera "Bio-Pass no gestiona citas médicas").
+  const caps =
+    opts.scope === 'MIEMBRO_ACTIVO'
+      ? ' DATO IMPORTANTE (no lo contradigas): Bio-Pass SÍ permite, por WhatsApp (opción 5 del menú), ' +
+        'programar *recordatorios de toma de medicación* ("cada X horas" o a horas fijas) y *recordatorios de turnos / citas médicas*. ' +
+        'NO reserva la cita con el consultorio: solo le avisa al titular antes. ' +
+        'El titular puede preguntar "¿qué cita tengo?", "¿cuál es mi próxima toma?", "¿qué estoy tomando?" y el sistema le responde con sus datos reales.'
+      : '';
   return NiroService.chat([
-    { role: 'system', content: system + (opts.name ? ` El usuario se llama ${opts.name}.` : '') },
+    { role: 'system', content: system + caps + (opts.name ? ` El usuario se llama ${opts.name}.` : '') },
     { role: 'user', content: userText.trim() },
   ]);
 }

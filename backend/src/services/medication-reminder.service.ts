@@ -623,16 +623,21 @@ export class MedicationReminderService {
       return `✅ Anotado que tomaste ahora.\n${lines.join('\n')}`;
     }
 
-    // --- "¿tengo alguna cita/turno?" / "¿cuándo es mi próximo turno?" (va primero: es menos ambiguo) ---
-    // NO cuando el mensaje trae fecha+hora (eso es agendar, no preguntar).
+    // --- "¿qué cita tengo registrada?" / "¿tengo turno?" / "¿cuándo es mi próximo turno?" ---
+    // Va primero (es menos ambiguo). NO cuando el mensaje trae fecha+hora (eso es agendar),
+    // ni cuando es una orden de crear/borrar/mover.
     const mentionsAppt = /\b(turno|cita|consulta|hora\s+medica)\b/.test(t);
+    const isRegistrationVerb = /^(quiero|necesito|quisiera|agend|program|reserv|anot[aá]|pon[eé]r?me|cre[aá]r?|sac[aá]r?me\s+un)/.test(t);
+    const isEditVerb = /\b(borr|elimin|quit[aá]|cancel|cambi|modific|mov[eé]r?|reprogram)/.test(t);
     const asksAppt =
-      /(cuando|proxim|que\s+dia)/.test(t) ||
-      /\b(tengo|tenes|hay|ten(e|é)s)\b.{0,25}\b(turno|cita|consulta)\b/.test(t) ||
-      /\b(turno|cita|consulta)\b.{0,25}\b(reservad|agendad|programad|guardad|anotad|pendiente|para\s+(hoy|mañana|el))/.test(t) ||
+      isQuestion ||
+      /(cuando|cual|proxim|que\s+dia|que\s+hora)/.test(t) ||
+      /\bque\s+(cita|turno|consulta)s?\b/.test(t) ||
+      /\b(tengo|tenes|ten(e|é)s|hay)\b.{0,30}\b(turno|cita|consulta)/.test(t) ||
+      /\b(turno|cita|consulta)s?\b.{0,30}\b(tengo|tenes|registrad|regitrad|anotad|agendad|reservad|guardad|programad|pendiente|para\s+(hoy|mañana|el|cuando))/.test(t) ||
       /\bmi(s)?\s+(proxim\w*\s+)?(turno|cita|consulta)/.test(t) ||
-      /\b(alguna|algun|una)\s+(cita|turno|consulta)/.test(t);
-    if (mentionsAppt && asksAppt && !this.parseAppointment(text)) {
+      /\b(alguna|algun|una|algo\s+de)\s+(cita|turno|consulta)/.test(t);
+    if (mentionsAppt && asksAppt && !isRegistrationVerb && !isEditVerb && !this.parseAppointment(text)) {
       const nextAppt = appts.find((r) => new Date(r.whenAt!).getTime() > now.getTime() - 3600_000);
       if (!nextAppt) return '🩺 No tenés turnos agendados. Para agendar uno decime, por ejemplo: _"turno con cardiólogo el 20/10 a las 10:00"_.';
       return `🩺 *Tu próximo turno:*\n*${nextAppt.medication}*\n📅 ${fmtDateTime(new Date(nextAppt.whenAt!))}\nTe voy a avisar ${leadLabel(apptLead(nextAppt.leadMinutes))} antes.`;
