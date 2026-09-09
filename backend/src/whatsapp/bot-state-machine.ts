@@ -1539,6 +1539,38 @@ export class BotStateMachine {
         return { replyText: `✅ ${tr('Listo.', 'Oĩma.')}\n\n${activeMenu()}` };
       }
 
+      // Vincular número real (para el login web) y activar notificaciones push:
+      // funcionan SIEMPRE, estés en el sub-modo que estés — antes solo se
+      // reconocían con subMode === 'ACTIVE_MEMBER', así que alguien "atascado"
+      // dentro de otro sub-flujo (ej: actualización de perfil sin haber escrito
+      // LISTO) los mandaba y el bot los interpretaba con la lógica de ESE
+      // sub-modo en vez de reconocerlos — VINCULAR nunca llegaba a ejecutarse.
+      if (/\b(vincular|entrar a la web|acceso web|no puedo entrar|login web|iniciar sesi[oó]n)\b/i.test(cleanText)) {
+        // OJO: `rawPhone === user.phoneNumber` NO sirve para decidir esto — para una
+        // cuenta @lid sin arreglar, `phoneNumber` se guardó como el propio `rawPhone`
+        // (el id del lid) al crearse, así que esa comparación da "true" siempre y
+        // el bot terminaba devolviendo el número raro del lid como si fuera el real.
+        // La señal correcta es si ESTA conversación llega por @lid o no.
+        if (!msg.isLid) {
+          return {
+            replyText: `✅ Tu número ya está vinculado. Ya podés entrar a *bio-pass.cnid.com.py/login* con *${user.phoneNumber}* y tu PIN.`,
+          };
+        }
+        await updateState('ACTIVE_LINK_PHONE', {});
+        return {
+          replyText:
+            `🔑 *Vincular tu número para el login web*\n\n` +
+            `Tu WhatsApp no le pasa tu número real al bot (pasa con algunas cuentas, por privacidad), así que la web todavía no reconoce tu número. Escribí tu número completo con código de país, sin espacios (ej: *595981123456*), y lo verifico.\n\n_Escribí *SALIR* para cancelar._`,
+        };
+      }
+      if (/\b(notificaci[oó]n(es)?|alertas?\s*push|activar\s*push|push)\b/i.test(cleanText)) {
+        return {
+          replyText:
+            `🔔 *Activá notificaciones push en tu celular*\n\n` +
+            `Además del aviso acá por WhatsApp, te avisamos al instante en la pantalla cada vez que alguien escanea tu QR de emergencia. Abrí este link y aceptá:\n${config.frontendUrl}/push/${user.emergencyToken}`,
+        };
+      }
+
       // "MENU" / "opciones" / "hola" en el menú → mostrar el menú real (no la IA)
       if (subMode === 'ACTIVE_MEMBER' && /^(menu|men[uú]|opciones|inicio|hola|buenas|0)$/i.test(cleanText)) {
         return { replyText: activeMenu() };
@@ -2041,36 +2073,6 @@ export class BotStateMachine {
         return {
           replyText: `👨‍⚕️ *Soporte Técnico Doorway Cortex Bio-Pass:*\n\n` +
             `Para asistencia médica, corporativa o reclamos de facturación, escribí a soporte@bio-pass.com o llamá al +595 21 500 000.`,
-        };
-      }
-
-      // Vincular número real (para el login web) — ver el bloque ACTIVE_LINK_PHONE.
-      if (/\b(vincular|entrar a la web|acceso web|no puedo entrar|login web|iniciar sesi[oó]n)\b/i.test(cleanText)) {
-        // OJO: `rawPhone === user.phoneNumber` NO sirve para decidir esto — para una
-        // cuenta @lid sin arreglar, `phoneNumber` se guardó como el propio `rawPhone`
-        // (el id del lid) al crearse, así que esa comparación da "true" siempre y
-        // el bot terminaba devolviendo el número raro del lid como si fuera el real.
-        // La señal correcta es si ESTA conversación llega por @lid o no.
-        if (!msg.isLid) {
-          return {
-            replyText: `✅ Tu número ya está vinculado. Ya podés entrar a *bio-pass.cnid.com.py/login* con *${user.phoneNumber}* y tu PIN.`,
-          };
-        }
-        await updateState('ACTIVE_LINK_PHONE', {});
-        return {
-          replyText:
-            `🔑 *Vincular tu número para el login web*\n\n` +
-            `Tu WhatsApp no le pasa tu número real al bot (pasa con algunas cuentas, por privacidad), así que la web todavía no reconoce tu número. Escribí tu número completo con código de país, sin espacios (ej: *595981123456*), y lo verifico.\n\n_Escribí *SALIR* para cancelar._`,
-        };
-      }
-
-      // Activar notificaciones push del navegador (disponible en cualquier momento,
-      // no solo la única vez que se manda tras confirmar el pago).
-      if (/\b(notificaci[oó]n(es)?|alertas?\s*push|activar\s*push|push)\b/i.test(cleanText)) {
-        return {
-          replyText:
-            `🔔 *Activá notificaciones push en tu celular*\n\n` +
-            `Además del aviso acá por WhatsApp, te avisamos al instante en la pantalla cada vez que alguien escanea tu QR de emergencia. Abrí este link y aceptá:\n${config.frontendUrl}/push/${user.emergencyToken}`,
         };
       }
 
