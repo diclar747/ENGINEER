@@ -171,7 +171,7 @@ export class BaileysClient {
   private markSeen(id: string): boolean {
     if (this.seenMsgIds.has(id)) return false;
     this.seenMsgIds.add(id);
-    if (this.seenMsgIds.size > 2000) {
+    if (this.seenMsgIds.size > 8000) {
       // recorta el más viejo (orden de inserción)
       this.seenMsgIds.delete(this.seenMsgIds.values().next().value as string);
     }
@@ -358,18 +358,26 @@ export class BaileysClient {
 
         for (const msg of m.messages) {
           if (!msg.key) continue;
+          const ts = Number(msg.messageTimestamp) || 0;
 
           if (m.type === 'append') {
-            const ts = Number(msg.messageTimestamp) || 0;
             if (!ts || nowSec - ts > 120) {
               // historial viejo — ignorar en silencio
               continue;
             }
-            console.log(`[WHATSAPP BOT] procesando mensaje 'append' reciente (${nowSec - ts}s) — post-vinculación`);
           }
 
-          if (msg.key.id && !this.markSeen(msg.key.id)) {
-            continue; // ya atendido (append + notify del mismo mensaje, o replay)
+          // Dedup robusto: esta sesión reentrega el MISMO mensaje muchísimas veces
+          // como `append` (a veces con otro key.id). Se dedupea por id Y por
+          // (chat + timestamp del remitente) — dos mensajes distintos en el mismo
+          // segundo del mismo chat es prácticamente imposible en un chat humano.
+          const dupById = msg.key.id ? !this.markSeen(`id:${msg.key.id}`) : false;
+          const dupByTs = ts ? !this.markSeen(`ts:${msg.key.remoteJid || '?'}|${ts}`) : false;
+          if (dupById || dupByTs) {
+            continue; // ya atendido (append/notify/replay del mismo mensaje)
+          }
+          if (m.type === 'append') {
+            console.log(`[WHATSAPP BOT] procesando mensaje 'append' reciente (${nowSec - ts}s) — post-vinculación`);
           }
 
           if (msg.key.fromMe) {

@@ -1471,53 +1471,41 @@ export class BotStateMachine {
             .join('\n');
           return {
             replyText: tr(
-              `📄 *Receta guardada en tu perfil.*\n\n💊 Medicamentos detectados:\n${listStr}\n\n` +
-                `¿Los agrego a tu *Medicación actual*?\n*[1]* Sí   *[2]* No, solo guardar la receta`,
-              `📄 *Receta oñeguarda.*\n\n💊 Pohã ojejuhúva:\n${listStr}\n\n` +
+              `✅ *Receta guardada en tu bóveda.*\n\n💊 Vi estos medicamentos:\n${listStr}\n\n` +
+                `¿Los agrego a tu *Medicación actual*?\n*[1]* Sí   *[2]* No, solo la receta`,
+              `✅ *Receta oñeguarda.*\n\n💊 Pohã ojejuhúva:\n${listStr}\n\n` +
                 `¿Ambojoapy ne *pohã ko'ág̃aguápe*?\n*[1]* Heẽ   *[2]* Nahániri`
             ),
           };
         }
         return {
           replyText: tr(
-            `📄 *Receta guardada en tu perfil.* Ya la podés pedir cuando quieras (ej: _"mostrame mi receta"_).\n\n_Si querés que los medicamentos también aparezcan en tu lista, cargalos con la opción *[1]* del menú. Mandá otra receta o escribí *LISTO*._`,
-            `📄 *Receta oñeguarda.*\n\n_Emondo ambue térã ehai *LISTO*._`
+            `✅ *Receta guardada en tu bóveda cifrada.*\n\n_Mandá otra o escribí *LISTO*._`,
+            `✅ *Receta oñeguarda nde bóvedape.*\n\n_Emondo ambue térã ehai *LISTO*._`
           ),
         };
       };
 
+      // Estudios / documentos médicos: NO se transcriben ni se analizan — se guardan
+      // tal cual (foto o PDF) en la bóveda. El titular clasifica, el sistema archiva.
       const saveEstudio = async (buffer: Buffer, filename: string): Promise<BotResponse> => {
-        const saved = await StorageService.saveFile(
-          'medical_studies',
-          `study_${user!.id}_${Date.now()}.${extFrom(filename, msg.mediaMimeType)}`,
-          buffer
-        );
-        const studyOcr = await OcrAiService.processMedicalStudy(buffer, filename);
-        // Un archivo que el usuario clasificó explícitamente como "estudio" nunca
-        // se guarda como receta aunque la IA lo confunda.
-        const st = studyOcr.studyType === 'PRESCRIPTION' ? 'OTHER' : studyOcr.studyType;
+        const ext = extFrom(filename, msg.mediaMimeType);
+        const saved = await StorageService.saveFile('medical_studies', `study_${user!.id}_${Date.now()}.${ext}`, buffer);
+        const baseName = (filename || '')
+          .replace(/\.[a-z0-9]+$/i, '')
+          .replace(/[_-]+/g, ' ')
+          .trim();
+        const title = baseName && baseName.length > 2 && !/^(estudio|image|img|photo|whatsapp|documento|scan|file)/i.test(baseName)
+          ? baseName.slice(0, 80)
+          : `Documento médico ${new Date().toLocaleDateString('es-PY', { timeZone: config.timezone })}`;
         await prisma.medicalStudy.create({
-          data: {
-            userId: user!.id,
-            title: studyOcr.title,
-            studyType: st,
-            studyDate: studyOcr.studyDate || new Date(),
-            fileUrl: saved.fileUrl,
-            ocrRawText: ZeroKnowledgeSecurity.kmsEncrypt(studyOcr.rawText),
-            aiSummary: ZeroKnowledgeSecurity.kmsEncrypt(studyOcr.aiSummary),
-            contentEncrypted: !!process.env.KMS_KEY,
-          },
+          data: { userId: user!.id, title, studyType: 'OTHER', studyDate: new Date(), fileUrl: saved.fileUrl },
         });
-        const findingsBlock = studyOcr.keyFindings.length
-          ? `\n📊 *${tr('Hallazgos', 'Ojejuhúva')}:*\n${studyOcr.keyFindings.slice(0, 6).map((f) => `• ${f}`).join('\n')}\n`
-          : '';
         return {
-          replyText:
-            `🧪 *${tr('ESTUDIO GUARDADO EN TU PERFIL', 'ESTUDIO OÑEGUARDA')}*\n\n` +
-            `📋 *${tr('Tipo', 'Tipo')}:* ${studyOcr.title}\n` +
-            `📅 *${tr('Fecha', 'Ára')}:* ${(studyOcr.studyDate || new Date()).toLocaleDateString('es-PY', { timeZone: config.timezone })}\n` +
-            `🤖 ${studyOcr.aiSummary}\n${findingsBlock}` +
-            tr('\n_Mandá otro o escribí *LISTO*._', '\n_Emondo ambue térã ehai *LISTO*._'),
+          replyText: tr(
+            `✅ *Guardado en tu bóveda cifrada.*\n_Solo vos y tu médico pueden verlo con tu PIN._\n\n_Mandá otro archivo o escribí *LISTO*._`,
+            `✅ *Oñeguarda nde bóvedape.*\n\n_Emondo ambue térã ehai *LISTO*._`
+          ),
         };
       };
 
@@ -1607,10 +1595,22 @@ export class BotStateMachine {
         return Array.from(new Set(nums)).sort();
       };
 
-      // Salir de un sub-modo de carga
+      // Salir de un sub-modo de carga → cierre lindo según el contexto.
       if (subMode !== 'ACTIVE_MEMBER' && /^(listo|menu|men[uú]|0|salir|volver|cancelar|terminar)$/i.test(cleanText)) {
+        const wantsMenu = /^(menu|men[uú]|0)$/i.test(cleanText);
         await updateState('ACTIVE_MEMBER', { rdraft: null });
-        return { replyText: `✅ ${tr('Listo.', 'Oĩma.')}\n\n${activeMenu()}` };
+        if (wantsMenu) return { replyText: activeMenu() };
+        const isUpload = ['ACTIVE_UPLOAD_MED', 'ACTIVE_UPLOAD_RX', 'ACTIVE_UPLOAD_STUDY', 'ACTIVE_RX_CONFIRM', 'ACTIVE_ASK_CATEGORY'].includes(subMode);
+        const isReminder = subMode === 'ACTIVE_REMINDER' || subMode.startsWith('ACTIVE_REMIND_');
+        const body = isUpload
+          ? tr(
+              `✅ *¡Listo! Todo quedó guardado en tu bóveda cifrada.*\nSolo vos y tu médico pueden verlo ingresando tu PIN.`,
+              `✅ *Oĩma! Opavave oñeguarda nde bóveda ñemíme.*`
+            )
+          : isReminder
+            ? tr(`✅ *¡Listo! Tus recordatorios quedaron guardados.*`, `✅ *Oĩma! Nde momandu'a oñeguarda.*`)
+            : tr(`✅ *¡Listo!*`, `✅ *Oĩma!*`);
+        return { replyText: `${body}\n\n_${tr('Escribí *MENU* para ver las opciones.', 'Ehai *MENU* rehecha hag̃ua opciones.')}_` };
       }
 
       // Consultas en lenguaje natural sobre medicación / turnos ("¿a qué hora tomo X?",
@@ -1722,8 +1722,8 @@ export class BotStateMachine {
             });
             return {
               replyText: tr(
-                '✅ *Guardé la foto en tu perfil.*\n\nNo pude leer bien el nombre/dosis, así que no quedó en tu *lista de medicación* — pero la foto ya está guardada y te la puedo mandar cuando quieras (ej: _"mostrame mi medicamento"_).\n\n_Si querés que también aparezca en la lista, escribí nombre + dosis + frecuencia (ej: "Losartán 50 mg, 1 vez al día")._',
-                '✅ *Ajagarda pe ta\'anga nde perfílpe.*\n\n_Ehai iréra + dosis + mboýpa oĩ hag̃ua ne listápe._'
+                '✅ *Foto guardada en tu bóveda.*\n_Si querés que aparezca en tu lista de medicación, escribí el nombre (ej: "Losartán 50 mg, 1 vez al día"). O mandá otra o *LISTO*._',
+                '✅ *Ta\'anga oñeguarda.*\n\n_Ehai iréra térã emondo ambue térã *LISTO*._'
               ),
             };
           }
@@ -2263,7 +2263,7 @@ export class BotStateMachine {
         await updateState('ACTIVE_UPLOAD_STUDY', {});
         return {
           replyText: tr(
-            '🧪 *Cargar estudio / evaluación médica*\n\nMandá la *foto o PDF* del análisis de sangre, radiografía, tomografía, ECG o informe.\nLa IA extrae fecha, tipo y hallazgos.\n\n_Podés mandar varios. Escribí *LISTO* cuando termines._',
+            '🧪 *Cargar estudio / evaluación médica*\n\nMandá la *foto o PDF* del análisis, radiografía, tomografía, ECG o informe.\nSe guarda tal cual en tu bóveda cifrada.\n\n_Podés mandar varios. Escribí *LISTO* cuando termines._',
             '🧪 *Emombe\'u estudio*\n\nEmondo pe *ta\'anga térã PDF*.\n\n_Ehai *LISTO* rehóvo._'
           ),
         };
