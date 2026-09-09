@@ -35,6 +35,19 @@ function clearAuthDir(dir: string): void {
   }
 }
 
+export interface BotEvent {
+  id: string;
+  ts: number;
+  dir: 'in' | 'out' | 'sys';
+  jid?: string;
+  phone?: string;
+  kind?: string; // text | image | audio | document | connection
+  preview?: string;
+  status?: 'received' | 'sent' | 'delivered' | 'read' | 'failed' | 'skipped';
+  msgId?: string;
+  error?: string;
+}
+
 export class BaileysClient {
   private sock: WASocket | null = null;
   private qrCodeDataUrl: string | null = null;
@@ -45,8 +58,69 @@ export class BaileysClient {
   private lastError: string | null = null;
   private gaveUp = false;
   private lastLogoutAt = 0;
+  private sessionSince: number | null = null;
   /** IDs de mensajes ya atendidos — evita procesar dos veces el mismo (append + notify, replays al reconectar). */
   private seenMsgIds = new Set<string>();
+
+  /** Búfer en memoria de los últimos eventos del bot (para el panel admin). Se pierde al reiniciar. */
+  private events: BotEvent[] = [];
+  private static readonly MAX_EVENTS = 500;
+
+  private logEvent(e: Omit<BotEvent, 'id' | 'ts'> & { ts?: number }): void {
+    const ev: BotEvent = {
+      id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      ts: e.ts ?? Date.now(),
+      ...e,
+      preview: e.preview ? String(e.preview).replace(/\s+/g, ' ').slice(0, 160) : e.preview,
+    };
+    this.events.unshift(ev);
+    if (this.events.length > BaileysClient.MAX_EVENTS) this.events.length = BaileysClient.MAX_EVENTS;
+  }
+
+  private setEventStatus(msgId: string | null | undefined, status: BotEvent['status']): void {
+    if (!msgId) return;
+    const ev = this.events.find((x) => x.msgId === msgId && x.dir === 'out');
+    if (ev) ev.status = status;
+  }
+
+  /** Eventos recientes, con filtros opcionales. */
+  public getEvents(opts: { limit?: number; dir?: string; phone?: string; status?: string } = {}): BotEvent[] {
+    let list = this.events;
+    if (opts.dir) list = list.filter((e) => e.dir === opts.dir);
+    if (opts.phone) list = list.filter((e) => (e.phone || '').includes(opts.phone!) || (e.jid || '').includes(opts.phone!));
+    if (opts.status) list = list.filter((e) => e.status === opts.status);
+    return list.slice(0, Math.min(opts.limit || 100, BaileysClient.MAX_EVENTS));
+  }
+
+  /** Métricas agregadas de las últimas 24 h para los tiles del panel. */
+  public getMetrics() {
+    const dayAgo = Date.now() - 24 * 60 * 60 * 1000;
+    const recent = this.events.filter((e) => e.ts >= dayAgo);
+    const out = recent.filter((e) => e.dir === 'out');
+    const delivered = out.filter((e) => e.status === 'delivered' || e.status === 'read').length;
+    const failed = out.filter((e) => e.status === 'failed').length;
+    return {
+      inbound24h: recent.filter((e) => e.dir === 'in').length,
+      outbound24h: out.length,
+      delivered24h: delivered,
+      failed24h: failed,
+      deliveryRate: out.length ? Math.round((delivered / out.length) * 100) : null,
+    };
+  }
+
+  /** ¿Está un número en WhatsApp? Devuelve su jid/lid. Para la herramienta del panel. */
+  public async lookupNumber(phone: string): Promise<{ exists: boolean; jid?: string; lid?: string } | null> {
+    const clean = (phone || '').replace(/[^0-9]/g, '');
+    if (!this.sock || !/^\d{7,15}$/.test(clean)) return null;
+    try {
+      const res = await this.sock.onWhatsApp(clean);
+      const hit: any = Array.isArray(res) ? res[0] : undefined;
+      if (!hit) return { exists: false };
+      return { exists: hit.exists !== false, jid: hit.jid, lid: hit.lid };
+    } catch {
+      return null;
+    }
+  }
 
   private markSeen(id: string): boolean {
     if (this.seenMsgIds.has(id)) return false;
@@ -110,6 +184,7 @@ export class BaileysClient {
           this.qrCodeDataUrl = await QRCode.toDataURL(qr);
           if (firstOfSession) {
             console.log('📲 [WHATSAPP BOT] Pairing QR ready — open /bot-connect in the web app or GET /api/bot/status. (auto-refreshes until scanned)');
+            this.logEvent({ dir: 'sys', kind: 'connection', preview: 'QR de vinculación generado', status: 'skipped' });
           }
         }
 
@@ -121,8 +196,10 @@ export class BaileysClient {
           console.warn(
             `⚠️ [WHATSAPP BOT] close · status=${statusCode} · msg="${err?.message}" · data=${JSON.stringify(err?.data || err?.output?.payload || {})}`
           );
+          this.logEvent({ dir: 'sys', kind: 'connection', preview: `Desconectado (${err?.message || 'close'} [${statusCode ?? '?'}])`, status: 'failed' });
           this.isConnected = false;
           this.isConnecting = false;
+          this.sessionSince = null;
 
           if (loggedOut) {
             // WhatsApp cerró la sesión (401). Reconectar sin credenciales devuelve 401 al
@@ -197,6 +274,20 @@ export class BaileysClient {
           this.lastError = null;
           this.qrCodeDataUrl = null;
           this.qrRaw = null;
+          this.sessionSince = Date.now();
+          this.logEvent({ dir: 'sys', kind: 'connection', preview: `Conectado como ${(this.sock as any)?.user?.id?.split(':')[0] || '?'}`, status: 'delivered' });
+        }
+      });
+
+      // Acuses de entrega / lectura → actualizan el estado del evento saliente.
+      this.sock.ev.on('messages.update', (updates) => {
+        for (const u of updates) {
+          const st = (u.update as any)?.status;
+          if (st == null) continue;
+          // proto Status: 1=SERVER_ACK(enviado) 2=DELIVERY_ACK(entregado) 3=READ 4=PLAYED
+          const mapped: BotEvent['status'] =
+            st >= 4 ? 'read' : st === 3 ? 'read' : st === 2 ? 'delivered' : 'sent';
+          this.setEventStatus(u.key?.id, mapped);
         }
       });
 
@@ -296,6 +387,17 @@ export class BaileysClient {
       imageMessage?.caption ||
       documentMessage?.caption ||
       '';
+
+    const inKind = audioMessage ? 'audio' : imageMessage ? 'image' : documentMessage ? 'document' : 'text';
+    this.logEvent({
+      dir: 'in',
+      jid: remoteJid,
+      phone: rawPhone,
+      kind: inKind,
+      preview: body || `[${inKind}]`,
+      status: 'received',
+      msgId: msg.key.id || undefined,
+    });
 
     let mediaBuffer: Buffer | undefined;
     let mediaMimeType: string | undefined;
@@ -498,9 +600,11 @@ export class BaileysClient {
    * Sends a plain text WhatsApp message
    */
   public async sendMessage(target: string, text: string): Promise<boolean> {
+    const phone = (target || '').replace(/[^0-9@.]/g, '').split('@')[0];
     const jid = await this.resolveJidForSend(target);
     if (!jid) {
       console.warn(`[WHATSAPP BOT] Refusing to send to invalid target "${target}"`);
+      this.logEvent({ dir: 'out', phone, kind: 'text', preview: text, status: 'failed', error: 'destino inválido o no está en WhatsApp' });
       return false;
     }
 
@@ -508,14 +612,17 @@ export class BaileysClient {
 
     if (this.sock && this.isConnected) {
       try {
-        await this.sock.sendMessage(jid, { text });
+        const sent = await this.sock.sendMessage(jid, { text });
+        this.logEvent({ dir: 'out', jid, phone, kind: 'text', preview: text, status: 'sent', msgId: sent?.key?.id || undefined });
         return true;
-      } catch (err) {
+      } catch (err: any) {
         console.error(`Failed to send real WhatsApp message to ${jid}:`, err);
+        this.logEvent({ dir: 'out', jid, phone, kind: 'text', preview: text, status: 'failed', error: err?.message || String(err) });
         return false;
       }
     }
 
+    this.logEvent({ dir: 'out', jid, phone, kind: 'text', preview: text, status: 'skipped', error: 'bot desconectado' });
     return true; // Logged and handled
   }
 
@@ -535,13 +642,16 @@ export class BaileysClient {
     }
 
     console.log(`🖼️ [WHATSAPP IMAGE -> ${jid}]: (${buffer.length} bytes)`);
+    const phone = jid.split('@')[0];
 
     if (this.sock && this.isConnected) {
       try {
-        await this.sock.sendMessage(jid, { image: buffer, mimetype, caption });
+        const sent = await this.sock.sendMessage(jid, { image: buffer, mimetype, caption });
+        this.logEvent({ dir: 'out', jid, phone, kind: 'image', preview: caption || '[imagen]', status: 'sent', msgId: sent?.key?.id || undefined });
         return true;
-      } catch (err) {
+      } catch (err: any) {
         console.error(`Failed to send image to ${jid}:`, err);
+        this.logEvent({ dir: 'out', jid, phone, kind: 'image', preview: caption || '[imagen]', status: 'failed', error: err?.message || String(err) });
         return false;
       }
     }
@@ -566,18 +676,21 @@ export class BaileysClient {
     }
 
     console.log(`📎 [WHATSAPP ATTACHMENT -> ${jid}]: Document ${fileName} (${buffer.length} bytes)`);
+    const phone = jid.split('@')[0];
 
     if (this.sock && this.isConnected) {
       try {
-        await this.sock.sendMessage(jid, {
+        const sent = await this.sock.sendMessage(jid, {
           document: buffer,
           mimetype,
           fileName,
           caption,
         });
+        this.logEvent({ dir: 'out', jid, phone, kind: 'document', preview: caption || fileName, status: 'sent', msgId: sent?.key?.id || undefined });
         return true;
-      } catch (err) {
+      } catch (err: any) {
         console.error(`Failed to send document to ${jid}:`, err);
+        this.logEvent({ dir: 'out', jid, phone, kind: 'document', preview: caption || fileName, status: 'failed', error: err?.message || String(err) });
         return false;
       }
     }
@@ -586,6 +699,7 @@ export class BaileysClient {
   }
 
   public getStatus() {
+    const me: any = this.sock?.user;
     return {
       connected: this.isConnected,
       connecting: this.isConnecting,
@@ -593,6 +707,10 @@ export class BaileysClient {
       reconnectAttempts: this.reconnectAttempts,
       gaveUp: this.gaveUp,
       lastError: this.lastError,
+      meNumber: me?.id ? String(me.id).split(':')[0].split('@')[0] : null,
+      meName: me?.name || me?.verifiedName || null,
+      sessionSince: this.sessionSince,
+      metrics: this.getMetrics(),
     };
   }
 

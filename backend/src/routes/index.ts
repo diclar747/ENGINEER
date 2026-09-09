@@ -72,10 +72,17 @@ router.post('/push/unsubscribe', PushController.unsubscribe);
 router.post('/push/test', authMiddleware, PushController.test);
 
 // WhatsApp Bot & Automation
-router.get('/bot/status', BotController.getBotStatus);
-router.post('/bot/reconnect', BotController.reconnect);
-router.post('/bot/simulate-message', upload.single('media'), BotController.simulateMessage);
-router.post('/bot/run-cron', BotController.triggerCronCheck);
+// Público: solo el número del bot (para el link "registrate por WhatsApp" del login).
+router.get('/bot/public-info', BotController.publicInfo);
+// Estado completo + QR + operaciones del bot: SOLO admin.
+router.get('/bot/status', requireAdmin, BotController.getBotStatus);
+router.get('/admin/bot/status', requireAdmin, BotController.getBotStatus);
+router.get('/admin/bot/events', requireAdmin, BotController.getEvents);
+router.get('/admin/bot/lookup', requireAdmin, BotController.lookup);
+router.post('/admin/bot/send-test', requireAdmin, BotController.sendTest);
+router.post('/bot/reconnect', requireAdmin, BotController.reconnect);
+router.post('/bot/simulate-message', requireAdmin, upload.single('media'), BotController.simulateMessage);
+router.post('/bot/run-cron', requireAdmin, BotController.triggerCronCheck);
 
 // ---- Admin panel ----
 router.post('/admin/login', AdminController.login);

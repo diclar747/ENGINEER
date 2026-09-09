@@ -8,7 +8,7 @@ import {
   ShieldCheck, LogOut, Users, CreditCard, ListChecks, LayoutDashboard, CalendarClock,
   Loader2, Search, Check, X, RefreshCw, Plus, Trash2, Save, Smartphone, Download, Printer,
   KeyRound, Unlock, CalendarPlus, Pencil, ExternalLink, TrendingUp, DollarSign, UserPlus, Activity,
-  Sparkles,
+  Sparkles, Wifi, WifiOff, Send, AlertTriangle, ArrowDownLeft, ArrowUpRight, QrCode,
 } from 'lucide-react';
 
 const STATUS_COLOR: Record<string, string> = {
@@ -21,7 +21,7 @@ const rangePreset = (days: number) => {
   return { from: from.toISOString().slice(0, 10), to: to.toISOString().slice(0, 10) };
 };
 
-type Tab = 'resumen' | 'clientes' | 'suscripciones' | 'pagos' | 'contenido' | 'ia';
+type Tab = 'resumen' | 'clientes' | 'suscripciones' | 'pagos' | 'contenido' | 'ia' | 'whatsapp';
 const money = (n: number) => new Intl.NumberFormat('es-PY').format(Number(n) || 0);
 const fdate = (s?: string) => (s ? new Date(s).toLocaleDateString('es-PY') : '—');
 const parseMedsSafe = (raw: any): any[] => {
@@ -66,13 +66,14 @@ export const AdminPanel: React.FC = () => {
     { id: 'pagos', label: 'Pagos', icon: <CreditCard className="w-4 h-4" /> },
     { id: 'contenido', label: 'Contenido', icon: <ListChecks className="w-4 h-4" /> },
     { id: 'ia', label: 'IA', icon: <Sparkles className="w-4 h-4" /> },
+    { id: 'whatsapp', label: 'WhatsApp', icon: <Smartphone className="w-4 h-4" /> },
   ];
   return (
     <div className="min-h-screen bg-app text-fg">
       <header className="sticky top-0 z-20 bg-card/95 backdrop-blur border-b border-line px-4 py-3 flex items-center justify-between print:hidden">
         <div className="flex items-center gap-2.5"><ShieldCheck className="w-5 h-5 text-teal-600 dark:text-teal-400" /><span className="font-black text-fg text-sm sm:text-base">Bio-Pass · Admin</span></div>
         <div className="flex items-center gap-2.5">
-          <button onClick={() => navigate('/bot-connect')} className="flex items-center gap-1.5 text-xs font-bold text-fg-muted hover:text-teal-500" title="Vincular bot de WhatsApp"><Smartphone className="w-4 h-4" /><span className="hidden sm:inline">WhatsApp</span></button>
+          <button onClick={() => setTab('whatsapp')} className="flex items-center gap-1.5 text-xs font-bold text-fg-muted hover:text-teal-500" title="Bot de WhatsApp"><Smartphone className="w-4 h-4" /><span className="hidden sm:inline">WhatsApp</span></button>
           <ThemeToggle />
           <button onClick={logout} className="flex items-center gap-1.5 text-xs font-bold text-fg-muted hover:text-fg"><LogOut className="w-4 h-4" />Salir</button>
         </div>
@@ -92,6 +93,7 @@ export const AdminPanel: React.FC = () => {
         {tab === 'pagos' && <Pagos />}
         {tab === 'contenido' && <Contenido />}
         {tab === 'ia' && <IA />}
+        {tab === 'whatsapp' && <BotPanel />}
       </main>
     </div>
   );
@@ -876,6 +878,221 @@ const IA: React.FC = () => {
           {savingPrd ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />} Guardar
         </button>
       </section>
+    </div>
+  );
+};
+
+/* ───────────────────────────────  WhatsApp Bot  ─────────────────────────────── */
+
+const ST_BADGE: Record<string, { cls: string; label: string }> = {
+  received: { cls: 'bg-slate-500/15 text-fg-soft', label: 'recibido' },
+  sent: { cls: 'bg-amber-500/15 text-amber-600 dark:text-amber-300', label: '⏳ enviado' },
+  delivered: { cls: 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-300', label: '✅ entregado' },
+  read: { cls: 'bg-teal-500/15 text-teal-600 dark:text-teal-300', label: '✅✅ leído' },
+  failed: { cls: 'bg-rose-500/15 text-rose-600 dark:text-rose-300', label: '❌ falló' },
+  skipped: { cls: 'bg-muted text-fg-muted', label: 'omitido' },
+};
+
+const Tile: React.FC<{ label: string; value: React.ReactNode; hint?: string; danger?: boolean }> = ({ label, value, hint, danger }) => (
+  <div className={`bg-card border rounded-2xl p-3.5 ${danger ? 'border-rose-500/40' : 'border-line'}`}>
+    <div className="text-[11px] font-bold uppercase tracking-wide text-fg-muted">{label}</div>
+    <div className={`text-2xl font-black mt-0.5 ${danger ? 'text-rose-600 dark:text-rose-400' : 'text-fg'}`}>{value}</div>
+    {hint && <div className="text-[11px] text-fg-muted mt-0.5">{hint}</div>}
+  </div>
+);
+
+const BotPanel: React.FC = () => {
+  const toast = useToast();
+  const [data, setData] = useState<any>(null);
+  const [loading, setLoading] = useState(true);
+  const [reconnecting, setReconnecting] = useState(false);
+  const [fDir, setFDir] = useState('');
+  const [fStatus, setFStatus] = useState('');
+  const [fPhone, setFPhone] = useState('');
+  const [testPhone, setTestPhone] = useState('');
+  const [testText, setTestText] = useState('');
+  const [testBusy, setTestBusy] = useState(false);
+  const [lookupPhone, setLookupPhone] = useState('');
+  const [lookupRes, setLookupRes] = useState<any>(null);
+
+  const load = useCallback(async () => {
+    try {
+      const { data } = await adminApi.get('/admin/bot/events', {
+        params: { limit: 150, dir: fDir || undefined, status: fStatus || undefined, phone: fPhone || undefined },
+      });
+      setData(data);
+    } catch {
+      /* noop */
+    } finally {
+      setLoading(false);
+    }
+  }, [fDir, fStatus, fPhone]);
+
+  useEffect(() => {
+    load();
+    const t = window.setInterval(load, 5000);
+    return () => window.clearInterval(t);
+  }, [load]);
+
+  const reconnect = async () => {
+    setReconnecting(true);
+    try {
+      await adminApi.post('/bot/reconnect', {});
+      toast.success('Reconexión solicitada.');
+    } catch {
+      toast.error('No se pudo reconectar.');
+    } finally {
+      setReconnecting(false);
+      setTimeout(load, 1500);
+    }
+  };
+
+  const sendTest = async () => {
+    const p = testPhone.replace(/\D/g, '');
+    if (p.length < 7) { toast.error('Número inválido.'); return; }
+    setTestBusy(true);
+    try {
+      const { data } = await adminApi.post('/admin/bot/send-test', { phone: p, text: testText || undefined });
+      (data.ok ? toast.success('Mensaje de prueba enviado. Mirá el movimiento abajo.') : toast.error('El envío no salió.'));
+      setTimeout(load, 1200);
+    } catch {
+      toast.error('Error al enviar.');
+    } finally {
+      setTestBusy(false);
+    }
+  };
+
+  const doLookup = async () => {
+    const p = lookupPhone.replace(/\D/g, '');
+    if (p.length < 7) { toast.error('Número inválido.'); return; }
+    setLookupRes({ loading: true });
+    try {
+      const { data } = await adminApi.get('/admin/bot/lookup', { params: { phone: p } });
+      setLookupRes(data.result || { exists: false });
+    } catch {
+      setLookupRes({ error: true });
+    }
+  };
+
+  const s = data?.status || {};
+  const m = s.metrics || {};
+  const events: any[] = data?.events || [];
+  const lowDelivery = m.deliveryRate != null && m.outbound24h >= 5 && m.deliveryRate < 50;
+
+  if (loading && !data) return <Loading />;
+
+  return (
+    <div className="space-y-4">
+      {/* Estado de conexión */}
+      <Card
+        title="Conexión del bot"
+        right={
+          <button onClick={reconnect} disabled={reconnecting} className="px-3 py-1.5 rounded-lg bg-muted text-fg-soft text-xs font-bold inline-flex items-center gap-1.5 disabled:opacity-50">
+            {reconnecting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />} Reconectar
+          </button>
+        }
+      >
+        <div className="flex flex-col sm:flex-row gap-4 items-start">
+          <div className="flex-1 space-y-1.5 text-sm">
+            <div className="flex items-center gap-2">
+              {s.connected ? (
+                <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-emerald-500/15 text-emerald-600 dark:text-emerald-300 text-xs font-black"><Wifi className="w-3.5 h-3.5" /> Conectado</span>
+              ) : s.connecting ? (
+                <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-amber-500/15 text-amber-600 dark:text-amber-300 text-xs font-black"><Loader2 className="w-3.5 h-3.5 animate-spin" /> Vinculando…</span>
+              ) : (
+                <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-rose-500/15 text-rose-600 dark:text-rose-300 text-xs font-black"><WifiOff className="w-3.5 h-3.5" /> Desconectado</span>
+              )}
+            </div>
+            <div className="text-fg-muted text-xs">Número: <span className="font-mono text-fg">{s.meNumber || s.botNumber || '—'}</span> {s.meName ? `· ${s.meName}` : ''}</div>
+            {s.sessionSince && <div className="text-fg-muted text-xs">Sesión activa desde {fdatetime(new Date(s.sessionSince).toISOString())}</div>}
+            {s.lastError && <div className="text-rose-600 dark:text-rose-400 text-xs">Último error: {s.lastError}</div>}
+            {s.gaveUp && <div className="text-rose-600 dark:text-rose-400 text-xs font-bold">El bot dejó de reintentar — reconectá manualmente.</div>}
+          </div>
+          {s.qrCode && (
+            <div className="text-center">
+              <img src={s.qrCode} alt="QR de vinculación" className="w-44 h-44 rounded-xl border border-line bg-white p-1.5" />
+              <div className="text-[11px] text-fg-muted mt-1.5 max-w-[11rem]">Escaneá con WhatsApp → Dispositivos vinculados</div>
+            </div>
+          )}
+        </div>
+      </Card>
+
+      {lowDelivery && (
+        <div className="flex items-center gap-2 p-3 rounded-xl bg-rose-500/10 border border-rose-500/30 text-rose-600 dark:text-rose-300 text-xs font-bold">
+          <AlertTriangle className="w-4 h-4 shrink-0" /> Tasa de entrega baja ({m.deliveryRate}%). La sesión puede estar re-armando el cifrado o el número tiene problemas.
+        </div>
+      )}
+
+      {/* Tiles */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+        <Tile label="Entrantes 24h" value={m.inbound24h ?? 0} />
+        <Tile label="Salientes 24h" value={m.outbound24h ?? 0} />
+        <Tile label="Tasa de entrega" value={m.deliveryRate == null ? '—' : `${m.deliveryRate}%`} hint={`${m.delivered24h ?? 0} entregados`} danger={lowDelivery} />
+        <Tile label="Fallos 24h" value={m.failed24h ?? 0} danger={(m.failed24h ?? 0) > 0} />
+      </div>
+
+      {/* Herramientas */}
+      <div className="grid sm:grid-cols-2 gap-3">
+        <Card title="Enviar mensaje de prueba">
+          <div className="flex flex-wrap gap-2">
+            <input value={testPhone} onChange={(e) => setTestPhone(e.target.value)} placeholder="595971…" className={`${inputCls} flex-1 min-w-[140px] font-mono`} />
+            <input value={testText} onChange={(e) => setTestText(e.target.value)} placeholder="Texto (opcional)" className={`${inputCls} flex-1 min-w-[140px]`} />
+            <button onClick={sendTest} disabled={testBusy} className="px-3 py-2 rounded-xl bg-teal-500 text-slate-950 text-xs font-black inline-flex items-center gap-1.5 disabled:opacity-50">
+              {testBusy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Send className="w-3.5 h-3.5" />} Enviar
+            </button>
+          </div>
+        </Card>
+        <Card title="¿El número está en WhatsApp?">
+          <div className="flex flex-wrap gap-2 items-center">
+            <input value={lookupPhone} onChange={(e) => setLookupPhone(e.target.value)} placeholder="595971…" className={`${inputCls} flex-1 min-w-[140px] font-mono`} />
+            <button onClick={doLookup} className="px-3 py-2 rounded-xl bg-muted text-fg-soft text-xs font-bold inline-flex items-center gap-1.5"><Search className="w-3.5 h-3.5" /> Consultar</button>
+          </div>
+          {lookupRes && (
+            <div className="mt-2 text-xs">
+              {lookupRes.loading ? '…'
+                : lookupRes.error ? <span className="text-rose-500">Error en la consulta</span>
+                : lookupRes.exists === false ? <span className="text-rose-500">No está en WhatsApp</span>
+                : <span className="text-emerald-600 dark:text-emerald-300">En WhatsApp · <span className="font-mono">{lookupRes.lid || lookupRes.jid}</span></span>}
+            </div>
+          )}
+        </Card>
+      </div>
+
+      {/* Movimientos del bot */}
+      <Card title="Movimientos del bot (en vivo)" right={<span className="text-[11px] text-fg-muted">{events.length} · refresca cada 5s</span>}>
+        <div className="flex flex-wrap gap-2 mb-3">
+          <select value={fDir} onChange={(e) => setFDir(e.target.value)} className={inputCls}>
+            <option value="">Dirección</option><option value="in">📥 Entrante</option><option value="out">📤 Saliente</option><option value="sys">⚙ Sistema</option>
+          </select>
+          <select value={fStatus} onChange={(e) => setFStatus(e.target.value)} className={inputCls}>
+            <option value="">Estado</option><option value="sent">Enviado</option><option value="delivered">Entregado</option><option value="read">Leído</option><option value="failed">Falló</option><option value="received">Recibido</option>
+          </select>
+          <input value={fPhone} onChange={(e) => setFPhone(e.target.value)} placeholder="Filtrar por número…" className={`${inputCls} font-mono`} />
+          <button onClick={load} className="px-3 py-2 bg-muted rounded-xl text-fg-soft"><RefreshCw className="w-4 h-4" /></button>
+        </div>
+        <div className="overflow-x-auto">
+          <table className="w-full text-xs">
+            <thead className="text-fg-muted">
+              <tr className="text-left [&>th]:py-1.5 [&>th]:font-bold border-b border-line">
+                <th>Hora</th><th>Dir</th><th>Número</th><th>Tipo</th><th>Mensaje</th><th>Estado</th>
+              </tr>
+            </thead>
+            <tbody className="[&>tr]:border-b [&>tr]:border-line/60">
+              {events.map((e) => (
+                <tr key={e.id} className="[&>td]:py-1.5 align-top">
+                  <td className="text-fg-muted whitespace-nowrap">{new Date(e.ts).toLocaleTimeString('es-PY')}</td>
+                  <td>{e.dir === 'in' ? <ArrowDownLeft className="w-3.5 h-3.5 text-sky-500" /> : e.dir === 'out' ? <ArrowUpRight className="w-3.5 h-3.5 text-teal-500" /> : <Activity className="w-3.5 h-3.5 text-fg-muted" />}</td>
+                  <td className="font-mono text-fg-soft whitespace-nowrap">{e.phone || (e.jid ? e.jid.split('@')[0] : '—')}</td>
+                  <td className="text-fg-muted">{e.kind || '—'}</td>
+                  <td className="max-w-[22rem]"><div className="truncate text-fg" title={e.preview}>{e.preview || '—'}</div>{e.error && <div className="text-rose-500 text-[11px]">{e.error}</div>}</td>
+                  <td>{e.status ? <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold whitespace-nowrap ${(ST_BADGE[e.status] || ST_BADGE.skipped).cls}`}>{(ST_BADGE[e.status] || ST_BADGE.skipped).label}</span> : '—'}</td>
+                </tr>
+              ))}
+              {!events.length && <tr><td colSpan={6} className="py-6 text-center text-fg-muted">Sin movimientos todavía.</td></tr>}
+            </tbody>
+          </table>
+        </div>
+      </Card>
     </div>
   );
 };

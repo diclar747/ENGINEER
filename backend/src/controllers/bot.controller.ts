@@ -22,6 +22,45 @@ export class BotController {
     res.json({ success: true, ...whatsappBot.getStatus() });
   }
 
+  /** Solo botNumber — endpoint público que usa el login para el link "registrate por WhatsApp". */
+  public static async publicInfo(_req: Request, res: Response): Promise<void> {
+    const s = whatsappBot.getStatus();
+    res.json({ botNumber: config.baileys.botNumber, connected: s.connected });
+  }
+
+  /** Feed de movimientos del bot (panel admin). */
+  public static async getEvents(req: Request, res: Response): Promise<void> {
+    const { limit, dir, phone, status } = req.query as Record<string, string>;
+    res.json({
+      status: { service: 'Baileys WhatsApp Web Engine', botNumber: config.baileys.botNumber, ...whatsappBot.getStatus() },
+      events: whatsappBot.getEvents({
+        limit: limit ? parseInt(limit, 10) : 120,
+        dir: dir || undefined,
+        phone: phone || undefined,
+        status: status || undefined,
+      }),
+    });
+  }
+
+  /** Herramienta del panel: ¿el número está en WhatsApp? ¿qué LID? */
+  public static async lookup(req: Request, res: Response): Promise<void> {
+    const phone = String((req.query.phone as string) || (req.body?.phone as string) || '');
+    const r = await whatsappBot.lookupNumber(phone);
+    res.json({ phone: phone.replace(/[^0-9]/g, ''), result: r });
+  }
+
+  /** Herramienta del panel: enviar un mensaje de prueba a un número. */
+  public static async sendTest(req: Request, res: Response): Promise<void> {
+    const { phone, text } = req.body || {};
+    const clean = String(phone || '').replace(/[^0-9]/g, '');
+    if (!/^\d{7,15}$/.test(clean)) {
+      res.status(400).json({ error: 'Número inválido' });
+      return;
+    }
+    const ok = await whatsappBot.sendMessage(clean, String(text || '🔧 Mensaje de prueba desde el panel Bio-Pass.'));
+    res.json({ ok, phone: clean });
+  }
+
   /**
    * Interactive simulator endpoint: Test WhatsApp bot conversation directly via REST or UI!
    */

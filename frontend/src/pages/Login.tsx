@@ -18,7 +18,7 @@ export const Login: React.FC = () => {
   const [botNumber, setBotNumber] = useState('595985768793');
 
   useEffect(() => {
-    api.get('/bot/status').then((r) => r.data?.botNumber && setBotNumber(String(r.data.botNumber))).catch(() => {});
+    api.get('/bot/public-info').then((r) => r.data?.botNumber && setBotNumber(String(r.data.botNumber))).catch(() => {});
   }, []);
 
   const sendOtp = async () => {

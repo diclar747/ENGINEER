@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Navigate } from 'react-router-dom';
-import { api } from '../utils/api';
+import { adminApi } from '../utils/adminApi';
 import { QrCode, CheckCircle2, Loader2, RefreshCw, Smartphone, AlertTriangle } from 'lucide-react';
 
 interface BotStatus {
@@ -22,7 +22,7 @@ export const BotConnect: React.FC = () => {
 
   const poll = useCallback(async () => {
     try {
-      const { data } = await api.get('/bot/status');
+      const { data } = await adminApi.get('/admin/bot/status');
       setStatus(data);
     } catch {
       setStatus({ connected: false, lastError: 'No se pudo consultar el estado del bot.' });
@@ -42,7 +42,7 @@ export const BotConnect: React.FC = () => {
   const handleReconnect = async () => {
     setReconnecting(true);
     try {
-      await api.post('/bot/reconnect', {});
+      await adminApi.post('/bot/reconnect', {});
       await poll();
     } finally {
       setReconnecting(false);
