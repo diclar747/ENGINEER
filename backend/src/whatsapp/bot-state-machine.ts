@@ -1647,12 +1647,13 @@ export class BotStateMachine {
       // como dato en ningún sub-modo (antes "gracias" tras una respuesta daba error de
       // "no entendí el medicamento"). No cambia de estado.
       if (!msg.mediaBuffer && !subMode.startsWith('ACTIVE_REMIND_') && (isAck(cleanText) || /^[\u{1F44D}\u{1F64F}\u{1F44C}✅😊🙂]+$/u.test(cleanText.trim()))) {
-        return {
-          replyText:
-            subMode === 'ACTIVE_MEMBER'
-              ? '🙂 Escribí *MENU* para ver las opciones.'
-              : '🙂 Seguimos. Escribí *LISTO* para volver al menú.',
-        };
+        const isThanks = /graci|aguyj|aguij/i.test(norm(cleanText));
+        const head = isThanks ? tr('¡De nada! 🙂', 'Ndaipóri mba\'e! 🙂') : '👍';
+        const tail =
+          subMode === 'ACTIVE_MEMBER'
+            ? tr('Escribí *MENU* o *INICIO* cuando quieras.', 'Ehai *MENU* rejaposévo ambue mba\'e.')
+            : tr('Seguí cuando quieras, o escribí *LISTO* para volver al menú.', 'Ehai *LISTO* rejevy hag̃ua meñúpe.');
+        return { replyText: `${head}\n_${tail}_` };
       }
 
       // Consultas en lenguaje natural sobre medicación / turnos ("¿a qué hora tomo X?",
