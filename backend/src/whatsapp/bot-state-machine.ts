@@ -2008,7 +2008,11 @@ export class BotStateMachine {
         // agregar (texto tecleado o transcripto de audio) → se interpreta con la IA
         // de Niro (+ regex de respaldo) y se pasa al diálogo guiado / confirmación.
         if (cleanText && !/^\d{1,2}$/.test(cleanText)) {
+          if (isAck(cleanText)) return { replyText: '👍\n\n' + showList() };
           if (isSmallTalk(cleanText)) return { replyText: showList() };
+          // ¿Es una consulta ("¿qué cita tengo?", "¿cuál es mi próxima toma?")? Respondela.
+          const q = await MedicationReminderService.answerQuery(user.id, cleanText, lang);
+          if (q) return { replyText: q };
           const parsed = await MedicationReminderService.parseReminderRequest(cleanText);
           // Si no salió nada estructurado pero el texto parece un nombre de fármaco
           // (una o dos palabras, sin verbos de pedido ni saludos), lo tomamos como el nombre.

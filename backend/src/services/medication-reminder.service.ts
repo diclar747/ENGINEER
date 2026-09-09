@@ -713,8 +713,11 @@ export class MedicationReminderService {
     // --- "¿qué tengo que tomar ahora?" / "¿cuál es mi próxima toma?" / "¿cuánto falta?" ---
     // También cae acá cualquier PREGUNTA sobre remedios/medicación que no matcheó arriba
     // (así nunca se interpreta como "cargar medicamento").
+    // Ojo: NO usar un "ahora" suelto — "ahora quiero un recordatorio…" no es una consulta.
     const asksDose =
-      /(proxim|cuanto\s+falta|\bahora\b|que\s+(tengo\s+que\s+|debo\s+)?tom|a\s+que\s+hora|mis?\s+(remedios?|pastillas?|medic)|que\s+remedio|remedio\s+.*(tomar|toca)|tengo\s+.*(remedio|pastilla|medic).*(tomar|programad|hoy|ahora)|toca\s+(tomar|el|algun))/.test(t);
+      /(proxim|cuanto\s+falta|que\s+(tengo\s+que\s+|debo\s+)?tom|a\s+que\s+hora|tom(ar|o)\s+ahora|ahora\s+(tengo\s+que|me\s+toca|debo)|mis?\s+(remedios?|pastillas?)\s+(de\s+hoy|pendient|ahora|para\s+hoy)|que\s+remedio\s+(tengo|debo|toca|tomar)|remedio\s+.*(tomar|toca)|tengo\s+.*(remedio|pastilla|medic).*(que\s+tomar|programad|hoy|pendient)|toca\s+tom)/.test(
+        t
+      );
     if (asksDose || (isQuestion && /\b(remedi|pastill|medicaci|medicament|tom[ae]|tomar|dosis)\b/.test(t))) {
       if (!upcoming.length) {
         return medList.length
