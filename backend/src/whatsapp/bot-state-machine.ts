@@ -536,6 +536,26 @@ export class BotStateMachine {
     // STEP 1: WELCOME & LANGUAGE
     if (state === 'STEP1_WELCOME' || state === 'UNREGISTERED') {
       const c = norm(cleanText);
+      const isLangChoice =
+        c === '1' || c === '2' || c === '3' || c === '4' ||
+        /espanol|guarani|portug|brasil|ingles|english/.test(c);
+
+      // Antes de elegir idioma (= arrancar el registro), se puede preguntar
+      // libremente sobre el servicio — precio, seguridad, cómo funciona… —
+      // sin que eso cuente como "no eligió, arranco en español igual".
+      // Se queda en este mismo paso: puede seguir preguntando, y arranca el
+      // registro recién cuando efectivamente elige un idioma.
+      if (!isLangChoice && !isSmallTalk(cleanText) && cleanText.trim().length >= 4) {
+        const ai = await askNiro(cleanText, { scope: 'PRE_REGISTRO' });
+        if (ai) {
+          return {
+            replyText:
+              `${ai}\n\n_Cuando quieras registrarte, elegí tu idioma:_\n` +
+              `*[1]* Español 🇪🇸  *[2]* Guaraní 🇵🇾  *[3]* Português 🇧🇷  *[4]* English 🇬🇧`,
+          };
+        }
+      }
+
       // [1] ES · [2] GN · [3] PT · [4] EN
       const dbLang: 'ES' | 'GN' | 'PT' | 'EN' =
         c === '2' || c.includes('guarani') ? 'GN'
@@ -1631,7 +1651,7 @@ export class BotStateMachine {
             `⏰ *${tr('Recordatorios y turnos', "Momandu'a ha turno")}*\n\n${body}\n\n` +
             tr(
               '💊 *Medicación* — escribí o mandá un audio: *nombre + horarios*\n' +
-                '_Ej: "Losartán 50 mg 08:00 y 20:00"_\n' +
+                '_Ej: "Losartán 50 mg 08:00 y 20:00" o "Ibuprofeno cada 8 horas"_\n' +
                 '🩺 *Turno médico* — *"turno con cardiólogo el 15/10 a las 14:30"*\n\n' +
                 '_Borrar: "borrar 2" · Pausar: "pausar 1" · Volver: *LISTO*_',
               '💊 Pohã: *réra + hora*. 🩺 Turno: *"turno 15/10 14:30"*\n_Ehai *LISTO* rehóvo._'
@@ -1906,7 +1926,7 @@ export class BotStateMachine {
             (rms.length ? MedicationReminderService.format(rms) + '\n\n' : '') +
             tr(
               'Escribí o mandá un *audio*:\n' +
-                '💊 *Medicación:* "Metformina 850 mg 08:00 y 21:00"\n' +
+                '💊 *Medicación:* "Metformina 850 mg 08:00 y 21:00" o "cada 8 horas"\n' +
                 '🩺 *Turno médico:* "turno con traumatólogo el 20/10 a las 10:00"\n\n' +
                 '_Borrar: "borrar 2" · Pausar: "pausar 1" · Volver: *LISTO*_',
               '💊 "Metformina 08:00 ha 21:00" · 🩺 "turno 20/10 10:00"\n_Ehai *LISTO* rehóvo._'

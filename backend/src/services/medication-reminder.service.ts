@@ -51,15 +51,44 @@ function extractTimes(text: string): string[] {
   return Array.from(out).sort();
 }
 
+/** "cada 8 horas" / "cada 6hs" → 8 / 6. No confunde con una hora puntual ("a las 8"). */
+const INTERVAL_RE = /\bcada\s+(\d{1,2})\s*(?:h|hs|hrs|horas)\b/i;
+
+/**
+ * Convierte un intervalo ("cada 8 horas") en horarios concretos del día,
+ * repartidos parejo desde una hora de inicio. Sin hora de inicio explícita
+ * ("desde las 8" / "a partir de las 8" / "empezando a las 8"), arranca desde
+ * la hora actual (redondeada) — así el primer aviso es lo antes posible.
+ */
+function intervalToTimes(intervalHours: number, startHour?: number): string[] {
+  const n = Math.max(1, Math.floor(24 / intervalHours));
+  const start = ((startHour ?? new Date().getHours()) + 24) % 24;
+  const out: string[] = [];
+  for (let i = 0; i < n; i++) {
+    out.push(`${String((start + i * intervalHours) % 24).padStart(2, '0')}:00`);
+  }
+  return out.sort();
+}
+
 export class MedicationReminderService {
   /**
    * Parsea "Losartán 50 mg 08:00 y 20:00" → { medication, dose, times }.
+   * También acepta frecuencia relativa: "Ibuprofeno cada 8 horas" (reparte
+   * los horarios del día solo; opcionalmente "cada 8 horas desde las 9").
    * Devuelve null si no logra un nombre + al menos un horario.
    */
   static parse(text: string): ParsedReminder | null {
     if (!text || !text.trim()) return null;
     const raw = text.trim();
-    const times = extractTimes(raw);
+    let times = extractTimes(raw);
+    const intervalMatch = raw.match(INTERVAL_RE);
+    if (!times.length && intervalMatch) {
+      const interval = parseInt(intervalMatch[1], 10);
+      if (interval >= 1 && interval <= 23) {
+        const startMatch = raw.match(/\b(?:desde|a partir de|empezando)\s+las?\s+(\d{1,2})/i);
+        times = intervalToTimes(interval, startMatch ? parseInt(startMatch[1], 10) : undefined);
+      }
+    }
     if (!times.length) return null;
 
     const dose = raw.match(DOSE_RE)?.[0]?.replace(/\s+/g, ' ').trim();
@@ -67,7 +96,8 @@ export class MedicationReminderService {
     let name = raw
       .replace(/\b([01]?\d|2[0-3])[:.][0-5]\d\b/g, ' ')
       .replace(/\b\d{1,2}(?::[0-5]\d)?\s*(a\.?m\.?|p\.?m\.?)\b/gi, ' ')
-      .replace(/\b(?:a\s+las\s+)?\d{1,2}\s*(?:h|hs|hrs|horas)\b/gi, ' ');
+      .replace(/\b(?:a\s+las\s+)?\d{1,2}\s*(?:h|hs|hrs|horas)\b/gi, ' ')
+      .replace(/\b(?:desde|a partir de|empezando)\s+las?\s+\d{1,2}\b/gi, ' ');
     if (dose) name = name.replace(dose, ' ');
     name = name
       .replace(/\b(recorda(?:r|torio)?|recu[eé]rdame|tomar|tom[oó]|de|el|la|los|las|a|y|cada|todos|dias?|d[ií]a|por|en|punto)\b/gi, ' ')
