@@ -579,7 +579,11 @@ export class MedicationReminderService {
     if (!t) return null;
     // Puerta barata: solo seguimos si el mensaje huele a consulta de medicación/turnos.
     // (Sin `\b` de cierre: son raíces — "proxima", "medicacion", "tomando"…)
-    if (!/\b(tom[aoe]|tome|tomar|pastill|remedi|medicaci|medicament|dosis|turno|cita|consulta|proxim|cuanto\s+falta|horario|a\s+que\s+hora|agendad|reservad|programad)/.test(t))
+    if (
+      !/\b(tom[aoe]|tome|tomar|pastill|remedi|medicaci|medicament|dosis|turno|cita|consulta|proxim|cuanto\s+falta|horario|a\s+que\s+hora|agendad|reservad|programad|doctor|medic|especialista|dentista)/.test(
+        t
+      )
+    )
       return null;
 
     // ¿Es claramente una PREGUNTA / pedido de información? (empieza con interrogativo,
@@ -626,7 +630,9 @@ export class MedicationReminderService {
     // --- "¿qué cita tengo registrada?" / "¿tengo turno?" / "¿cuándo es mi próximo turno?" ---
     // Va primero (es menos ambiguo). NO cuando el mensaje trae fecha+hora (eso es agendar),
     // ni cuando es una orden de crear/borrar/mover.
-    const mentionsAppt = /\b(turnos?|citas?|consultas?|hora\s+medica)\b/.test(t);
+    const mentionsAppt =
+      /\b(turnos?|citas?|consultas?|hora\s+medica)\b/.test(t) ||
+      /\b(ir|voy|ver|visitar|tengo\s+que\s+ir)\b.{0,18}\b(al\s+|a\s+la\s+|con\s+el\s+|con\s+la\s+)?(doctor|dr\b|dra\b|medic|especialista|dentista|odontolog|oftalmolog|cardiolog|traumatolog|dermatolog|pediatr|ginecolog|neurolog|urolog|kinesiolog|nutricionist|psicolog|hospital|sanatorio|clinic)/.test(t);
     const isRegistrationVerb = /^(quiero|necesito|quisiera|agend|program|reserv|anot[aá]|pon[eé]r?me|cre[aá]r?|sac[aá]r?me\s+un)/.test(t);
     const isEditVerb = /\b(borr|elimin|quit[aá]|cancel|cambi|modific|mov[eé]r?|reprogram)/.test(t);
     const asksAppt =

@@ -2292,19 +2292,24 @@ export class BotStateMachine {
         };
       }
 
-      // Registrar recordatorio / turno hablando ("quiero un recordatorio para tomar…",
-      // "recordame tomar…", "tengo una cita el…"). Debe ir ANTES del menú numerado,
-      // porque la opción [5] captura cualquier mensaje con "recordatorio"/"recordar".
-      // Arranca el diálogo guiado (pregunta lo que falte y pide confirmación).
+      // ---------- Router de intención en lenguaje natural (texto o AUDIO) ----------
+      // El titular puede decir cualquier cosa: "quiero cargar mi receta", "subime un
+      // estudio", "alzá mi remedio", "ver mis horarios", "armar una cita", etc. — y va
+      // a la misma acción que el número del menú.
+      const LOAD =
+        /\b(cargar|carg[aá]|subir|sub[ií]|subime|sube|alzar|alz[aá]|alzame|guardar|guard[aá]|a[ñn]adir|agregar|agreg[aá]|meter|anotar|anot[aá]|registrar|registr[aá]|adjuntar|adjunt[aá]|dar\s+de\s+alta|dale\s+de\s+alta)\b/;
+      const VIEW = /\b(ver|mostr\w*|revisar|revis[aá]|mira[rá]?|consultar|consult[aá]|fijate|fij[aá]te|dame|pasame|mandame|list[aá]r?|cu[aá]l(es)?\s+son)\b/;
+      const wantsLoad = LOAD.test(lc) && !VIEW.test(lc);
+
+      // Registrar recordatorio / turno / medicación hablando. ANTES del menú numerado.
       if (
-        /\b(quiero|necesito|quisiera|pod[eé]s|puedes)\b.{0,35}\b(record\w*|recu[eé]rd\w*|alarma|aviso|avis\w*|agend\w*|program\w*)\b/.test(lc) ||
+        /\b(quiero|necesito|quisiera|pod[eé]s|puedes|me\s+gustar[ií]a)\b.{0,35}\b(record\w*|recu[eé]rd\w*|alarma|aviso|avis\w*|agend\w*|program\w*|arm[aá]r?\s+(una|un)?\s*(cita|turno))\b/.test(lc) ||
         /\bhacerme\s+recordar\b/.test(lc) ||
         /\b(record\w*|recu[eé]rd\w*)\b.{0,45}\b(tom(ar|e|é|o)|pastilla|remedio|medic|c[aá]psula|dosis|inyecci|gotas?|jarabe|cada\s+\d|a\s+las?\s+\d|\d{1,2}[:h]\d)/.test(lc) ||
+        /\b(pon(er|é|eme)|crear|cre[aá]|arm(ar|á|ame)|hacer|hac[eé]me)\b.{0,20}\b(recordatorio|alarma|aviso)\b/.test(lc) ||
         /\b(record\w*|recu[eé]rd\w*|alarma)\b.{0,10}$/.test(lc) ||
-        /\b(tengo|sacar|saqu[eé]|agend[eé]?|reserv[eé]?|me\s+dieron|dan|me\s+agendaron)\b.{0,30}\b(cita|turno|consulta|hora\s+m[eé]dica)\b/.test(lc) ||
-        /\b(cita|turno|consulta)\s+(m[eé]dic|con\s+(el|la|mi|dr|dra|doctor|traumat|cardi|ped|gine|derma|oftalm|neuro))/.test(lc) ||
-        // frase que ya trae fármaco + horario explícito ("Enalapril 10 mg 08:00 y 21:00",
-        // "Ibuprofeno cada 8 horas") — se agenda como recordatorio, no como "cargar med".
+        /\b(tengo|sacar|saqu[eé]|agend\w*|reserv\w*|me\s+dieron|dan|me\s+agendaron|arm\w*|program\w*|anot\w*|registr\w*|pon\w*|crear|cre[aá])\b.{0,30}\b(cita|turno|consulta|hora\s+m[eé]dica)\b/.test(lc) ||
+        /\b(cita|turno|consulta)\s+(nuev|m[eé]dic|con\s+(el|la|mi|dr|dra|doctor|traumat|cardi|ped|gine|derma|oftalm|neuro))/.test(lc) ||
         (/\b(a\s+las?\s+\d|cada\s+\d+\s*h|\d{1,2}:\d{2})\b/.test(lc) && !!MedicationReminderService.parse(cleanText))
       ) {
         const parsedReq = await MedicationReminderService.parseReminderRequest(cleanText);
@@ -2328,7 +2333,12 @@ export class BotStateMachine {
       }
 
       // Menú numerado
-      if (cleanText === '1' || lc.includes('cargar medicamento')) {
+      if (
+        cleanText === '1' ||
+        (wantsLoad &&
+          /\b(medicament|medicaci[oó]n|remedio|pastilla|comprimido|c[aá]psula|f[aá]rmaco|lo\s+que\s+(tomo|estoy\s+tomando))\b/.test(lc) &&
+          !/\b(record\w*|recu[eé]rd\w*|alarma|aviso|horario|cada\s+\d|a\s+las?\s+\d|receta|estudio|an[aá]lisis)\b/.test(lc))
+      ) {
         await updateState('ACTIVE_UPLOAD_MED', {});
         return {
           replyText: tr(
@@ -2337,7 +2347,11 @@ export class BotStateMachine {
           ),
         };
       }
-      if (cleanText === '2' || lc.includes('cargar receta')) {
+      if (
+        cleanText === '2' ||
+        (wantsLoad && /\b(recetas?|prescripci|indicaci[oó]n\s+m[eé]dica|f[oó]rmula\s+m[eé]dica)\b/.test(lc)) ||
+        /\bcargar\s+receta\b/.test(lc)
+      ) {
         await updateState('ACTIVE_UPLOAD_RX', {});
         return {
           replyText: tr(
@@ -2346,7 +2360,12 @@ export class BotStateMachine {
           ),
         };
       }
-      if (cleanText === '3' || lc.includes('cargar estudio') || lc.includes('subir estudio')) {
+      if (
+        cleanText === '3' ||
+        (wantsLoad &&
+          /\b(estudios?|an[aá]lisis|laboratorio|radiograf\w*|placas?|tomograf\w*|ecograf\w*|electrocardiograma|electro|resonancia|informe\s+m[eé]dico|resultados?\s+(de\s+)?(lab|an[aá]lisis|estudio)|ex[aá]men(es)?\s+m[eé]dico|evaluaci[oó]n\s+m[eé]dica)\b/.test(lc) &&
+          !/\breceta\b/.test(lc))
+      ) {
         await updateState('ACTIVE_UPLOAD_STUDY', {});
         return {
           replyText: tr(
@@ -2355,10 +2374,21 @@ export class BotStateMachine {
           ),
         };
       }
-      if (cleanText === '4' || lc.includes('perfil médico') || lc.includes('perfil medico') || lc.includes('ver lo que tengo')) {
+      if (
+        cleanText === '4' ||
+        /\b(mi\s+)?(perfil|ficha)\s+(m[eé]dic|cl[ií]nic|de\s+emergencia)/.test(lc) ||
+        (VIEW.test(lc) && /\b(perfil|ficha\s+m[eé]dic|historial\s+(m[eé]dic|cl[ií]nic)|mis\s+datos\s+(m[eé]dic|cl[ií]nic)|lo\s+que\s+tengo\s+cargad|todo\s+lo\s+que\s+tengo)\b/.test(lc)) ||
+        lc.includes('ver lo que tengo')
+      ) {
         return { replyText: await profileSummary() };
       }
-      if (cleanText === '5' || lc.includes('recordatorio') || lc.includes('recordar')) {
+      if (
+        cleanText === '5' ||
+        lc.includes('recordatorio') ||
+        lc.includes('recordar') ||
+        (VIEW.test(lc) && /\b(mis?\s+)?(horarios?|alarmas?|avisos?|turnos?|citas?)\b/.test(lc)) ||
+        /\b(mis?|los|cu[aá]les\s+son\s+mis)\s+(recordatorios?|horarios?|alarmas?|turnos?|citas?)\b/.test(lc)
+      ) {
         await updateState('ACTIVE_REMINDER', { rdraft: null });
         const rms = await prisma.medicationReminder.findMany({
           where: { userId: user.id },
@@ -2384,7 +2414,10 @@ export class BotStateMachine {
             ),
         };
       }
-      if (cleanText === '6' || lc.includes('descargar qr') || lc.includes('sticker') || lc.includes('kit')) {
+      if (
+        cleanText === '6' ||
+        /\b(qr|q\.?r\.?|sticker|stickers|calcoman[ií]a|kit\s+(de\s+)?(emergencia|stickers|rescate)|c[oó]digo\s+(qr|de\s+emergencia|de\s+rescate)|mi\s+c[oó]digo)\b/.test(lc)
+      ) {
         const org = user.organizationId
           ? await prisma.organization.findUnique({ where: { id: user.organizationId } })
           : null;
@@ -2403,7 +2436,11 @@ export class BotStateMachine {
             `💡 *Recomendación:* Imprime en papel Contact (vinilo adhesivo) resistente al agua y pégalo en tu celular, casco o billetera.`,
         };
       }
-      if (cleanText === '7' || lc.includes('modificar')) {
+      if (
+        cleanText === '7' ||
+        lc.includes('modificar') ||
+        /\b(cambiar|cambi[aá]|modific\w*|actualiz\w*|corregir|corrig\w*|editar|edit[aá]|arreglar)\b.{0,30}\b(direcci[oó]n|domicilio|alergia|contacto|condici[oó]n|enfermedad|correo|email|tipo\s+de\s+sangre|grupo\s+sangu|datos\s+(de\s+)?(emergencia|personales)|mis\s+datos)\b/.test(lc)
+      ) {
         await updateState('ACTIVE_FREE_UPDATE', {});
         return {
           replyText: `✏️ *Actualización Inteligente de Perfil:*\n\n` +
@@ -2416,7 +2453,11 @@ export class BotStateMachine {
             `_Escribí tu mensaje a continuación, o *SALIR* para volver al menú._`,
         };
       }
-      if (cleanText === '8' || lc.includes('soporte')) {
+      if (
+        cleanText === '8' ||
+        lc.includes('soporte') ||
+        /\b(hablar\s+con\s+(alguien|una\s+persona|un\s+humano|un\s+agente|un\s+asesor|atenci[oó]n)|atenci[oó]n\s+al\s+cliente|reclamo|queja|necesito\s+ayuda\s+de\s+(alguien|una\s+persona)|contacto\s+humano)\b/.test(lc)
+      ) {
         return {
           replyText: `👨‍⚕️ *Soporte Técnico Doorway Cortex Bio-Pass:*\n\n` +
             `Para asistencia médica, corporativa o reclamos de facturación, escribí a soporte@bio-pass.com o llamá al +595 21 500 000.`,
