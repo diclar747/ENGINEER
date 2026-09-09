@@ -26,6 +26,7 @@ import {
 import { DocumentViewer } from '../components/DocumentViewer';
 import { StudiesList } from '../components/StudiesList';
 import { MedicationsList } from '../components/MedicationsList';
+import { RemindersCalendar } from '../components/RemindersCalendar';
 import { PinModal } from '../components/PinModal';
 import { PushOptIn } from '../components/PushOptIn';
 import { VaultInit } from '../components/VaultInit';
@@ -294,6 +295,9 @@ export const Dashboard: React.FC = () => {
 
           {/* Medicación actual */}
           <MedicationsList medications={medications} onChange={saveMedications} />
+
+          {/* Calendario de horarios de medicación y turnos médicos */}
+          <RemindersCalendar />
 
           {/* Clinical Documents & Laboratory Studies */}
           <StudiesList

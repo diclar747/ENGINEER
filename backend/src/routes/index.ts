@@ -46,6 +46,12 @@ router.get('/medical/studies', authMiddleware, MedicalController.getStudies);
 router.post('/medical/studies/upload', authMiddleware, upload.single('file'), MedicalController.uploadStudy);
 router.put('/medical/profile', authMiddleware, MedicalController.updateProfile);
 
+// Recordatorios de medicación / turnos (calendario del titular — mismos registros que usa el bot)
+router.get('/medical/reminders', authMiddleware, MedicalController.getReminders);
+router.post('/medical/reminders', authMiddleware, MedicalController.createReminder);
+router.patch('/medical/reminders/:id', authMiddleware, MedicalController.updateReminder);
+router.delete('/medical/reminders/:id', authMiddleware, MedicalController.deleteReminder);
+
 // Payments & Subscriptions
 router.post('/payments/create-order', optionalAuthMiddleware, PaymentController.createOrder);
 router.post('/payments/webhook', PaymentController.webhook);
@@ -78,6 +84,9 @@ router.get('/bot/public-info', BotController.publicInfo);
 router.get('/bot/status', requireAdmin, BotController.getBotStatus);
 router.get('/admin/bot/status', requireAdmin, BotController.getBotStatus);
 router.get('/admin/bot/events', requireAdmin, BotController.getEvents);
+router.get('/admin/bot/messages', requireAdmin, AdminController.listBotMessages);
+router.delete('/admin/bot/messages/:id', requireAdmin, AdminController.deleteBotMessage);
+router.post('/admin/bot/messages/delete', requireAdmin, AdminController.deleteBotMessages);
 router.get('/admin/bot/lookup', requireAdmin, BotController.lookup);
 router.post('/admin/bot/send-test', requireAdmin, BotController.sendTest);
 router.post('/bot/reconnect', requireAdmin, BotController.reconnect);

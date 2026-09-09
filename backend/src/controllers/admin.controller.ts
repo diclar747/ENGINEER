@@ -30,6 +30,25 @@ const csvCell = (v: unknown) => {
   return /[",\n;]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
 };
 
+/** Filtro Prisma de BotMessageLog desde el query (historial del bot: lista y borrado). */
+function botMessageWhere(q: Record<string, unknown>): any {
+  const where: any = {};
+  const dir = qs(q.dir);
+  const status = qs(q.status);
+  const phone = qs(q.phone);
+  const from = qs(q.from);
+  const to = qs(q.to);
+  if (dir) where.dir = dir;
+  if (status) where.status = status;
+  if (phone) where.OR = [{ phone: { contains: phone } }, { jid: { contains: phone } }];
+  if (from || to) {
+    where.ts = {};
+    if (from) where.ts.gte = new Date(`${from}T00:00:00`);
+    if (to) where.ts.lte = new Date(`${to}T23:59:59.999`);
+  }
+  return where;
+}
+
 /** Filtro Prisma de Subscription desde el query (lista, export). */
 function subscriptionWhere(q: Record<string, unknown>): any {
   const where: any = {};
@@ -615,5 +634,52 @@ export class AdminController {
       });
     }
     res.json({ ok: true, count: entries.length });
+  }
+
+  // ---- Historial de mensajes del bot de WhatsApp (persistente, a diferencia del
+  // feed "en vivo" que vive en memoria en BaileysClient) ----
+  static async listBotMessages(req: AdminRequest, res: Response): Promise<void> {
+    const page = Math.max(1, parseInt(qs(req.query.page) || '1', 10));
+    const pageSize = Math.min(200, Math.max(1, parseInt(qs(req.query.pageSize) || '15', 10)));
+    const where = botMessageWhere(req.query as any);
+    const [total, rows] = await Promise.all([
+      prisma.botMessageLog.count({ where }),
+      prisma.botMessageLog.findMany({
+        where,
+        orderBy: { ts: 'desc' },
+        skip: (page - 1) * pageSize,
+        take: pageSize,
+      }),
+    ]);
+    res.json({ total, page, pageSize, rows });
+  }
+
+  /** Borra un mensaje puntual del historial. */
+  static async deleteBotMessage(req: AdminRequest, res: Response): Promise<void> {
+    await prisma.botMessageLog.deleteMany({ where: { id: req.params.id } });
+    res.json({ ok: true });
+  }
+
+  /**
+   * Borrado masivo: `{ ids: string[] }` borra esos mensajes puntuales (checkbox
+   * "seleccionar" en el panel); `{ all: true, ...filtros }` borra TODO lo que
+   * matchea el filtro activo del panel (dir/status/phone/from/to) — con los
+   * filtros vacíos eso es literalmente todo el historial, así que se pide el
+   * flag explícito `all` para no permitir un DELETE FROM accidental.
+   */
+  static async deleteBotMessages(req: AdminRequest, res: Response): Promise<void> {
+    const { ids, all } = req.body || {};
+    if (Array.isArray(ids) && ids.length) {
+      const r = await prisma.botMessageLog.deleteMany({ where: { id: { in: ids.map(String) } } });
+      res.json({ ok: true, count: r.count });
+      return;
+    }
+    if (all === true) {
+      const where = botMessageWhere(req.body || {});
+      const r = await prisma.botMessageLog.deleteMany({ where });
+      res.json({ ok: true, count: r.count });
+      return;
+    }
+    res.status(400).json({ error: 'Enviá "ids" (array) o "all": true con los filtros a borrar.' });
   }
 }

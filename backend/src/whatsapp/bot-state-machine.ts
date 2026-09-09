@@ -1245,7 +1245,8 @@ export class BotStateMachine {
         state === 'ACTIVE_UPLOAD_STUDY' ||
         state === 'ACTIVE_RX_CONFIRM' ||
         state === 'ACTIVE_ASK_CATEGORY' ||
-        state === 'ACTIVE_REMINDER'
+        state === 'ACTIVE_REMINDER' ||
+        state === 'ACTIVE_FREE_UPDATE'
           ? state
           : 'ACTIVE_MEMBER';
 
@@ -1673,7 +1674,7 @@ export class BotStateMachine {
             replyText:
               tr(
                 `✅ Recordatorio creado: 💊 *${created.medication}*${created.dose ? ` (${created.dose})` : ''} — ⏰ ${parsed.times.join(', ')}\n` +
-                  `Te voy a avisar por acá a esos horarios, todos los días.`,
+                  `Te voy a avisar por acá 10 minutos antes y a la hora, todos los días.`,
                 `✅ Momandu'a: 💊 *${created.medication}* — ⏰ ${parsed.times.join(', ')}`
               ) +
               (conflicts.length ? `\n\n⚠️ ${conflicts.map((c) => `• ${c}`).join('\n')}` : '') +
@@ -1683,6 +1684,76 @@ export class BotStateMachine {
         }
 
         return { replyText: showList() };
+      }
+
+      // Sub-modo: actualización inteligente de perfil (alergias, contacto, dirección, medicación).
+      // Antes esto no tenía estado propio: la respuesta del usuario caía en el
+      // menú general y, si la IA/NLP no reconocía la frase, el bot mostraba el
+      // menú completo de nuevo sin avisar — parecía un loop que ignoraba lo escrito.
+      // Ahora se queda en este contexto hasta que el usuario escribe LISTO/SALIR/MENU
+      // (la salida ya la maneja el bloque de arriba, común a todos los sub-modos).
+      if (subMode === 'ACTIVE_FREE_UPDATE') {
+        const helpMsg = tr(
+          `✏️ *Actualización Inteligente de Perfil*\n\n` +
+            `Escribí en lenguaje natural lo que querés actualizar. Ejemplos:\n` +
+            `• _"Cambiar alergia a Penicilina e Ibuprofeno"_\n` +
+            `• _"Nuevo contacto Carlos Perez 0981999888"_\n` +
+            `• _"Cambiar dirección a Avda España 500"_\n` +
+            `• _"Ya no tomo Enalapril"_\n\n` +
+            `_Escribí *LISTO* o *SALIR* para volver al menú._`,
+          `✏️ *Emoambue perfil*\n\n_Ehai *LISTO* térã *SALIR* rehóvo._`
+        );
+
+        if (!cleanText && !msg.mediaBuffer) return { replyText: helpMsg };
+
+        const stop = cleanText.match(/^\s*(?:ya no (?:tomo|uso)|dej[eé] de (?:tomar|usar)|sacar|quitar|eliminar|borrar)\s+(.{2,})/i);
+        if (stop) {
+          const { list, removed } = removeMedication(meds, stop[1].trim());
+          if (removed.length) {
+            await persistMeds(list);
+            return {
+              replyText: tr(`✅ Saqué de tu medicación: *${removed.join(', ')}*`, `✅ Aipe'a ne pohãgui: *${removed.join(', ')}*`) +
+                '\n\n' + helpMsg,
+            };
+          }
+        }
+
+        const freeIntent = NlpHandler.parseIntent(cleanText);
+        if (freeIntent.intent === 'CHANGE_ALLERGY' && freeIntent.value) {
+          await prisma.user.update({ where: { id: user.id }, data: { severeAllergies: freeIntent.value } });
+          return {
+            replyText: `✅ *Alergia actualizada en tiempo real:*\n"${freeIntent.value}"\n\nTu perfil público de rescate ya refleja este cambio.\n\n` + helpMsg,
+          };
+        }
+        if (freeIntent.intent === 'CHANGE_CONTACT' && freeIntent.contactName) {
+          await prisma.emergencyContact.deleteMany({ where: { userId: user.id } });
+          await prisma.emergencyContact.create({
+            data: {
+              userId: user.id,
+              fullName: freeIntent.contactName,
+              phoneNumber: freeIntent.contactPhone || '0981000000',
+              isPrimary: true,
+            },
+          });
+          return {
+            replyText: `✅ *Contacto de emergencia actualizado:*\n👤 ${freeIntent.contactName}\n📞 ${freeIntent.contactPhone || 'Guardado'}\n\n` + helpMsg,
+          };
+        }
+        if (freeIntent.intent === 'CHANGE_ADDRESS' && freeIntent.value) {
+          await prisma.user.update({ where: { id: user.id }, data: { address: freeIntent.value } });
+          return { replyText: `✅ *Dirección actualizada:* ${freeIntent.value}\n\n` + helpMsg };
+        }
+
+        // No reconocido: NUNCA cae al menú general en silencio — se queda en el
+        // mismo contexto y reintenta, mostrando de nuevo los ejemplos válidos.
+        return {
+          replyText: tr(
+            `😕 No entendí ese cambio. Probá con una de estas formas:\n\n` +
+              `• _"Cambiar alergia a ..."_\n• _"Nuevo contacto Nombre Teléfono"_\n• _"Cambiar dirección a ..."_\n• _"Ya no tomo ..."_\n\n` +
+              `_Escribí *LISTO* o *SALIR* para volver al menú sin cambiar nada._`,
+            `😕 Ndaikũmbýi upe. _Ehai *LISTO* térã *SALIR* rehóvo._`
+          ),
+        };
       }
 
       // ===== A partir de acá subMode === 'ACTIVE_MEMBER' (menú) =====
@@ -1787,6 +1858,7 @@ export class BotStateMachine {
         };
       }
       if (cleanText === '7' || lc.includes('modificar')) {
+        await updateState('ACTIVE_FREE_UPDATE', {});
         return {
           replyText: `✏️ *Actualización Inteligente de Perfil:*\n\n` +
             `Escribí en lenguaje natural lo que querés actualizar. Ejemplos:\n` +
@@ -1794,7 +1866,7 @@ export class BotStateMachine {
             `• _"Nuevo contacto Carlos Perez 0981999888"_\n` +
             `• _"Cambiar dirección a Avda España 500"_\n` +
             `• _"Ya no tomo Enalapril"_\n\n` +
-            `_Escribí tu mensaje a continuación:_`,
+            `_Escribí tu mensaje a continuación, o *SALIR* para volver al menú._`,
         };
       }
       if (cleanText === '8' || lc.includes('soporte')) {

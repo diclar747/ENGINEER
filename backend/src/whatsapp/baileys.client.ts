@@ -67,20 +67,47 @@ export class BaileysClient {
   private static readonly MAX_EVENTS = 500;
 
   private logEvent(e: Omit<BotEvent, 'id' | 'ts'> & { ts?: number }): void {
+    const fullText = e.preview;
     const ev: BotEvent = {
       id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
       ts: e.ts ?? Date.now(),
       ...e,
+      // El buffer en memoria (panel "en vivo") recorta el preview a 160 chars;
+      // el texto completo se guarda sin recortar en BotMessageLog (historial).
       preview: e.preview ? String(e.preview).replace(/\s+/g, ' ').slice(0, 160) : e.preview,
     };
     this.events.unshift(ev);
     if (this.events.length > BaileysClient.MAX_EVENTS) this.events.length = BaileysClient.MAX_EVENTS;
+    this.persistEvent(ev, fullText).catch(() => {});
+  }
+
+  /** Guarda el mensaje en BotMessageLog (historial persistente para el panel admin). */
+  private async persistEvent(ev: BotEvent, fullText?: string): Promise<void> {
+    try {
+      await prisma.botMessageLog.create({
+        data: {
+          id: ev.id,
+          ts: new Date(ev.ts),
+          dir: ev.dir,
+          jid: ev.jid || null,
+          phone: ev.phone || null,
+          kind: ev.kind || null,
+          text: fullText ?? ev.preview ?? null,
+          status: ev.status || null,
+          msgId: ev.msgId || null,
+          error: ev.error || null,
+        },
+      });
+    } catch (e: any) {
+      console.warn('[WHATSAPP BOT] no se pudo guardar el mensaje en BotMessageLog:', e?.message);
+    }
   }
 
   private setEventStatus(msgId: string | null | undefined, status: BotEvent['status']): void {
     if (!msgId) return;
     const ev = this.events.find((x) => x.msgId === msgId && x.dir === 'out');
     if (ev) ev.status = status;
+    prisma.botMessageLog.updateMany({ where: { msgId, dir: 'out' }, data: { status } }).catch(() => {});
   }
 
   /** Eventos recientes, con filtros opcionales. */
@@ -325,7 +352,22 @@ export class BaileysClient {
             // to yourself from the same phone the bot is paired to) are ignored on
             // purpose — otherwise the bot would reply to its own messages in a loop.
             // Test the real flow from a DIFFERENT phone number.
-            console.log('[WHATSAPP BOT] Ignorando mensaje propio (fromMe) — probá desde otro número, no el vinculado.');
+            const dbgTxt =
+              msg.message?.conversation ||
+              msg.message?.extendedTextMessage?.text ||
+              '[media/otro]';
+            console.log(
+              `[WHATSAPP BOT] Ignorando mensaje propio (fromMe) · remoteJid="${msg.key.remoteJid}" · participant="${msg.key.participant || ''}" · texto="${String(dbgTxt).slice(0, 40)}"`
+            );
+            this.logEvent({
+              dir: 'in',
+              jid: msg.key.remoteJid || undefined,
+              phone: (msg.key.remoteJid || '').split('@')[0],
+              kind: 'text',
+              preview: `[IGNORADO fromMe] ${String(dbgTxt).slice(0, 120)}`,
+              status: 'skipped',
+              msgId: msg.key.id || undefined,
+            });
             continue;
           }
           const jid = msg.key.remoteJid || '';

@@ -357,3 +357,23 @@ model BotMessage {
   textGn    String   @db.Text
   updatedAt DateTime @updatedAt
 }
+
+/** Historial persistente de mensajes del bot de WhatsApp (panel admin: lista, filtros, paginación, borrado). */
+model BotMessageLog {
+  id     String   @id @default(uuid())
+  ts     DateTime @default(now())
+  dir    String // in | out | sys
+  jid    String?
+  phone  String?
+  kind   String? // text | image | audio | document | connection
+  text   String? @db.Text
+  status String? // received | sent | delivered | read | failed | skipped
+  msgId  String?
+  error  String? @db.Text
+
+  @@index([ts])
+  @@index([phone])
+  @@index([status])
+  @@index([dir])
+  @@index([msgId])
+}

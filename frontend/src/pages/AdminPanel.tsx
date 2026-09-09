@@ -901,8 +901,11 @@ const Tile: React.FC<{ label: string; value: React.ReactNode; hint?: string; dan
   </div>
 );
 
+const HIST_PAGE_SIZE = 15;
+
 const BotPanel: React.FC = () => {
   const toast = useToast();
+  const confirm = useConfirm();
   const [data, setData] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [reconnecting, setReconnecting] = useState(false);
@@ -914,6 +917,105 @@ const BotPanel: React.FC = () => {
   const [testBusy, setTestBusy] = useState(false);
   const [lookupPhone, setLookupPhone] = useState('');
   const [lookupRes, setLookupRes] = useState<any>(null);
+
+  // ---- Historial de mensajes (persistente, con paginación/filtros/borrado) ----
+  const [hDir, setHDir] = useState('');
+  const [hStatus, setHStatus] = useState('');
+  const [hPhone, setHPhone] = useState('');
+  const [hFrom, setHFrom] = useState('');
+  const [hTo, setHTo] = useState('');
+  const [hPage, setHPage] = useState(1);
+  const [hData, setHData] = useState<{ total: number; rows: any[] } | null>(null);
+  const [hLoading, setHLoading] = useState(true);
+  const [hSelected, setHSelected] = useState<Set<string>>(new Set());
+  const [hBusy, setHBusy] = useState(false);
+
+  const loadHistory = useCallback(async () => {
+    setHLoading(true);
+    try {
+      const { data } = await adminApi.get('/admin/bot/messages', {
+        params: {
+          page: hPage, pageSize: HIST_PAGE_SIZE,
+          dir: hDir || undefined, status: hStatus || undefined, phone: hPhone || undefined,
+          from: hFrom || undefined, to: hTo || undefined,
+        },
+      });
+      setHData(data);
+    } catch {
+      toast.error('No se pudo cargar el historial.');
+    } finally {
+      setHLoading(false);
+    }
+  }, [hPage, hDir, hStatus, hPhone, hFrom, hTo]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => { loadHistory(); }, [loadHistory]);
+  // Cualquier cambio de filtro vuelve a la página 1 (evita quedar en una página vacía).
+  useEffect(() => { setHPage(1); }, [hDir, hStatus, hPhone, hFrom, hTo]);
+  useEffect(() => { setHSelected(new Set()); }, [hData]);
+
+  const hTotal = hData?.total ?? 0;
+  const hRows: any[] = hData?.rows || [];
+  const hTotalPages = Math.max(1, Math.ceil(hTotal / HIST_PAGE_SIZE));
+
+  const toggleHSelected = (id: string) => {
+    setHSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  };
+  const toggleHSelectAllPage = () => {
+    setHSelected((prev) => {
+      if (hRows.every((r) => prev.has(r.id))) return new Set();
+      return new Set(hRows.map((r) => r.id));
+    });
+  };
+
+  const deleteHOne = async (id: string) => {
+    const ok = await confirm({ title: 'Borrar mensaje', danger: true, confirmText: 'Borrar', message: 'Se borra permanentemente del historial.' });
+    if (!ok) return;
+    setHBusy(true);
+    try { await adminApi.delete(`/admin/bot/messages/${id}`); toast.success('Mensaje borrado.'); loadHistory(); }
+    catch { toast.error('No se pudo borrar.'); }
+    finally { setHBusy(false); }
+  };
+
+  const deleteHSelected = async () => {
+    const ids = Array.from(hSelected);
+    if (!ids.length) return;
+    const ok = await confirm({ title: 'Borrar seleccionados', danger: true, confirmText: `Borrar ${ids.length}`, message: `Se borran ${ids.length} mensaje(s) permanentemente.` });
+    if (!ok) return;
+    setHBusy(true);
+    try { await adminApi.post('/admin/bot/messages/delete', { ids }); toast.success('Mensajes borrados.'); setHSelected(new Set()); loadHistory(); }
+    catch { toast.error('No se pudo borrar.'); }
+    finally { setHBusy(false); }
+  };
+
+  const deleteHAllFiltered = async () => {
+    const hasFilter = !!(hDir || hStatus || hPhone || hFrom || hTo);
+    const ok = await confirm({
+      title: 'Borrar todo el historial',
+      danger: true,
+      confirmText: `Borrar los ${hTotal}`,
+      message: hasFilter
+        ? `Se borran los ${hTotal} mensajes que matchean el filtro actual (no solo esta página).`
+        : `No hay ningún filtro aplicado: se borran TODOS los ${hTotal} mensajes del historial. Esto no se puede deshacer.`,
+    });
+    if (!ok) return;
+    setHBusy(true);
+    try {
+      await adminApi.post('/admin/bot/messages/delete', {
+        all: true, dir: hDir || undefined, status: hStatus || undefined, phone: hPhone || undefined, from: hFrom || undefined, to: hTo || undefined,
+      });
+      toast.success('Historial borrado.');
+      setHSelected(new Set());
+      loadHistory();
+    } catch {
+      toast.error('No se pudo borrar.');
+    } finally {
+      setHBusy(false);
+    }
+  };
 
   const load = useCallback(async () => {
     try {
@@ -1091,6 +1193,101 @@ const BotPanel: React.FC = () => {
               {!events.length && <tr><td colSpan={6} className="py-6 text-center text-fg-muted">Sin movimientos todavía.</td></tr>}
             </tbody>
           </table>
+        </div>
+      </Card>
+
+      {/* Historial de mensajes (persistente): filtro por fecha/estado/número, paginado de a 15, borrado individual y masivo */}
+      <Card
+        title="Historial de mensajes"
+        right={<span className="text-[11px] text-fg-muted">{hTotal} en total</span>}
+      >
+        <div className="flex flex-wrap gap-2 mb-3 items-center">
+          <select value={hDir} onChange={(e) => setHDir(e.target.value)} className={inputCls}>
+            <option value="">Dirección</option><option value="in">📥 Entrante</option><option value="out">📤 Saliente</option><option value="sys">⚙ Sistema</option>
+          </select>
+          <select value={hStatus} onChange={(e) => setHStatus(e.target.value)} className={inputCls}>
+            <option value="">Estado</option>
+            <option value="sent">⏳ Enviado</option>
+            <option value="delivered">✅ Entregado</option>
+            <option value="read">✅✅ Visto</option>
+            <option value="received">📥 Recibido</option>
+            <option value="failed">❌ Falló</option>
+            <option value="skipped">Omitido</option>
+          </select>
+          <input value={hPhone} onChange={(e) => setHPhone(e.target.value)} placeholder="Filtrar por número…" className={`${inputCls} font-mono`} />
+          <label className="flex items-center gap-1.5 text-[11px] text-fg-muted">
+            Desde
+            <input type="date" value={hFrom} onChange={(e) => setHFrom(e.target.value)} className={inputCls} />
+          </label>
+          <label className="flex items-center gap-1.5 text-[11px] text-fg-muted">
+            Hasta
+            <input type="date" value={hTo} onChange={(e) => setHTo(e.target.value)} className={inputCls} />
+          </label>
+          <button onClick={loadHistory} disabled={hLoading} className="px-3 py-2 bg-muted rounded-xl text-fg-soft disabled:opacity-50">
+            <RefreshCw className={`w-4 h-4 ${hLoading ? 'animate-spin' : ''}`} />
+          </button>
+          {(hDir || hStatus || hPhone || hFrom || hTo) && (
+            <button onClick={() => { setHDir(''); setHStatus(''); setHPhone(''); setHFrom(''); setHTo(''); }} className="text-[11px] text-fg-muted underline">
+              Limpiar filtros
+            </button>
+          )}
+        </div>
+
+        <div className="flex flex-wrap items-center gap-2 mb-2">
+          <button onClick={toggleHSelectAllPage} className="text-[11px] font-bold text-fg-soft px-2 py-1 rounded-lg bg-muted">
+            {hRows.length && hRows.every((r) => hSelected.has(r.id)) ? 'Deseleccionar página' : 'Seleccionar página'}
+          </button>
+          <button
+            onClick={deleteHSelected}
+            disabled={!hSelected.size || hBusy}
+            className="text-[11px] font-bold text-rose-600 dark:text-rose-400 px-2 py-1 rounded-lg bg-rose-500/10 disabled:opacity-40 inline-flex items-center gap-1"
+          >
+            <Trash2 className="w-3 h-3" /> Borrar seleccionados ({hSelected.size})
+          </button>
+          <button
+            onClick={deleteHAllFiltered}
+            disabled={!hTotal || hBusy}
+            className="text-[11px] font-bold text-rose-600 dark:text-rose-400 px-2 py-1 rounded-lg bg-rose-500/10 disabled:opacity-40 inline-flex items-center gap-1 ml-auto"
+          >
+            <Trash2 className="w-3 h-3" /> Borrar todo lo filtrado ({hTotal})
+          </button>
+        </div>
+
+        <div className="overflow-x-auto">
+          <table className="w-full text-xs">
+            <thead className="text-fg-muted">
+              <tr className="text-left [&>th]:py-1.5 [&>th]:font-bold border-b border-line">
+                <th className="w-6"></th><th>Fecha</th><th>Dir</th><th>Número</th><th>Tipo</th><th>Mensaje</th><th>Estado</th><th></th>
+              </tr>
+            </thead>
+            <tbody className="[&>tr]:border-b [&>tr]:border-line/60">
+              {hRows.map((m) => (
+                <tr key={m.id} className="[&>td]:py-1.5 align-top">
+                  <td>
+                    <input type="checkbox" checked={hSelected.has(m.id)} onChange={() => toggleHSelected(m.id)} />
+                  </td>
+                  <td className="text-fg-muted whitespace-nowrap">{new Date(m.ts).toLocaleString('es-PY')}</td>
+                  <td>{m.dir === 'in' ? <ArrowDownLeft className="w-3.5 h-3.5 text-sky-500" /> : m.dir === 'out' ? <ArrowUpRight className="w-3.5 h-3.5 text-teal-500" /> : <Activity className="w-3.5 h-3.5 text-fg-muted" />}</td>
+                  <td className="font-mono text-fg-soft whitespace-nowrap">{m.phone || (m.jid ? m.jid.split('@')[0] : '—')}</td>
+                  <td className="text-fg-muted">{m.kind || '—'}</td>
+                  <td className="max-w-[22rem]"><div className="whitespace-pre-wrap text-fg">{m.text || '—'}</div>{m.error && <div className="text-rose-500 text-[11px]">{m.error}</div>}</td>
+                  <td>{m.status ? <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold whitespace-nowrap ${(ST_BADGE[m.status] || ST_BADGE.skipped).cls}`}>{(ST_BADGE[m.status] || ST_BADGE.skipped).label}</span> : '—'}</td>
+                  <td>
+                    <button onClick={() => deleteHOne(m.id)} disabled={hBusy} className="p-1 rounded bg-rose-600/15 text-rose-500 disabled:opacity-40"><Trash2 className="w-3 h-3" /></button>
+                  </td>
+                </tr>
+              ))}
+              {!hLoading && !hRows.length && <tr><td colSpan={8} className="py-6 text-center text-fg-muted">Sin mensajes para este filtro.</td></tr>}
+            </tbody>
+          </table>
+        </div>
+
+        <div className="flex items-center justify-between mt-3 text-[11px] text-fg-muted">
+          <span>Página {hPage} de {hTotalPages}</span>
+          <div className="flex gap-2">
+            <button onClick={() => setHPage((p) => Math.max(1, p - 1))} disabled={hPage <= 1 || hLoading} className="px-3 py-1.5 rounded-lg bg-muted text-fg-soft disabled:opacity-40">Anterior</button>
+            <button onClick={() => setHPage((p) => Math.min(hTotalPages, p + 1))} disabled={hPage >= hTotalPages || hLoading} className="px-3 py-1.5 rounded-lg bg-muted text-fg-soft disabled:opacity-40">Siguiente</button>
+          </div>
         </div>
       </Card>
     </div>

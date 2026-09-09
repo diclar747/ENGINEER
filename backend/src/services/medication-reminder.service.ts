@@ -267,6 +267,31 @@ export class MedicationReminderService {
         const [sh, sm] = slot.split(':').map(Number);
         if (Number.isNaN(sh) || Number.isNaN(sm)) continue;
         const slotMin = sh * 60 + sm;
+
+        // Aviso previo, 10 minutos antes de la hora. El cron corre cada 5 min y
+        // "10 minutos antes" no cae siempre en un múltiplo de 5 exacto, así que
+        // se usa una ventana de 5 minutos [8,12] — como nowMin siempre avanza de
+        // a 5, esa ventana garantiza exactamente un tick que la matchea.
+        const lead = slotMin - nowMin;
+        if (lead >= 8 && lead <= 12) {
+          const preTag = `PRE10:${slot}|${date}`;
+          if (r.lastSentSlot !== preTag) {
+            const gnPre = r.user.language === 'GN';
+            const preMsg = gnPre
+              ? `⏰ *Momandu'a: 10 aja rupi*\n\n10 aja rupi reipuru va'erã *${r.medication}*${r.dose ? ` (${r.dose})` : ''} — ${slot}.`
+              : `⏰ *En 10 minutos toca tu medicación*\n\n*${r.medication}*${r.dose ? ` (${r.dose})` : ''} a las ${slot}.\n\n_Preparala con tiempo._`;
+            await whatsappBot.sendMessage(r.user.whatsappJid || r.user.phoneNumber, preMsg).catch((e) => {
+              console.warn(`[REMINDER] no se pudo enviar preaviso a ${r.user?.phoneNumber}:`, e?.message);
+            });
+            await prisma.medicationReminder.update({
+              where: { id: r.id },
+              data: { lastSentAt: new Date(), lastSentSlot: preTag },
+            });
+            sent++;
+            break;
+          }
+        }
+
         const diff = nowMin - slotMin;
         // ventana: [0, 6] minutos después de la hora
         if (diff < 0 || diff > 6) continue;
