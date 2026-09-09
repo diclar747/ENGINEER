@@ -596,6 +596,10 @@ export class MedicationReminderService {
       )
     )
       return null;
+    // Si es un pedido de CARGAR / registrar algo ("alzá mi remedio", "quiero subir la receta"),
+    // NO es una consulta → que lo maneje el router de intención del bot.
+    if (/\b(cargar|carg[aá]|subir|sub[ií]|subime|alzar|alz[aá]|alzame|guardar|guard[aá]|agregar|agreg[aá]|anotar|anot[aá]|registrar|registr[aá]|adjuntar|dar\s+de\s+alta)\b/.test(t))
+      return null;
 
     // ¿Es claramente una PREGUNTA / pedido de información? (empieza con interrogativo,
     // trae "?", o verbos de consulta). Sirve para no dejarla caer en "cargar medicamento".
