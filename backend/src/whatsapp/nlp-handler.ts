@@ -21,20 +21,32 @@ export class NlpHandler {
       };
     }
 
-    // Change contact: "Nuevo contacto Maria Perez 0981123456", "Cambiar contacto a Carlos 0982-111-222"
+    // Change contact: "Nuevo contacto Maria Perez 0981123456", "Cambiar contacto a Carlos 0982-111-222",
+    // o una frase hablada/transcripta más larga: "mi nuevo contacto de emergencia se
+    // llama Carlos Perez y su número de teléfono es 0981123456". La versión anterior
+    // usaba un solo regex `.*(contacto|familiar|a|...)` MUY codicioso — como "a" es
+    // una de las alternativas y aparece suelta en cualquier lado, en frases largas
+    // recortaba el nombre en un punto random y dejaba basura tipo "ero y su número
+    // de teléfono". Ahora: se saca el teléfono primero (donde sea que esté), y del
+    // nombre se van sacando TODAS las palabras de relleno, no solo hasta la última.
     if (clean.includes('contacto') || clean.includes('familiar') || clean.includes('avisar')) {
-      const match = text.match(/([a-zA-ZáéíóúÁÉÍÓÚñÑ\s]+)[,:\s]+([0-9+\-\s]{7,16})/i);
-      if (match) {
-        return {
-          intent: 'CHANGE_CONTACT',
-          contactName: match[1].replace(/.*(contacto|familiar|a|nuevo)\s+/i, '').trim(),
-          contactPhone: match[2].trim(),
-        };
+      const phoneMatch = text.match(/(\+?\d[\d\s.-]{6,14}\d)/);
+      const contactPhone = phoneMatch ? phoneMatch[1].replace(/[^\d+]/g, '') : undefined;
+      let namePart = phoneMatch ? text.slice(0, phoneMatch.index) : text;
+      // Preferir lo que sigue a "se llama"/"llamado"/"nombre" cuando está presente.
+      const llamaMatch = namePart.match(/(?:se llama|llamado|llamada|nombre(?:\s+es)?)\s+([\p{L}\s]+)$/iu);
+      if (llamaMatch) namePart = llamaMatch[1];
+      const contactName = namePart
+        .replace(
+          /\b(nuevo|nueva|cambiar|cambio|contacto|familiar|emergencia|avisar|es|mi|su|el|la|que|se|llama|llamado|llamada|y|a|para|numero|número|telefono|teléfono|celular|whatsapp|de)\b/gi,
+          ' '
+        )
+        .replace(/\s+/g, ' ')
+        .trim();
+      if (contactName.length >= 2) {
+        return { intent: 'CHANGE_CONTACT', contactName, contactPhone };
       }
-      return {
-        intent: 'CHANGE_CONTACT',
-        value: text,
-      };
+      return { intent: 'CHANGE_CONTACT', value: text };
     }
 
     // Change address: "Cambiar dirección a Avda España 1234", "Mi direccion es Calle 5 Asuncion"

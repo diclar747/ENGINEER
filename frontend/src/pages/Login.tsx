@@ -16,6 +16,11 @@ export const Login: React.FC = () => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [botNumber, setBotNumber] = useState('595985768793');
+  // El código OTP es opcional salvo que el servidor lo pida explícitamente
+  // (REQUIRE_LOGIN_OTP) — por defecto es solo teléfono + PIN, igual que por
+  // WhatsApp. Antes el botón de ingresar quedaba bloqueado sin un código de
+  // 6 dígitos SIEMPRE, lo pidiera el servidor o no.
+  const [needOtp, setNeedOtp] = useState(false);
 
   useEffect(() => {
     api.get('/bot/public-info').then((r) => r.data?.botNumber && setBotNumber(String(r.data.botNumber))).catch(() => {});
@@ -38,14 +43,18 @@ export const Login: React.FC = () => {
     e.preventDefault();
     setLoading(true); setError(null);
     try {
-      const res = await api.post('/auth/verify-login', { phoneNumber: phone, pin, code });
+      const res = await api.post('/auth/verify-login', { phoneNumber: phone, pin, code: code || undefined });
       localStorage.setItem('biopass_token', res.data.token);
       localStorage.setItem('biopass_user', JSON.stringify(res.data.user));
       navigate('/dashboard');
     } catch (err: any) {
       const d = err?.response?.data;
-      if (d?.needOtp && !otpSent) { setError('Enviá y cargá el código de verificación para continuar.'); }
-      else setError(d?.error || 'Teléfono, PIN o código incorrecto.');
+      if (d?.needOtp) {
+        setNeedOtp(true);
+        setError(otpSent ? 'Cargá el código que te enviamos por WhatsApp.' : 'Este número necesita un código de verificación — tocá "Enviar código".');
+      } else {
+        setError(d?.error || 'Teléfono, PIN o código incorrecto.');
+      }
     } finally { setLoading(false); }
   };
 
@@ -83,20 +92,30 @@ export const Login: React.FC = () => {
             </div>
             <p className="mt-1 text-[11px] text-fg-muted text-center">El PIN de 4 dígitos que elegiste en tu registro</p>
           </div>
-          <div>
-            <label className="block text-xs font-bold uppercase tracking-wider text-fg-soft mb-1.5">Código de verificación (WhatsApp)</label>
-            <div className="flex gap-2">
-              <input type="text" inputMode="numeric" value={code}
-                onChange={(e) => setCode(e.target.value.replace(/\D/g, '').slice(0, 6))} placeholder="000000" maxLength={6}
-                className="flex-1 px-4 py-3 bg-panel border border-line rounded-2xl text-sm font-mono tracking-[0.3em] text-center text-fg placeholder-fg-muted focus:border-teal-500 focus:ring-2 focus:ring-teal-500/20 outline-none transition-all" />
-              <button type="button" onClick={sendOtp} disabled={otpLoading || phone.replace(/\D/g, '').length < 6}
-                className="px-4 py-3 rounded-2xl border border-teal-500/40 bg-teal-500/10 text-teal-600 dark:text-teal-300 font-bold text-xs whitespace-nowrap hover:bg-teal-500/15 transition-colors disabled:opacity-50">
-                {otpLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : otpSent ? 'Reenviar' : 'Enviar código'}
-              </button>
+          {needOtp ? (
+            <div>
+              <label className="block text-xs font-bold uppercase tracking-wider text-fg-soft mb-1.5">Código de verificación (WhatsApp)</label>
+              <div className="flex gap-2">
+                <input type="text" inputMode="numeric" value={code}
+                  onChange={(e) => setCode(e.target.value.replace(/\D/g, '').slice(0, 6))} placeholder="000000" maxLength={6}
+                  className="flex-1 px-4 py-3 bg-panel border border-line rounded-2xl text-sm font-mono tracking-[0.3em] text-center text-fg placeholder-fg-muted focus:border-teal-500 focus:ring-2 focus:ring-teal-500/20 outline-none transition-all" />
+                <button type="button" onClick={sendOtp} disabled={otpLoading || phone.replace(/\D/g, '').length < 6}
+                  className="px-4 py-3 rounded-2xl border border-teal-500/40 bg-teal-500/10 text-teal-600 dark:text-teal-300 font-bold text-xs whitespace-nowrap hover:bg-teal-500/15 transition-colors disabled:opacity-50">
+                  {otpLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : otpSent ? 'Reenviar' : 'Enviar código'}
+                </button>
+              </div>
+              {otpMsg && <p className="mt-1 text-[11px] text-teal-600 dark:text-teal-300">{otpMsg}</p>}
             </div>
-            {otpMsg && <p className="mt-1 text-[11px] text-teal-600 dark:text-teal-300">{otpMsg}</p>}
-          </div>
-          <button type="submit" disabled={loading || phone.length < 6 || pin.length !== 4 || code.length !== 6}
+          ) : (
+            <button
+              type="button"
+              onClick={() => setNeedOtp(true)}
+              className="text-[11px] text-fg-muted hover:text-teal-600 dark:hover:text-teal-300 underline"
+            >
+              ¿No te deja entrar? Pedí un código de verificación
+            </button>
+          )}
+          <button type="submit" disabled={loading || phone.length < 6 || pin.length !== 4 || (needOtp && code.length !== 6)}
             className="w-full py-3.5 px-4 rounded-2xl bg-gradient-to-r from-teal-500 to-emerald-500 hover:from-teal-400 hover:to-emerald-400 text-slate-950 font-black text-sm shadow-lg shadow-teal-500/20 flex items-center justify-center gap-2 transition-all hover:scale-[1.02] active:scale-[0.98] disabled:opacity-50">
             {loading ? <Loader2 className="w-5 h-5 animate-spin" /> : (<><span>Ingresar al Pasaporte</span><ArrowRight className="w-4 h-4" /></>)}
           </button>

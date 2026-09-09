@@ -252,6 +252,26 @@ export class BotStateMachine {
         },
       });
 
+      // Si el primer mensaje ya trae una pregunta de verdad ("¿de qué se
+      // trata?", "¿cuánto cuesta?", "¿qué incluye?") en vez de un simple
+      // saludo, se responde eso primero — no hace falta empujar directo el
+      // menú de idiomas. La persona puede seguir preguntando (el mismo gate
+      // sigue activo en STEP1_WELCOME) y decide sola cuándo registrarse.
+      const c0 = norm(cleanText);
+      const isLangChoice0 = c0 === '1' || c0 === '2' || c0 === '3' || c0 === '4' || /espanol|guarani|portug|brasil|ingles|english/.test(c0);
+      if (!isLangChoice0 && !isSmallTalk(cleanText) && cleanText.trim().length >= 4) {
+        const ai = await askNiro(cleanText, { scope: 'PRE_REGISTRO' });
+        if (ai) {
+          return {
+            replyText:
+              `👋 *¡Hola! Bienvenido a Doorway Cortex Bio-Pass* — tu pasaporte médico de emergencia.\n\n` +
+              `${ai}\n\n` +
+              `_Cuando quieras registrarte (dura menos de 3 minutos), elegí tu idioma:_\n` +
+              `*[1]* Español 🇪🇸  *[2]* Guaraní 🇵🇾  *[3]* Português 🇧🇷  *[4]* English 🇬🇧`,
+          };
+        }
+      }
+
       return {
         replyText:
           `👋 *¡Hola! Bienvenido a Doorway Cortex Bio-Pass* — tu pasaporte médico de emergencia.\n` +
@@ -1759,6 +1779,14 @@ export class BotStateMachine {
 
         if (!cleanText && !msg.mediaBuffer) return { replyText: helpMsg };
 
+        // Después de un cambio exitoso NO se repiten los 4 ejemplos genéricos —
+        // eso mezclaba temas (confirmabas un contacto y te volvía a ofrecer
+        // "cambiar alergia a Penicilina"). Solo un cierre corto y específico.
+        const contMsg = tr(
+          `\n\n_¿Algo más? Escribí otro cambio, o *LISTO* / *SALIR* para volver al menú._`,
+          `\n\n_Ambue mba'e? Ehai *LISTO* térã *SALIR* rehóvo._`
+        );
+
         const stop = cleanText.match(/^\s*(?:ya no (?:tomo|uso)|dej[eé] de (?:tomar|usar)|sacar|quitar|eliminar|borrar)\s+(.{2,})/i);
         if (stop) {
           const { list, removed } = removeMedication(meds, stop[1].trim());
@@ -1766,7 +1794,7 @@ export class BotStateMachine {
             await persistMeds(list);
             return {
               replyText: tr(`✅ Saqué de tu medicación: *${removed.join(', ')}*`, `✅ Aipe'a ne pohãgui: *${removed.join(', ')}*`) +
-                '\n\n' + helpMsg,
+                contMsg,
             };
           }
         }
@@ -1775,7 +1803,7 @@ export class BotStateMachine {
         if (freeIntent.intent === 'CHANGE_ALLERGY' && freeIntent.value) {
           await prisma.user.update({ where: { id: user.id }, data: { severeAllergies: freeIntent.value } });
           return {
-            replyText: `✅ *Alergia actualizada en tiempo real:*\n"${freeIntent.value}"\n\nTu perfil público de rescate ya refleja este cambio.\n\n` + helpMsg,
+            replyText: `✅ *Alergia actualizada en tiempo real:*\n"${freeIntent.value}"\n\nTu perfil público de rescate ya refleja este cambio.` + contMsg,
           };
         }
         if (freeIntent.intent === 'CHANGE_CONTACT' && freeIntent.contactName) {
@@ -1789,12 +1817,12 @@ export class BotStateMachine {
             },
           });
           return {
-            replyText: `✅ *Contacto de emergencia actualizado:*\n👤 ${freeIntent.contactName}\n📞 ${freeIntent.contactPhone || 'Guardado'}\n\n` + helpMsg,
+            replyText: `✅ *Contacto de emergencia actualizado:*\n👤 ${freeIntent.contactName}\n📞 ${freeIntent.contactPhone || 'Guardado'}` + contMsg,
           };
         }
         if (freeIntent.intent === 'CHANGE_ADDRESS' && freeIntent.value) {
           await prisma.user.update({ where: { id: user.id }, data: { address: freeIntent.value } });
-          return { replyText: `✅ *Dirección actualizada:* ${freeIntent.value}\n\n` + helpMsg };
+          return { replyText: `✅ *Dirección actualizada:* ${freeIntent.value}` + contMsg };
         }
 
         // No reconocido: NUNCA cae al menú general en silencio — se queda en el
