@@ -1846,6 +1846,12 @@ export class BotStateMachine {
 
       // Sub-modo: recordatorios de medicación
       if (subMode === 'ACTIVE_REMINDER') {
+        // Si el usuario tira una opción del menú principal (1-8, salvo 5) o "menu"/"perfil",
+        // salimos del submenú y lo procesamos como si viniera del menú — no queda atascado.
+        if (/^[1234678]$/.test(cleanText) || /^(men[uú]|inicio|perfil|hola|buenas?)$/i.test(cleanText)) {
+          await updateState('ACTIVE_MEMBER', { rdraft: null });
+          return BotStateMachine.handleMessage(msg);
+        }
         const list = async () =>
           prisma.medicationReminder.findMany({
             where: { userId: user!.id },
