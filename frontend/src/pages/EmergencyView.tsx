@@ -251,6 +251,28 @@ export const EmergencyView: React.FC = () => {
           />
         )}
 
+        {/* Horario de toma programado */}
+        {Array.isArray(user.medicationSchedule) && user.medicationSchedule.length > 0 && (
+          <div className="bg-card border border-line rounded-3xl p-5 sm:p-6 shadow-xl space-y-3">
+            <h3 className="text-sm font-black uppercase tracking-wider text-fg-soft flex items-center gap-2">
+              <Calendar className="w-4 h-4 text-teal-600 dark:text-teal-400" />
+              <span>Horario de Medicación</span>
+            </h3>
+            <ul className="space-y-2">
+              {user.medicationSchedule.map((r: { medication: string; dose?: string; times: string[] }, i: number) => (
+                <li key={i} className="p-3 rounded-2xl bg-panel border border-line flex items-center justify-between gap-3">
+                  <span className="text-sm font-bold text-fg">{r.medication}{r.dose ? ` — ${r.dose}` : ''}</span>
+                  <span className="flex flex-wrap gap-1 justify-end">
+                    {r.times.map((t) => (
+                      <span key={t} className="text-[11px] font-bold px-2 py-0.5 rounded bg-teal-500/10 text-teal-600 dark:text-teal-300">{t}</span>
+                    ))}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+
         {/* Emergency Contact Card */}
         {contact && (
           <div className="bg-card border border-line rounded-3xl p-5 sm:p-6 shadow-xl">

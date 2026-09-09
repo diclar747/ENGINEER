@@ -17,6 +17,8 @@ export interface EmergencyAccessData {
     currentMedications: Array<{ name: string; dose?: string; frequency?: string }>;
     /** Advertencias si la medicación en curso choca con alergias / contraindicaciones. */
     medicationAlerts: string[];
+    /** Horario de toma programado (recordatorios activos, sin turnos médicos). */
+    medicationSchedule: Array<{ medication: string; dose?: string; times: string[] }>;
     address: string;
     photoUrl?: string;
     organization?: {
@@ -144,6 +146,17 @@ export class EmergencyService {
 
     const medications = parseMedications(user.currentMedications);
 
+    const reminders = await prisma.medicationReminder.findMany({
+      where: { userId: user.id, active: true, kind: 'MED' },
+      orderBy: { createdAt: 'asc' },
+      select: { medication: true, dose: true, times: true },
+    });
+    const medicationSchedule = reminders.map((r) => {
+      let times: string[] = [];
+      try { times = JSON.parse(r.times); } catch { /* noop */ }
+      return { medication: r.medication, dose: r.dose || undefined, times };
+    });
+
     return {
       user: {
         id: user.id,
@@ -154,6 +167,7 @@ export class EmergencyService {
         contraindicatedMeds: user.contraindicatedMeds || 'Ninguno registrado',
         currentMedications: medications.map((m) => ({ name: m.name, dose: m.dose, frequency: m.frequency })),
         medicationAlerts: medicationConflicts(medications, user.severeAllergies, user.contraindicatedMeds),
+        medicationSchedule,
         address: user.address || 'No especificada',
         photoUrl: user.photoUrl || undefined,
         organization: user.organization

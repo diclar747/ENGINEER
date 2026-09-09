@@ -1571,6 +1571,48 @@ export class BotStateMachine {
         };
       }
 
+      // "Qué remedio tengo que tomar hoy" — funciona también por audio
+      // (ya se transcribe antes de llegar acá) y en cualquier sub-modo.
+      if (/\b(qu[eé]\s+(remedios?|medicamentos?|pastillas?)\s+(tengo|debo|hay)|remedios?\s+(de\s+hoy|pendientes?)|medicaci[oó]n\s+(de\s+hoy|pendiente)|qu[eé]\s+tomo\s+hoy|mis\s+remedios)\b/i.test(cleanText)) {
+        const rms = await prisma.medicationReminder.findMany({
+          where: { userId: user.id, active: true, kind: 'MED' },
+          orderBy: { createdAt: 'asc' },
+          select: { medication: true, dose: true, times: true },
+        });
+        if (!rms.length) {
+          return {
+            replyText: tr(
+              'No tenés medicación programada todavía. Escribí *5* para agregar un horario (ej: "Losartán 50 mg 08:00" o "cada 8 horas").',
+              'Ndaipóri pohã momandu\'a gueteri. Ehai *5*.'
+            ),
+          };
+        }
+        const tz = config.timezone || 'America/Asuncion';
+        const [nh, nm] = new Date()
+          .toLocaleTimeString('en-GB', { timeZone: tz, hour: '2-digit', minute: '2-digit', hour12: false })
+          .split(':')
+          .map(Number);
+        const nowMin = nh * 60 + nm;
+        const pending: string[] = [];
+        const done: string[] = [];
+        for (const r of rms) {
+          let times: string[] = [];
+          try { times = JSON.parse(r.times); } catch { /* noop */ }
+          for (const t of times) {
+            const [h, m] = t.split(':').map(Number);
+            const line = `💊 *${r.medication}*${r.dose ? ` (${r.dose})` : ''} — ⏰ ${t}`;
+            (h * 60 + m >= nowMin ? pending : done).push(line);
+          }
+        }
+        return {
+          replyText:
+            `📋 *Tu medicación de hoy:*\n\n` +
+            (pending.length ? `*Pendiente:*\n${pending.join('\n')}\n\n` : '') +
+            (done.length ? `*Ya pasó hoy:*\n${done.join('\n')}\n\n` : '') +
+            tr('_Escribí *5* para ver/editar todos tus recordatorios._', '_Ehai *5*._'),
+        };
+      }
+
       // "MENU" / "opciones" / "hola" en el menú → mostrar el menú real (no la IA)
       if (subMode === 'ACTIVE_MEMBER' && /^(menu|men[uú]|opciones|inicio|hola|buenas|0)$/i.test(cleanText)) {
         return { replyText: activeMenu() };
@@ -1734,12 +1776,52 @@ export class BotStateMachine {
             tr(
               '💊 *Medicación* — escribí o mandá un audio: *nombre + horarios*\n' +
                 '_Ej: "Losartán 50 mg 08:00 y 20:00" o "Ibuprofeno cada 8 horas"_\n' +
+                '📸 _O mandá una foto de la receta/indicación — te armo los horarios solo._\n' +
                 '🩺 *Turno médico* — *"turno con cardiólogo el 15/10 a las 14:30"*\n\n' +
                 '_Borrar: "borrar 2" · Pausar: "pausar 1" · Volver: *LISTO*_',
               '💊 Pohã: *réra + hora*. 🩺 Turno: *"turno 15/10 14:30"*\n_Ehai *LISTO* rehóvo._'
             )
           );
         };
+
+        // Foto de la receta / indicación médica → OCR y arma los recordatorios
+        // solo (nombre + horario, incluida frecuencia tipo "cada 8 horas").
+        if (msg.mediaBuffer) {
+          const rx = await OcrAiService.processPrescription(msg.mediaBuffer, msg.mediaFilename || 'receta.jpg');
+          const created: string[] = [];
+          const skipped: string[] = [];
+          for (const m of rx.medications || []) {
+            const guess = MedicationReminderService.parse(`${m.name} ${m.dose || ''} ${m.frequency || ''}`.trim());
+            if (guess) {
+              const row = await prisma.medicationReminder.create({
+                data: { userId: user.id, medication: guess.medication, dose: guess.dose || m.dose || null, times: JSON.stringify(guess.times) },
+              });
+              created.push(`💊 *${row.medication}*${row.dose ? ` (${row.dose})` : ''} — ⏰ ${guess.times.join(', ')}`);
+            } else {
+              skipped.push(`• ${m.name}${m.frequency ? ` (${m.frequency})` : ''}`);
+            }
+          }
+          rows = await list();
+          if (!created.length && !skipped.length) {
+            return {
+              replyText: tr(
+                '😕 No pude leer medicamentos con horario en esa imagen. Probá con más luz, o escribí el horario a mano (ej: "Losartán 50 mg 08:00 y 20:00").',
+                '😕 Ndaikatúi amoñe\'ẽ pohã ha hora upe ta\'angápe. Ehai réra + hora.'
+              ),
+            };
+          }
+          return {
+            replyText:
+              (created.length ? tr(`✅ *Recordatorios creados desde la foto:*\n`, `✅ *Momandu'a oñeguarda:*\n`) + created.join('\n') + '\n\n' : '') +
+              (skipped.length
+                ? tr(
+                    `⚠️ *No pude armar horario para:*\n${skipped.join('\n')}\n_Escribilos a mano, ej: "Losartán 50 mg 08:00" o "cada 8 horas"._\n\n`,
+                    `⚠️ *Ndaikatúi:*\n${skipped.join('\n')}\n\n`
+                  )
+                : '') +
+              showList(rows),
+          };
+        }
 
         // borrar N / pausar N / activar N
         const cmd = cleanText.match(/^(borrar|eliminar|quitar|sacar|pausar|desactivar|activar|reactivar)\s+(\d{1,2})/i);
