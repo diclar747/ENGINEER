@@ -9,12 +9,31 @@ import { useToast } from './ui/Feedback';
 interface Reminder {
   id: string;
   kind: 'MED' | 'APPOINTMENT';
+  scheduleKind?: 'CLOCK' | 'INTERVAL' | null;
   medication: string;
   dose?: string | null;
   times: string[];
+  intervalHours?: number | null;
+  anchorAt?: string | null;
+  nextDoseAt?: string | null;
+  leadMinutes?: number | null;
   whenAt?: string | null;
   active: boolean;
 }
+
+const LEAD_OPTS: Array<{ v: number; label: string }> = [
+  { v: 60, label: '1 hora antes' },
+  { v: 120, label: '2 horas antes' },
+  { v: 180, label: '3 horas antes' },
+  { v: 1440, label: '1 día antes' },
+];
+/** valor para <input type="datetime-local"> a partir de "ahora" en huso PY. */
+const nowLocalInput = () => {
+  const p = new Date().toLocaleString('sv-SE', { timeZone: 'America/Asuncion' }); // "YYYY-MM-DD HH:MM:SS"
+  return p.slice(0, 16).replace(' ', 'T');
+};
+/** "YYYY-MM-DDTHH:MM" (huso PY) → ISO con offset -03:00. */
+const localInputToIso = (v: string) => new Date(`${v}:00-03:00`).toISOString();
 
 const inp = 'bg-panel border border-line rounded-lg px-2.5 py-1.5 text-xs text-fg outline-none focus:border-teal-500';
 const WEEKDAYS = ['D', 'L', 'M', 'M', 'J', 'V', 'S'];
@@ -39,13 +58,17 @@ export const RemindersCalendar: React.FC = () => {
   // Formulario: medicación diaria
   const [medName, setMedName] = useState('');
   const [medDose, setMedDose] = useState('');
+  const [medMode, setMedMode] = useState<'clock' | 'interval'>('clock');
   const [medTimeDraft, setMedTimeDraft] = useState('');
   const [medTimes, setMedTimes] = useState<string[]>([]);
+  const [medInterval, setMedInterval] = useState(8);
+  const [medLastTaken, setMedLastTaken] = useState(nowLocalInput());
 
   // Formulario: turno / cita
   const [apptNote, setApptNote] = useState('');
   const [apptDate, setApptDate] = useState('');
   const [apptTime, setApptTime] = useState('');
+  const [apptLead, setApptLead] = useState(120);
 
   const load = async () => {
     try {
@@ -59,7 +82,9 @@ export const RemindersCalendar: React.FC = () => {
   };
   useEffect(() => { load(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const meds = reminders.filter((r) => r.kind === 'MED').sort((a, b) => (a.times[0] || '').localeCompare(b.times[0] || ''));
+  const meds = reminders
+    .filter((r) => r.kind === 'MED')
+    .sort((a, b) => ((a.nextDoseAt || a.times[0] || '') as string).localeCompare((b.nextDoseAt || b.times[0] || '') as string));
   const appts = reminders
     .filter((r) => r.kind === 'APPOINTMENT' && r.whenAt)
     .sort((a, b) => new Date(a.whenAt!).getTime() - new Date(b.whenAt!).getTime());
@@ -80,15 +105,33 @@ export const RemindersCalendar: React.FC = () => {
   };
 
   const addMedReminder = async () => {
-    if (!medName.trim() || !medTimes.length || busy) return;
+    if (!medName.trim() || busy) return;
+    const body: Record<string, unknown> =
+      medMode === 'interval'
+        ? { kind: 'MED', scheduleKind: 'INTERVAL', medication: medName.trim(), dose: medDose.trim() || undefined, intervalHours: medInterval, anchorAt: localInputToIso(medLastTaken) }
+        : { kind: 'MED', scheduleKind: 'CLOCK', medication: medName.trim(), dose: medDose.trim() || undefined, times: medTimes };
+    if (medMode === 'clock' && !medTimes.length) return;
     setBusy(true);
     try {
-      await api.post('/medical/reminders', { kind: 'MED', medication: medName.trim(), dose: medDose.trim() || undefined, times: medTimes });
-      toast.success('Recordatorio agregado. Te va a avisar por WhatsApp 10 minutos antes y a la hora.');
-      setMedName(''); setMedDose(''); setMedTimes([]); setMedTimeDraft('');
+      await api.post('/medical/reminders', body);
+      toast.success('Recordatorio agregado. Te avisamos por WhatsApp antes y a la hora.');
+      setMedName(''); setMedDose(''); setMedTimes([]); setMedTimeDraft(''); setMedLastTaken(nowLocalInput());
       await load();
     } catch (e: any) {
       toast.error(e?.response?.data?.error || 'No se pudo agregar el recordatorio.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const markTakenNow = async (r: Reminder) => {
+    setBusy(true);
+    try {
+      await api.patch(`/medical/reminders/${r.id}`, { anchorAt: new Date().toISOString() });
+      toast.success('Anotado. Recalculé la próxima toma.');
+      await load();
+    } catch (e: any) {
+      toast.error(e?.response?.data?.error || 'No se pudo actualizar.');
     } finally {
       setBusy(false);
     }
@@ -99,9 +142,9 @@ export const RemindersCalendar: React.FC = () => {
     setBusy(true);
     try {
       const whenAt = `${apptDate}T${apptTime}:00-03:00`;
-      await api.post('/medical/reminders', { kind: 'APPOINTMENT', medication: apptNote.trim(), whenAt });
-      toast.success('Turno agendado. Te vamos a avisar 24 h antes y el día.');
-      setApptNote(''); setApptDate(''); setApptTime('');
+      await api.post('/medical/reminders', { kind: 'APPOINTMENT', medication: apptNote.trim(), whenAt, leadMinutes: apptLead });
+      toast.success('Turno agendado. Te avisamos con la anticipación elegida.');
+      setApptNote(''); setApptDate(''); setApptTime(''); setApptLead(120);
       await load();
     } catch (e: any) {
       toast.error(e?.response?.data?.error || 'No se pudo agendar el turno.');
@@ -145,7 +188,7 @@ export const RemindersCalendar: React.FC = () => {
           <CalendarClock className="w-4 h-4 text-teal-600 dark:text-teal-400" />
           <span>Calendario de medicación y turnos</span>
         </h3>
-        <p className="text-xs text-fg-muted mt-0.5">Programá tus horarios acá o por WhatsApp (opción 5) — te avisamos por WhatsApp 10 minutos antes y a la hora.</p>
+        <p className="text-xs text-fg-muted mt-0.5">Programá tus horarios acá o por WhatsApp (opción 5) — te avisamos por WhatsApp antes y a la hora.</p>
       </div>
 
       {/* ---- Horario diario de medicación ---- */}
@@ -167,12 +210,25 @@ export const RemindersCalendar: React.FC = () => {
                 </div>
                 <div className="min-w-0 flex-1">
                   <div className="text-xs sm:text-sm font-bold text-fg truncate">{r.medication}{r.dose ? ` — ${r.dose}` : ''}</div>
-                  <div className="mt-0.5 flex flex-wrap gap-1">
-                    {r.times.map((t) => (
-                      <span key={t} className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-teal-500/10 text-teal-600 dark:text-teal-300">{t}</span>
-                    ))}
-                  </div>
+                  {r.scheduleKind === 'INTERVAL' ? (
+                    <div className="mt-0.5 text-[11px] text-fg-muted">
+                      cada {r.intervalHours} h
+                      {r.nextDoseAt && <> · próxima <span className="font-bold text-teal-600 dark:text-teal-300">{fmtTime(r.nextDoseAt)}</span></>}
+                    </div>
+                  ) : (
+                    <div className="mt-0.5 flex flex-wrap gap-1">
+                      {r.times.map((t) => (
+                        <span key={t} className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-teal-500/10 text-teal-600 dark:text-teal-300">{t}</span>
+                      ))}
+                    </div>
+                  )}
                 </div>
+                {r.scheduleKind === 'INTERVAL' && (
+                  <button type="button" onClick={() => markTakenNow(r)} disabled={busy} title="Ya tomé ahora — recalcular"
+                    className="px-2 py-1.5 rounded-xl bg-teal-600/15 hover:bg-teal-600/25 text-teal-600 dark:text-teal-300 text-[10px] font-bold border border-teal-500/30 shrink-0 disabled:opacity-50">
+                    Ya tomé
+                  </button>
+                )}
                 <button type="button" onClick={() => toggleActive(r)} disabled={busy} title={r.active ? 'Pausar' : 'Reactivar'}
                   className="p-2 rounded-xl bg-muted hover:bg-muted text-fg-muted border border-line shrink-0 disabled:opacity-50">
                   {r.active ? <Pause className="w-3.5 h-3.5" /> : <Play className="w-3.5 h-3.5" />}
@@ -186,22 +242,50 @@ export const RemindersCalendar: React.FC = () => {
           </ul>
         )}
 
-        <div className="flex flex-wrap items-center gap-2 pt-1">
-          <input value={medName} onChange={(e) => setMedName(e.target.value)} placeholder="Medicamento *" className={`${inp} flex-1 min-w-[140px]`} />
-          <input value={medDose} onChange={(e) => setMedDose(e.target.value)} placeholder="Dosis (ej. 50 mg)" className={`${inp} w-32`} />
-          <input type="time" value={medTimeDraft} onChange={(e) => setMedTimeDraft(e.target.value)} className={inp} />
-          <button type="button" onClick={addMedTime} disabled={!medTimeDraft} className="px-2.5 py-2 rounded-xl bg-muted text-fg-soft text-xs font-bold disabled:opacity-40">+ horario</button>
-          {medTimes.map((t) => (
-            <span key={t} className="text-[10px] font-bold px-1.5 py-1 rounded bg-teal-500/10 text-teal-600 dark:text-teal-300 inline-flex items-center gap-1">
-              {t}
-              <button type="button" onClick={() => setMedTimes(medTimes.filter((x) => x !== t))} className="text-teal-600/70 hover:text-rose-500">×</button>
-            </span>
-          ))}
-          <button type="button" onClick={addMedReminder} disabled={busy || !medName.trim() || !medTimes.length}
-            className="px-3.5 py-2 rounded-xl bg-teal-600 hover:bg-teal-500 active:scale-95 text-white font-bold text-xs shadow-md shadow-teal-600/20 flex items-center gap-1.5 transition-all disabled:opacity-50">
-            {busy ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}
-            <span>Agregar</span>
-          </button>
+        <div className="space-y-2 pt-1">
+          <div className="inline-flex rounded-xl border border-line overflow-hidden text-[11px] font-bold">
+            <button type="button" onClick={() => setMedMode('clock')}
+              className={`px-3 py-1.5 ${medMode === 'clock' ? 'bg-teal-600 text-white' : 'bg-panel text-fg-soft'}`}>Horarios fijos</button>
+            <button type="button" onClick={() => setMedMode('interval')}
+              className={`px-3 py-1.5 ${medMode === 'interval' ? 'bg-teal-600 text-white' : 'bg-panel text-fg-soft'}`}>Cada X horas</button>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2">
+            <input value={medName} onChange={(e) => setMedName(e.target.value)} placeholder="Medicamento *" className={`${inp} flex-1 min-w-[140px]`} />
+            <input value={medDose} onChange={(e) => setMedDose(e.target.value)} placeholder="Dosis (ej. 1 comprimido, 10 ml)" className={`${inp} w-44`} />
+
+            {medMode === 'clock' ? (
+              <>
+                <input type="time" value={medTimeDraft} onChange={(e) => setMedTimeDraft(e.target.value)} className={inp} />
+                <button type="button" onClick={addMedTime} disabled={!medTimeDraft} className="px-2.5 py-2 rounded-xl bg-muted text-fg-soft text-xs font-bold disabled:opacity-40">+ horario</button>
+                {medTimes.map((t) => (
+                  <span key={t} className="text-[10px] font-bold px-1.5 py-1 rounded bg-teal-500/10 text-teal-600 dark:text-teal-300 inline-flex items-center gap-1">
+                    {t}
+                    <button type="button" onClick={() => setMedTimes(medTimes.filter((x) => x !== t))} className="text-teal-600/70 hover:text-rose-500">×</button>
+                  </span>
+                ))}
+              </>
+            ) : (
+              <>
+                <label className="text-[11px] text-fg-muted flex items-center gap-1">
+                  cada
+                  <select value={medInterval} onChange={(e) => setMedInterval(+e.target.value)} className={inp}>
+                    {[2, 3, 4, 6, 8, 12].map((h) => <option key={h} value={h}>{h} h</option>)}
+                  </select>
+                </label>
+                <label className="text-[11px] text-fg-muted flex items-center gap-1">
+                  última toma
+                  <input type="datetime-local" value={medLastTaken} onChange={(e) => setMedLastTaken(e.target.value)} className={inp} />
+                </label>
+              </>
+            )}
+
+            <button type="button" onClick={addMedReminder} disabled={busy || !medName.trim() || (medMode === 'clock' && !medTimes.length)}
+              className="px-3.5 py-2 rounded-xl bg-teal-600 hover:bg-teal-500 active:scale-95 text-white font-bold text-xs shadow-md shadow-teal-600/20 flex items-center gap-1.5 transition-all disabled:opacity-50">
+              {busy ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}
+              <span>Agregar</span>
+            </button>
+          </div>
         </div>
       </div>
 
@@ -262,6 +346,12 @@ export const RemindersCalendar: React.FC = () => {
           <input value={apptNote} onChange={(e) => setApptNote(e.target.value)} placeholder="Turno (ej. Cardiólogo) *" className={`${inp} flex-1 min-w-[140px]`} />
           <input type="date" value={apptDate} onChange={(e) => setApptDate(e.target.value)} className={inp} />
           <input type="time" value={apptTime} onChange={(e) => setApptTime(e.target.value)} className={inp} />
+          <label className="text-[11px] text-fg-muted flex items-center gap-1">
+            avisar
+            <select value={apptLead} onChange={(e) => setApptLead(+e.target.value)} className={inp}>
+              {LEAD_OPTS.map((o) => <option key={o.v} value={o.v}>{o.label}</option>)}
+            </select>
+          </label>
           <button type="button" onClick={addAppointment} disabled={busy || !apptNote.trim() || !apptDate || !apptTime}
             className="px-3.5 py-2 rounded-xl bg-teal-600 hover:bg-teal-500 active:scale-95 text-white font-bold text-xs shadow-md shadow-teal-600/20 flex items-center gap-1.5 transition-all disabled:opacity-50">
             {busy ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}

@@ -15,7 +15,7 @@ import {
   medicationConflicts,
 } from '../services/medication.util';
 import { AiPromptService, PromptScope } from '../services/ai-prompt.service';
-import { MedicationReminderService } from '../services/medication-reminder.service';
+import { MedicationReminderService, ReminderDraft } from '../services/medication-reminder.service';
 import { EmailService } from '../services/email.service';
 import { NlpHandler } from './nlp-handler';
 import { whatsappBot } from './baileys.client';
@@ -1336,7 +1336,8 @@ export class BotStateMachine {
         state === 'ACTIVE_ASK_CATEGORY' ||
         state === 'ACTIVE_REMINDER' ||
         state === 'ACTIVE_FREE_UPDATE' ||
-        state === 'ACTIVE_LINK_PHONE'
+        state === 'ACTIVE_LINK_PHONE' ||
+        state.startsWith('ACTIVE_REMIND_')
           ? state
           : 'ACTIVE_MEMBER';
 
@@ -1399,6 +1400,18 @@ export class BotStateMachine {
           lines.push(tr('⚠️ *Atención — posible interacción con tu ficha:*', '⚠️ *Ejesareko:*'));
           for (const c of r.conflicts) lines.push(`• ${c}`);
           lines.push(tr('_Confirmá con tu médico._', '_Eñemongeta nde médico ndive._'));
+        }
+        // Puente lista → recordatorio: si algún med recién agregado trae frecuencia,
+        // ofrecer programarle el aviso a la hora de tomarlo.
+        const withFreq = r.list.filter((m) => r.added.includes(m.name) && m.frequency);
+        if (withFreq.length) {
+          lines.push('');
+          lines.push(
+            tr(
+              `⏰ _¿Querés que te avise a la hora de tomar *${withFreq.map((m) => m.name).join(', ')}*? Escribí *5* y te lo programo._`,
+              `⏰ _Ehai *5* romomandu'a hag̃ua ndéve._`
+            )
+          );
         }
         return lines.join('\n');
       };
@@ -1533,10 +1546,79 @@ export class BotStateMachine {
         );
       };
 
+      // ---- Diálogo guiado de recordatorios / turnos (sub-modos ACTIVE_REMIND_*) ----
+      // Cada paso interpreta la respuesta (texto o audio transcripto), la guarda en
+      // `onboardingData.rdraft` y `advance()` decide la siguiente pregunta o la
+      // confirmación final. Reusa MedicationReminderService (parse/IA + describe/create).
+      const REMIND_STATE: Record<string, string> = {
+        name: 'ACTIVE_REMIND_NAME',
+        sched: 'ACTIVE_REMIND_SCHED',
+        last: 'ACTIVE_REMIND_LAST',
+        dose: 'ACTIVE_REMIND_DOSE',
+        when: 'ACTIVE_REMIND_WHEN',
+        lead: 'ACTIVE_REMIND_LEAD',
+        '': 'ACTIVE_REMIND_CONFIRM',
+      };
+      const remindQuestion = (step: string, d: Partial<ReminderDraft>): string => {
+        switch (step) {
+          case 'name':
+            return d.kind === 'APPOINTMENT'
+              ? '🩺 ¿De qué es el turno? (ej: _"Cardiólogo"_, _"Control con la Dra. López"_)'
+              : '💊 ¿Cómo se llama el medicamento?';
+          case 'sched':
+            return (
+              '⏰ ¿Cada cuánto lo tomás?\n' +
+              '*[1]* cada 2 h · *[2]* cada 4 h · *[3]* cada 6 h · *[4]* cada 8 h · *[5]* cada 12 h\n' +
+              '_O escribime los horarios fijos, ej: "08:00 y 20:00"._'
+            );
+          case 'last':
+            return '🕒 ¿Cuándo tomaste la última vez? (ej: _"hace 1 hora"_, _"recién"_, _"a las 14:00"_)';
+          case 'dose':
+            return '💊 ¿Qué cantidad por toma? (ej: _"1 comprimido"_, _"10 ml"_, _"1 cucharada"_)\n_Escribí *NADA* si no aplica._';
+          case 'when':
+            return '📅 ¿Qué día y hora es el turno? (ej: _"mañana 9:00"_, _"15/10 a las 14:30"_)';
+          case 'lead':
+            return '⏱️ ¿Con cuánta anticipación te aviso?\n*[1]* 1 hora antes · *[2]* 2 horas · *[3]* 3 horas · *[4]* 1 día antes';
+          default:
+            return '';
+        }
+      };
+      const advanceRemind = async (d: Partial<ReminderDraft>): Promise<BotResponse> => {
+        const step = MedicationReminderService.draftNextStep(d);
+        await updateState(REMIND_STATE[step] || 'ACTIVE_REMIND_CONFIRM', { rdraft: d });
+        if (step === '') {
+          return {
+            replyText:
+              `📋 *Confirmá el recordatorio:*\n\n${MedicationReminderService.describeDraft(d)}\n\n` +
+              `*[1]* Sí, guardar   *[2]* No`,
+          };
+        }
+        return { replyText: remindQuestion(step, d) };
+      };
+      const parseTimesLoose = (s: string): string[] => {
+        const viaParse = MedicationReminderService.parse(`medic ${s}`)?.times || [];
+        if (viaParse.length) return viaParse;
+        const nums = (s.match(/\b\d{1,2}(?::\d{2})?\b/g) || [])
+          .map((x) => {
+            const [h, m] = x.split(':');
+            return `${String(+h).padStart(2, '0')}:${m || '00'}`;
+          })
+          .filter((x) => /^([01]\d|2[0-3]):[0-5]\d$/.test(x));
+        return Array.from(new Set(nums)).sort();
+      };
+
       // Salir de un sub-modo de carga
       if (subMode !== 'ACTIVE_MEMBER' && /^(listo|menu|men[uú]|0|salir|volver|cancelar|terminar)$/i.test(cleanText)) {
-        await updateState('ACTIVE_MEMBER', {});
+        await updateState('ACTIVE_MEMBER', { rdraft: null });
         return { replyText: `✅ ${tr('Listo.', 'Oĩma.')}\n\n${activeMenu()}` };
+      }
+
+      // Consultas en lenguaje natural sobre medicación / turnos ("¿a qué hora tomo X?",
+      // "¿qué estoy tomando?", "¿cuál es mi próxima toma?", "ya tomé", "¿mi próximo turno?").
+      // Funciona en cualquier momento MENOS mientras se está completando un diálogo guiado.
+      if (!subMode.startsWith('ACTIVE_REMIND_') && !msg.mediaBuffer) {
+        const answer = await MedicationReminderService.answerQuery(user.id, cleanText, lang);
+        if (answer) return { replyText: answer };
       }
 
       // Vincular número real (para el login web) y activar notificaciones push:
@@ -1839,68 +1921,134 @@ export class BotStateMachine {
           return { replyText: tr(`${activate ? '▶️ Activé' : '⏸️ Pausé'} el recordatorio de *${target.medication}*.`, `*${target.medication}* ${activate ? 'oñemyendy' : 'oñembopyta'}.`) + '\n\n' + MedicationReminderService.format(await list()) };
         }
 
-        // agregar (texto tecleado o transcripto de audio)
+        // agregar (texto tecleado o transcripto de audio) → se interpreta con la IA
+        // de Niro (+ regex de respaldo) y se pasa al diálogo guiado / confirmación.
         if (cleanText && !/^\d{1,2}$/.test(cleanText)) {
-          // ¿es un turno / consulta médica?
-          const appt = MedicationReminderService.parseAppointment(cleanText);
-          if (appt) {
-            await prisma.medicationReminder.create({
-              data: { userId: user.id, kind: 'APPOINTMENT', medication: appt.note, whenAt: appt.whenAt, times: '[]' },
-            });
-            rows = await list();
-            const w = appt.whenAt.toLocaleString('es-PY', {
-              timeZone: config.timezone,
-              weekday: 'long', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit',
-            });
-            return {
-              replyText:
-                tr(
-                  `✅ *Turno agendado:* 🩺 ${appt.note}\n📅 ${w}\nTe voy a recordar 24 h antes y el día del turno.`,
-                  `✅ *Turno oñeguarda:* 🩺 ${appt.note}\n📅 ${w}`
-                ) +
-                '\n\n' +
-                showList(rows),
-            };
-          }
-
-          const parsed = MedicationReminderService.parse(cleanText);
-          if (!parsed) {
-            return {
-              replyText: tr(
-                '😕 Para *medicación*: *nombre + horarios* — _"Enalapril 10 mg 08:00 y 21:00"_\n' +
-                  'Para un *turno*: *"turno con cardiólogo el 15/10 a las 14:30"_',
-                '😕 Pohã: *réra + hora*.\nTurno: *"turno cardiólogo 15/10 14:30"*'
-              ),
-            };
-          }
-          const created = await prisma.medicationReminder.create({
-            data: {
-              userId: user.id,
-              medication: parsed.medication,
-              dose: parsed.dose || null,
-              times: JSON.stringify(parsed.times),
-            },
-          });
-          const conflicts = medicationConflicts(
-            [{ name: parsed.medication, source: 'manual', addedAt: '' }],
-            user.severeAllergies,
-            user.contraindicatedMeds
-          );
-          rows = await list();
+          const parsed = await MedicationReminderService.parseReminderRequest(cleanText);
+          if (parsed) return advanceRemind(parsed);
           return {
-            replyText:
-              tr(
-                `✅ Recordatorio creado: 💊 *${created.medication}*${created.dose ? ` (${created.dose})` : ''} — ⏰ ${parsed.times.join(', ')}\n` +
-                  `Te voy a avisar por acá 10 minutos antes y a la hora, todos los días.`,
-                `✅ Momandu'a: 💊 *${created.medication}* — ⏰ ${parsed.times.join(', ')}`
-              ) +
-              (conflicts.length ? `\n\n⚠️ ${conflicts.map((c) => `• ${c}`).join('\n')}` : '') +
-              '\n\n' +
-              showList(rows),
+            replyText: tr(
+              '😕 No te entendí. Decime el *medicamento y cada cuánto* — _"Losartán 50 mg cada 8 horas"_ o _"Enalapril 08:00 y 21:00"_ — o el *turno* — _"turno con cardiólogo el 15/10 a las 14:30"_.\n\n_O escribí *LISTO* para volver._',
+              '😕 Ndaikũmbýi. Pohã: *réra + hora*. Turno: *"turno 15/10 14:30"*.\n_Ehai *LISTO* rehóvo._'
+            ),
           };
         }
 
         return { replyText: showList() };
+      }
+
+      // ---- Pasos del diálogo guiado de recordatorios / turnos ----
+      if (subMode.startsWith('ACTIVE_REMIND_')) {
+        const draft: Partial<ReminderDraft> = { ...(getTempData().rdraft || {}) };
+
+        if (state === 'ACTIVE_REMIND_NAME') {
+          const name = cleanText.replace(/^(se llama|es|el|la|un[ao]?|para)\s+/i, '').trim();
+          if (name.length < 2) return { replyText: remindQuestion('name', draft) };
+          draft.medication = name.slice(0, 80);
+          return advanceRemind(draft);
+        }
+
+        if (state === 'ACTIVE_REMIND_SCHED') {
+          const opt: Record<string, number> = { '1': 2, '2': 4, '3': 6, '4': 8, '5': 12 };
+          if (opt[cleanText]) {
+            draft.scheduleKind = 'INTERVAL';
+            draft.intervalHours = opt[cleanText];
+            draft.times = [];
+            return advanceRemind(draft);
+          }
+          const im = lc.match(/cada\s+(\d{1,2})/);
+          if (im && +im[1] >= 1 && +im[1] <= 24) {
+            draft.scheduleKind = 'INTERVAL';
+            draft.intervalHours = +im[1];
+            draft.times = [];
+            return advanceRemind(draft);
+          }
+          const times = parseTimesLoose(cleanText);
+          if (times.length) {
+            draft.scheduleKind = 'CLOCK';
+            draft.times = times;
+            draft.intervalHours = undefined;
+            return advanceRemind(draft);
+          }
+          return { replyText: '😕 No entendí. Respondé *1*–*5*, o escribí los horarios (ej: _"08:00 y 20:00"_).' };
+        }
+
+        if (state === 'ACTIVE_REMIND_LAST') {
+          draft.anchorAt = MedicationReminderService.resolveLastTaken(cleanText).toISOString();
+          return advanceRemind(draft);
+        }
+
+        if (state === 'ACTIVE_REMIND_DOSE') {
+          draft.dose = /^(nada|no|no aplica|ningun[ao]?|omitir|skip|-)$/i.test(cleanText.trim()) ? null : cleanText.trim().slice(0, 60) || null;
+          return advanceRemind(draft);
+        }
+
+        if (state === 'ACTIVE_REMIND_WHEN') {
+          const appt = MedicationReminderService.parseAppointment(/\b(turno|cita|consulta)\b/i.test(lc) ? cleanText : `turno ${cleanText}`);
+          if (!appt) return { replyText: '📅 No entendí la fecha/hora. Probá: _"mañana 9:00"_, _"15/10 a las 14:30"_, _"el lunes 10:00"_.' };
+          draft.whenAt = appt.whenAt.toISOString();
+          if (!draft.medication || draft.medication === 'Consulta médica') draft.medication = appt.note;
+          return advanceRemind(draft);
+        }
+
+        if (state === 'ACTIVE_REMIND_LEAD') {
+          const opt: Record<string, number> = { '1': 60, '2': 120, '3': 180, '4': 1440 };
+          let mins = opt[cleanText];
+          if (!mins) {
+            if (/\bmedia\s+hora\b/.test(lc)) mins = 30;
+            else if (/\b(un|1)\s*d[ií]a\b/.test(lc)) mins = 1440;
+            else {
+              const h = lc.match(/(\d+(?:[.,]\d+)?)\s*(h|hora|horas)\b/);
+              const mm = lc.match(/(\d+)\s*(min|minuto|minutos)\b/);
+              if (h) mins = Math.round(parseFloat(h[1].replace(',', '.')) * 60);
+              else if (mm) mins = +mm[1];
+            }
+          }
+          if (!mins || mins < 5 || mins > 10080) return { replyText: remindQuestion('lead', draft) };
+          draft.leadMinutes = mins;
+          return advanceRemind(draft);
+        }
+
+        if (state === 'ACTIVE_REMIND_CONFIRM') {
+          if (isNegative(cleanText)) {
+            await updateState('ACTIVE_REMINDER', { rdraft: null });
+            return { replyText: '👍 Descartado. Escribí de nuevo lo que querés programar, o *LISTO* para volver al menú.' };
+          }
+          if (!isAffirmative(cleanText)) {
+            return {
+              replyText:
+                `📋 *Confirmá el recordatorio:*\n\n${MedicationReminderService.describeDraft(draft)}\n\n*[1]* Sí, guardar   *[2]* No`,
+            };
+          }
+          await MedicationReminderService.createFromDraft(user.id, draft);
+          await updateState('ACTIVE_REMINDER', { rdraft: null });
+          const conflicts =
+            draft.kind === 'MED'
+              ? medicationConflicts([{ name: draft.medication || '', source: 'manual', addedAt: '' }], user.severeAllergies, user.contraindicatedMeds)
+              : [];
+          const all = await prisma.medicationReminder.findMany({
+            where: { userId: user.id },
+            orderBy: { createdAt: 'asc' },
+            select: {
+              kind: true, scheduleKind: true, medication: true, dose: true, times: true,
+              intervalHours: true, nextDoseAt: true, whenAt: true, active: true,
+            },
+          });
+          const howMed =
+            draft.scheduleKind === 'INTERVAL'
+              ? `Te aviso ${MedicationReminderService.leadLabel(draft.leadMinutes ?? 10)} antes y a la hora. Cuando la tomes escribí *YA TOMÉ* y recalculo la próxima.`
+              : `Te aviso ${MedicationReminderService.leadLabel(draft.leadMinutes ?? 10)} antes y a la hora, todos los días.`;
+          const how = draft.kind === 'APPOINTMENT' ? `Te aviso ${MedicationReminderService.leadLabel(draft.leadMinutes ?? 120)} antes.` : howMed;
+          return {
+            replyText:
+              `✅ *Guardado.*\n\n${MedicationReminderService.describeDraft(draft)}\n${how}\n` +
+              (conflicts.length ? `\n⚠️ ${conflicts.map((c) => `• ${c}`).join('\n')}\n` : '') +
+              `\n${MedicationReminderService.format(all)}`,
+          };
+        }
+
+        // Estado ACTIVE_REMIND_* desconocido → reencauzar
+        return advanceRemind(draft);
       }
 
       // Sub-modo: actualización inteligente de perfil (alergias, contacto, dirección, medicación).
@@ -2100,20 +2248,26 @@ export class BotStateMachine {
         return { replyText: await profileSummary() };
       }
       if (cleanText === '5' || lc.includes('recordatorio') || lc.includes('recordar')) {
-        await updateState('ACTIVE_REMINDER', {});
+        await updateState('ACTIVE_REMINDER', { rdraft: null });
         const rms = await prisma.medicationReminder.findMany({
           where: { userId: user.id },
           orderBy: { createdAt: 'asc' },
-          select: { kind: true, medication: true, dose: true, times: true, whenAt: true, active: true },
+          select: {
+            kind: true, scheduleKind: true, medication: true, dose: true, times: true,
+            intervalHours: true, nextDoseAt: true, whenAt: true, active: true,
+          },
         });
         return {
           replyText:
             `⏰ *${tr('Recordatorios y turnos', "Momandu'a ha turno")}*\n\n` +
             (rms.length ? MedicationReminderService.format(rms) + '\n\n' : '') +
             tr(
-              'Escribí o mandá un *audio*:\n' +
-                '💊 *Medicación:* "Metformina 850 mg 08:00 y 21:00" o "cada 8 horas"\n' +
-                '🩺 *Turno médico:* "turno con traumatólogo el 20/10 a las 10:00"\n\n' +
+              'Escribí o mandá un *audio* con lo que querés programar:\n' +
+                '💊 _"Losartán 50 mg cada 8 horas, tomé hace 1 hora"_\n' +
+                '💊 _"Metformina 850 mg a las 08:00 y 21:00"_\n' +
+                '🩺 _"turno con traumatólogo el 20/10 a las 10:00, avisame 1 hora antes"_\n' +
+                '📸 _O mandá una foto de la receta._\n\n' +
+                '_Te pregunto lo que falte y confirmás antes de guardar._\n' +
                 '_Borrar: "borrar 2" · Pausar: "pausar 1" · Volver: *LISTO*_',
               '💊 "Metformina 08:00 ha 21:00" · 🩺 "turno 20/10 10:00"\n_Ehai *LISTO* rehóvo._'
             ),
@@ -2242,6 +2396,21 @@ export class BotStateMachine {
             ) + tr('\n\n_Te adjunto el más reciente._', '\n\n_Amondo pe ipyahuvéva._'),
           mediaAttachment,
         };
+      }
+
+      // Registrar recordatorio / turno hablando desde el menú general
+      // ("quiero un recordatorio para tomar...", "tengo una cita el...", "recordame tomar...").
+      // Arranca el diálogo guiado (que pregunta lo que falte y pide confirmación).
+      if (
+        /\bquiero\s+(registrar|poner|crear|programar|agregar|agendar)\b/.test(lc) ||
+        /\bhacerme\s+recordar\b/.test(lc) ||
+        /\brecord[aá]r?me\b.*\b(tom(ar|e|é|o)|pastilla|remedio|medic|c[aá]psula|dosis|inyecci|gotas?)\b/.test(lc) ||
+        /\b(record[aá]r?me|recordatorio|alarma)\b.*\bcada\s+\d/.test(lc) ||
+        /\b(tengo|sacar|saqu[eé]|agend[eé]?|reserv[eé]?|dan|me dieron)\b.{0,30}\b(cita|turno|consulta|hora m[eé]dica)\b/.test(lc) ||
+        /\b(cita|turno|consulta)\s+(m[eé]dic|con\s+(el|la|mi|dr))/.test(lc)
+      ) {
+        const parsedReq = await MedicationReminderService.parseReminderRequest(cleanText);
+        return advanceRemind(parsedReq || { kind: /\b(cita|turno|consulta)\b/.test(lc) ? 'APPOINTMENT' : 'MED' });
       }
 
       // Natural Language Processing of incoming text

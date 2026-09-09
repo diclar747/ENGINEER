@@ -93,7 +93,8 @@ function guessMime(filename: string): string {
   return ext === '.png' ? 'image/png' : ext === '.pdf' ? 'application/pdf' : 'image/jpeg';
 }
 
-const DOSE_RE = /\b\d+(?:[.,]\d+)?\s?(?:mg|mcg|µg|g|ml|ui|u|%|comp(?:rimidos?)?|caps?(?:ulas?)?|gotas?|puff)\b/i;
+const DOSE_RE =
+  /\b\d+(?:[.,]\d+)?\s?(?:mg|mcg|µg|g|ml|ui|u|%|comp(?:rimidos?)?|caps?(?:ulas?)?|gotas?|cucharad(?:it)?as?|cdta?s?|cditas?|sobres?|sachets?|ampollas?|aplicaci[oó]n(?:es)?|inhalaci[oó]n(?:es)?|pulverizaci[oó]n(?:es)?|nebulizaci[oó]n(?:es)?|unidad(?:es)?|pastillas?|tabletas?|parches?|puff)\b/i;
 const FREQ_RE =
   /\b(?:cada\s+\d+\s?(?:h(?:oras?)?|d[ií]as?)|\d+\s?(?:x|veces?)\s?(?:\/|al|por)?\s?d[ií]a|(?:una|dos|tres|1|2|3)\s?(?:vez|veces)\s?(?:al|por)\s?d[ií]a|c\/\d+\s?h|q\.?d\.?|b\.?i\.?d\.?|t\.?i\.?d\.?|antes de dormir|en ayunas|por la (?:mañana|noche))\b/i;
 

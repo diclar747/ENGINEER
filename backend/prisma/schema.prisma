@@ -148,24 +148,33 @@ model AiPrompt {
   updatedAt DateTime @updatedAt
 }
 
-/// Recordatorio. kind=MED: toma de medicación recurrente (`times` = JSON ["08:00","20:00"]
-/// en hora local PY). kind=APPOINTMENT: turno/consulta médica única en `whenAt`.
+/// Recordatorio. kind=MED: toma de medicación recurrente. kind=APPOINTMENT: turno/consulta única en `whenAt`.
+/// MED admite dos modos (`scheduleKind`):
+///   - CLOCK    → horarios fijos del día en `times` (JSON ["08:00","20:00"], hora local PY).
+///   - INTERVAL → cada `intervalHours` horas a partir de `anchorAt` (última toma); `nextDoseAt` es
+///                la próxima toma calculada (denormalizada para el cron y el dedupe).
 model MedicationReminder {
-  id           String    @id @default(uuid())
-  userId       String
-  user         User      @relation(fields: [userId], references: [id], onDelete: Cascade)
-  kind         String    @default("MED")      // MED | APPOINTMENT
-  medication   String                          // med: nombre del fármaco · appointment: descripción del turno
-  dose         String?
-  times        String    @default("[]")        // MED: JSON ["08:00","20:00"]
-  whenAt       DateTime?                        // APPOINTMENT: fecha y hora del turno
-  active       Boolean   @default(true)
-  lastSentAt   DateTime?
-  lastSentSlot String?                          // "HH:MM|YYYY-MM-DD" o "APPT" del último enviado
-  createdAt    DateTime  @default(now())
-  updatedAt    DateTime  @updatedAt
+  id            String    @id @default(uuid())
+  userId        String
+  user          User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  kind          String    @default("MED")      // MED | APPOINTMENT
+  scheduleKind  String    @default("CLOCK")    // CLOCK | INTERVAL (solo MED)
+  medication    String                          // med: nombre del fármaco · appointment: descripción del turno
+  dose          String?
+  times         String    @default("[]")        // CLOCK: JSON ["08:00","20:00"]
+  intervalHours Int?                             // INTERVAL: cada cuántas horas
+  anchorAt      DateTime?                        // INTERVAL: momento de la última toma (ancla del cálculo)
+  nextDoseAt    DateTime?                        // INTERVAL: próxima toma calculada
+  leadMinutes   Int       @default(10)           // anticipación del pre-aviso (MED) / del aviso (APPOINTMENT)
+  whenAt        DateTime?                        // APPOINTMENT: fecha y hora del turno
+  active        Boolean   @default(true)
+  lastSentAt    DateTime?
+  lastSentSlot  String?                          // marca del último aviso enviado (dedupe)
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
 
   @@index([active])
+  @@index([userId])
 }
 
 model EmergencyContact {

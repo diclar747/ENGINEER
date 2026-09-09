@@ -2,6 +2,7 @@ import { Request, Response } from 'express';
 import { whatsappBot } from '../whatsapp/baileys.client';
 import { BotStateMachine } from '../whatsapp/bot-state-machine';
 import { CronService } from '../services/cron.service';
+import { MedicationReminderService } from '../services/medication-reminder.service';
 import { NiroService } from '../services/niro.service';
 import { config } from '../config';
 
@@ -130,6 +131,16 @@ export class BotController {
       });
     } catch (err: any) {
       res.status(500).json({ error: 'Error running CRON job', details: err.message });
+    }
+  }
+
+  /** Dispara el tick de recordatorios de medicación / turnos (para pruebas). */
+  public static async triggerReminders(_req: Request, res: Response): Promise<void> {
+    try {
+      const sent = await MedicationReminderService.tick();
+      res.json({ success: true, sent });
+    } catch (err: any) {
+      res.status(500).json({ error: 'Error running reminder tick', details: err.message });
     }
   }
 }

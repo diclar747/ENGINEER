@@ -1,5 +1,7 @@
 import { prisma } from '../database/prisma';
 import { whatsappBot } from '../whatsapp/baileys.client';
+import { NiroService } from './niro.service';
+import { parseMedications, formatMedications, normName } from './medication.util';
 import { config } from '../config';
 
 export interface ParsedReminder {
@@ -8,7 +10,25 @@ export interface ParsedReminder {
   times: string[]; // "HH:MM" 24h
 }
 
-const DOSE_RE = /\b\d+(?:[.,]\d+)?\s?(?:mg|mcg|µg|g|ml|ui|u|%|comp|caps?|gotas?)\b/i;
+/**
+ * Borrador de recordatorio que va llenando el diálogo guiado del bot (se guarda
+ * como JSON en `user.onboardingData.rdraft`, por eso las fechas son ISO string).
+ */
+export interface ReminderDraft {
+  kind: 'MED' | 'APPOINTMENT';
+  medication?: string;
+  dose?: string | null; // undefined = todavía no se preguntó · null/'' = se preguntó y no aplica
+  scheduleKind?: 'CLOCK' | 'INTERVAL';
+  times?: string[];
+  intervalHours?: number;
+  anchorAt?: string; // ISO — última toma (INTERVAL)
+  whenAt?: string; // ISO — turno (APPOINTMENT)
+  leadMinutes?: number;
+}
+
+// Vocabulario de dosis: mg/ml/gotas… + formas caseras (cucharada, sobre, ampolla, parche…).
+const DOSE_RE =
+  /\b\d+(?:[.,]\d+)?\s?(?:mg|mcg|µg|g|ml|ui|u|%|comp(?:rimidos?)?|caps?(?:ulas?)?|gotas?|cucharad(?:it)?as?|cdta?s?|cditas?|sobres?|sachets?|ampollas?|aplicaci[oó]n(?:es)?|inhalaci[oó]n(?:es)?|pulverizaci[oó]n(?:es)?|nebulizaci[oó]n(?:es)?|unidad(?:es)?|pastillas?|tabletas?|parches?|puff)\b/i;
 
 /** Extrae horarios de un texto: "08:00", "8", "8hs", "8 am", "20:30", "a las 9". */
 function extractTimes(text: string): string[] {
@@ -42,8 +62,14 @@ function extractTimes(text: string): string[] {
   if (out.size > 0) {
     for (const m of t.matchAll(/(^|[\s,(]|(?:a\s+las\s+)|y\s+)(\d{1,2})(?=$|[\s,)]|y\b)/g)) {
       const idx = (m.index ?? 0) + m[1].length;
-      const after = t.slice(idx + m[2].length, idx + m[2].length + 5);
-      if (/^\s*(mg|mcg|µg|g|ml|ui|u\b|%|comp|caps?|gota)/i.test(after)) continue;
+      const after = t.slice(idx + m[2].length, idx + m[2].length + 12);
+      // No es una hora si viene pegado a una unidad de dosis o a "vez/veces".
+      if (
+        /^\s*(mg|mcg|µg|g|ml|ui|u\b|%|comp|caps?|gota|cucharad|cda|cdta|cdita|sobre|sachet|ampolla|aplicaci|inhalaci|pulverizaci|nebulizaci|unidad|pastilla|tableta|parche|puff|vez|veces)/i.test(
+          after
+        )
+      )
+        continue;
       const h = parseInt(m[2], 10);
       if (h >= 0 && h <= 23) out.add(`${String(h).padStart(2, '0')}:00`);
     }
@@ -54,20 +80,74 @@ function extractTimes(text: string): string[] {
 /** "cada 8 horas" / "cada 6hs" → 8 / 6. No confunde con una hora puntual ("a las 8"). */
 const INTERVAL_RE = /\bcada\s+(\d{1,2})\s*(?:h|hs|hrs|horas)\b/i;
 
+/** Hora local (config.timezone) desglosada — el contenedor corre en UTC. */
+function nowLocal(from: Date = new Date()): { hhmm: string; minutes: number; hour: number; date: string } {
+  const tz = config.timezone || 'America/Asuncion';
+  const hhmm = from.toLocaleTimeString('en-GB', { timeZone: tz, hour: '2-digit', minute: '2-digit', hour12: false });
+  const [h, m] = hhmm.split(':').map(Number);
+  const date = from.toLocaleDateString('en-CA', { timeZone: tz }); // YYYY-MM-DD
+  return { hhmm, minutes: h * 60 + m, hour: h, date };
+}
+
 /**
  * Convierte un intervalo ("cada 8 horas") en horarios concretos del día,
- * repartidos parejo desde una hora de inicio. Sin hora de inicio explícita
- * ("desde las 8" / "a partir de las 8" / "empezando a las 8"), arranca desde
- * la hora actual (redondeada) — así el primer aviso es lo antes posible.
+ * repartidos parejo desde una hora de inicio. Sin hora de inicio explícita,
+ * arranca desde la hora local ACTUAL de Paraguay (no la del contenedor, que es UTC).
  */
 function intervalToTimes(intervalHours: number, startHour?: number): string[] {
   const n = Math.max(1, Math.floor(24 / intervalHours));
-  const start = ((startHour ?? new Date().getHours()) + 24) % 24;
+  const start = ((startHour ?? nowLocal().hour) + 24) % 24;
   const out: string[] = [];
   for (let i = 0; i < n; i++) {
     out.push(`${String((start + i * intervalHours) % 24).padStart(2, '0')}:00`);
   }
   return out.sort();
+}
+
+/** Fecha (ms epoch) para "HH:MM" de HOY en hora local PY (offset fijo -03:00, sin DST desde 2024). */
+function todayAtLocal(hh: number, mm: number, ref: Date = new Date()): Date {
+  const tz = config.timezone || 'America/Asuncion';
+  const [y, mo, d] = ref.toLocaleDateString('en-CA', { timeZone: tz }).split('-').map(Number);
+  return new Date(
+    `${y}-${String(mo).padStart(2, '0')}-${String(d).padStart(2, '0')}T${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}:00-03:00`
+  );
+}
+
+const LEAD_LABEL: Record<number, string> = {
+  30: 'media hora',
+  60: '1 hora',
+  120: '2 horas',
+  180: '3 horas',
+  1440: '1 día',
+};
+function leadLabel(mins: number): string {
+  return LEAD_LABEL[mins] || (mins % 60 === 0 ? `${mins / 60} h` : `${mins} min`);
+}
+
+function fmtDateTime(d: Date): string {
+  return d.toLocaleString('es-PY', {
+    timeZone: config.timezone || 'America/Asuncion',
+    weekday: 'long',
+    day: '2-digit',
+    month: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+}
+function fmtHHMM(d: Date): string {
+  return d.toLocaleTimeString('es-PY', {
+    timeZone: config.timezone || 'America/Asuncion',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  });
+}
+function humanIn(ms: number): string {
+  if (ms <= 60_000) return 'menos de 1 min';
+  const totalMin = Math.round(ms / 60_000);
+  const h = Math.floor(totalMin / 60);
+  const m = totalMin % 60;
+  return h ? `${h} h${m ? ` ${m} min` : ''}` : `${m} min`;
 }
 
 export class MedicationReminderService {
@@ -181,6 +261,7 @@ export class MedicationReminderService {
       .replace(/\b[0-3]?\d[\/.\-][01]?\d(?:[\/.\-]\d{2,4})?\b/g, ' ')
       .replace(/\b\d{1,2}(?::[0-5]\d)?\s*(a\.?m\.?|p\.?m\.?|h|hs|hrs|horas)?\b/gi, ' ')
       .replace(/\b(mañana|pasado|hoy|lunes|martes|mi[eé]rcoles|jueves|viernes|s[aá]bado|domingo)\b/gi, ' ')
+      .replace(/\b(avisame|avisar|antes|una|hora|horas|minutos?|d[ií]a\s+antes)\b/gi, ' ')
       .replace(/\s+/g, ' ')
       .trim();
     if (note.length < 3) note = 'Consulta médica';
@@ -188,9 +269,232 @@ export class MedicationReminderService {
     return { note: note.slice(0, 120), whenAt };
   }
 
+  /** "hace 1 hora" / "recién" / "a las 14:00" / ISO → Date de la última toma. */
+  static resolveLastTaken(str: string | undefined | null, from: Date = new Date()): Date {
+    const raw = (str || '').trim();
+    if (!raw) return from;
+
+    if (/^\d{4}-\d{2}-\d{2}t/i.test(raw)) {
+      const iso = new Date(raw);
+      if (!isNaN(iso.getTime())) return iso;
+    }
+    const t = raw.toLowerCase();
+
+    if (/\b(reci[eé]n|reciente|ahora|ac[aá]\s+nom[aá]s|hace\s+nada|now)\b/.test(t)) return from;
+    if (/\bhace\s+un?\s+rat/.test(t)) return new Date(from.getTime() - 30 * 60_000);
+
+    const rel = t.match(/hace\s+(un[ao]?|media|\d+(?:[.,]\d+)?)\s*(min|minuto|minutos|h|hs|hrs|hora|horas|d[ií]a|d[ií]as)/);
+    if (rel) {
+      let n = rel[1] === 'media' ? 0.5 : /^un/.test(rel[1]) ? 1 : parseFloat(rel[1].replace(',', '.'));
+      if (isNaN(n)) n = 1;
+      const unit = rel[2];
+      const ms = /^min/.test(unit) ? n * 60_000 : /^d/.test(unit) ? n * 86_400_000 : n * 3_600_000;
+      return new Date(from.getTime() - ms);
+    }
+
+    const hm = extractTimes(raw);
+    if (hm.length) {
+      const [hh, mm] = hm[0].split(':').map(Number);
+      let dt = todayAtLocal(hh, mm, from);
+      if (dt.getTime() > from.getTime()) dt = new Date(dt.getTime() - 86_400_000); // fue ayer
+      return dt;
+    }
+    return from;
+  }
+
+  /** Etiqueta legible de una anticipación en minutos ("1 hora", "2 horas", "1 día"…). */
+  static leadLabel(mins: number): string {
+    return leadLabel(mins);
+  }
+
+  /** Próxima toma: menor `anchor + k·intervalHours` (k≥1) estrictamente futura respecto de `from`. */
+  static computeNextDose(anchor: Date, intervalHours: number, from: Date = new Date()): Date {
+    const stepMs = Math.max(1, intervalHours) * 3_600_000;
+    const elapsed = from.getTime() - anchor.getTime();
+    let k = elapsed <= 0 ? 1 : Math.floor(elapsed / stepMs) + 1;
+    let next = anchor.getTime() + k * stepMs;
+    if (next <= from.getTime()) next += stepMs; // guarda contra redondeo
+    return new Date(next);
+  }
+
+  /**
+   * Interpreta el pedido completo del usuario (texto o audio transcripto) con la IA
+   * de Niro; si Niro no está disponible o no devuelve nada, cae a los parsers regex.
+   * Devuelve un borrador parcial — el bot completa lo que falte preguntando.
+   */
+  static async parseReminderRequest(text: string): Promise<Partial<ReminderDraft> | null> {
+    const raw = (text || '').trim();
+    if (!raw) return null;
+
+    const draft: Partial<ReminderDraft> = {};
+
+    if (NiroService.enabled) {
+      const ai = await NiroService.extractFields(
+        raw,
+        'De este pedido para programar un recordatorio de medicación o un turno médico, devolvé JSON con: ' +
+          'kind ("MED" o "APPOINTMENT"); ' +
+          'medication (nombre del medicamento, o para un turno la especialidad/descripción); ' +
+          'dose (cantidad por toma tal cual la dijo: "1 comprimido", "10 ml", "1 cucharada"… o null); ' +
+          'scheduleKind ("INTERVAL" si dijo "cada N horas", "CLOCK" si dio horarios puntuales, o null); ' +
+          'intervalHours (número entero de horas si INTERVAL, si no null); ' +
+          'times (array de horarios "HH:MM" en 24h si dio horarios puntuales, si no []); ' +
+          'lastTaken (cuándo tomó la última vez tal cual lo dijo: "hace 1 hora", "recién", "a las 14:00"… o null); ' +
+          'apptDate ("YYYY-MM-DD" del turno o null); apptTime ("HH:MM" del turno o null); ' +
+          'leadMinutes (minutos de anticipación del aviso que pidió: "una hora antes"→60, "el día antes"→1440, o null).'
+      );
+      if (ai) {
+        const k = String(ai.kind || '').toUpperCase();
+        draft.kind = k === 'APPOINTMENT' ? 'APPOINTMENT' : k === 'MED' ? 'MED' : undefined;
+        if (ai.medication && String(ai.medication).trim()) draft.medication = String(ai.medication).trim().slice(0, 80);
+        if (ai.dose && String(ai.dose).trim()) draft.dose = String(ai.dose).trim().slice(0, 60);
+        const sk = String(ai.scheduleKind || '').toUpperCase();
+        if (sk === 'INTERVAL' || sk === 'CLOCK') draft.scheduleKind = sk;
+        const ih = parseInt(String(ai.intervalHours), 10);
+        if (ih >= 1 && ih <= 24) {
+          draft.intervalHours = ih;
+          draft.scheduleKind = draft.scheduleKind || 'INTERVAL';
+        }
+        if (Array.isArray(ai.times)) {
+          const ts = ai.times.map((x: unknown) => String(x).trim()).filter((x: string) => /^([01]\d|2[0-3]):[0-5]\d$/.test(x));
+          if (ts.length) {
+            draft.times = ts;
+            draft.scheduleKind = draft.scheduleKind || 'CLOCK';
+          }
+        }
+        if (ai.lastTaken && String(ai.lastTaken).trim()) {
+          draft.anchorAt = this.resolveLastTaken(String(ai.lastTaken)).toISOString();
+        }
+        if (ai.apptDate && ai.apptTime && /^\d{4}-\d{2}-\d{2}$/.test(String(ai.apptDate)) && /^\d{1,2}:\d{2}$/.test(String(ai.apptTime))) {
+          const [h, m] = String(ai.apptTime).split(':').map(Number);
+          const dt = new Date(`${ai.apptDate}T${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:00-03:00`);
+          if (!isNaN(dt.getTime()) && dt.getTime() > Date.now() - 3600_000) {
+            draft.whenAt = dt.toISOString();
+            draft.kind = draft.kind || 'APPOINTMENT';
+          }
+        }
+        const lm = parseInt(String(ai.leadMinutes), 10);
+        if (lm >= 5 && lm <= 10080) draft.leadMinutes = lm;
+      }
+    }
+
+    // Respaldo regex — completa lo que la IA no trajo.
+    if (!draft.whenAt || draft.kind === 'APPOINTMENT') {
+      const appt = this.parseAppointment(raw);
+      if (appt && !draft.whenAt) {
+        draft.kind = 'APPOINTMENT';
+        draft.whenAt = appt.whenAt.toISOString();
+        draft.medication = draft.medication || appt.note;
+      }
+    }
+    if ((!draft.medication || !draft.scheduleKind) && draft.kind !== 'APPOINTMENT') {
+      const p = this.parse(raw);
+      if (p) {
+        draft.kind = draft.kind || 'MED';
+        draft.medication = draft.medication || p.medication;
+        draft.dose = draft.dose ?? (p.dose || undefined);
+        if (!draft.scheduleKind) {
+          draft.scheduleKind = 'CLOCK';
+          draft.times = draft.times && draft.times.length ? draft.times : p.times;
+        }
+      }
+      const im = raw.match(INTERVAL_RE);
+      if (im && !draft.intervalHours) {
+        const n = parseInt(im[1], 10);
+        if (n >= 1 && n <= 24) {
+          draft.intervalHours = n;
+          draft.scheduleKind = 'INTERVAL';
+        }
+      }
+    }
+    if (!draft.anchorAt && /\b(reci[eé]n|hace\s+\d|hace\s+un|a\s+las\s+\d)/i.test(raw) && draft.scheduleKind === 'INTERVAL') {
+      draft.anchorAt = this.resolveLastTaken(raw).toISOString();
+    }
+
+    if (!draft.kind && !draft.medication && !draft.whenAt) return null;
+    if (!draft.kind) draft.kind = draft.whenAt ? 'APPOINTMENT' : 'MED';
+    return draft;
+  }
+
+  /** ¿Qué falta preguntar para poder guardar el borrador? '' = listo para confirmar. */
+  static draftNextStep(d: Partial<ReminderDraft>): '' | 'name' | 'sched' | 'last' | 'dose' | 'when' | 'lead' {
+    if (d.kind === 'APPOINTMENT') {
+      if (!d.medication) return 'name';
+      if (!d.whenAt) return 'when';
+      if (d.leadMinutes === undefined || d.leadMinutes === null) return 'lead';
+      return '';
+    }
+    if (!d.medication) return 'name';
+    if (!d.scheduleKind || (d.scheduleKind === 'CLOCK' && !(d.times && d.times.length)) || (d.scheduleKind === 'INTERVAL' && !d.intervalHours))
+      return 'sched';
+    if (d.scheduleKind === 'INTERVAL' && !d.anchorAt) return 'last';
+    if (d.dose === undefined) return 'dose';
+    return '';
+  }
+
+  /** Resumen legible del borrador para el paso de confirmación. */
+  static describeDraft(d: Partial<ReminderDraft>): string {
+    if (d.kind === 'APPOINTMENT') {
+      const when = d.whenAt ? fmtDateTime(new Date(d.whenAt)) : '—';
+      const lead = d.leadMinutes ? ` · aviso ${leadLabel(d.leadMinutes)} antes` : '';
+      return `🩺 *${d.medication || 'Consulta médica'}*\n📅 ${when}${lead}`;
+    }
+    const dose = d.dose ? ` (${d.dose})` : '';
+    if (d.scheduleKind === 'INTERVAL') {
+      const anchor = d.anchorAt ? new Date(d.anchorAt) : new Date();
+      const next = this.computeNextDose(anchor, d.intervalHours || 8);
+      return `💊 *${d.medication}*${dose}\n🔁 cada ${d.intervalHours} h · próxima ~${fmtHHMM(next)}`;
+    }
+    return `💊 *${d.medication}*${dose}\n⏰ ${(d.times || []).join(', ')} todos los días`;
+  }
+
+  /** Persiste un borrador ya confirmado. Calcula `nextDoseAt` para INTERVAL. */
+  static async createFromDraft(userId: string, d: Partial<ReminderDraft>) {
+    if (d.kind === 'APPOINTMENT') {
+      return prisma.medicationReminder.create({
+        data: {
+          userId,
+          kind: 'APPOINTMENT',
+          medication: (d.medication || 'Consulta médica').slice(0, 120),
+          whenAt: d.whenAt ? new Date(d.whenAt) : null,
+          times: '[]',
+          leadMinutes: d.leadMinutes ?? 120,
+        },
+      });
+    }
+    const scheduleKind = d.scheduleKind === 'INTERVAL' ? 'INTERVAL' : 'CLOCK';
+    const data: any = {
+      userId,
+      kind: 'MED',
+      scheduleKind,
+      medication: (d.medication || 'Medicación').slice(0, 80),
+      dose: d.dose ? String(d.dose).slice(0, 60) : null,
+      leadMinutes: d.leadMinutes ?? 10,
+    };
+    if (scheduleKind === 'INTERVAL') {
+      const anchor = d.anchorAt ? new Date(d.anchorAt) : new Date();
+      data.intervalHours = d.intervalHours || 8;
+      data.anchorAt = anchor;
+      data.nextDoseAt = this.computeNextDose(anchor, data.intervalHours);
+      data.times = '[]';
+    } else {
+      data.times = JSON.stringify(d.times && d.times.length ? d.times : ['08:00']);
+    }
+    return prisma.medicationReminder.create({ data });
+  }
+
   /** Lista legible de recordatorios para WhatsApp. */
   static format(
-    rows: Array<{ kind?: string; medication: string; dose: string | null; times: string; whenAt?: Date | null; active: boolean }>
+    rows: Array<{
+      kind?: string;
+      scheduleKind?: string | null;
+      medication: string;
+      dose: string | null;
+      times: string;
+      intervalHours?: number | null;
+      nextDoseAt?: Date | null;
+      whenAt?: Date | null;
+      active: boolean;
+    }>
   ): string {
     if (!rows.length) return '';
     return rows
@@ -208,6 +512,10 @@ export class MedicationReminderService {
             : '';
           return `*${i + 1}.* 🩺 *${r.medication}* — 📅 ${w}${state}`;
         }
+        if (r.scheduleKind === 'INTERVAL') {
+          const nx = r.nextDoseAt ? ` · próxima ${fmtHHMM(new Date(r.nextDoseAt))}` : '';
+          return `*${i + 1}.* 💊 *${r.medication}*${r.dose ? ` (${r.dose})` : ''} — 🔁 cada ${r.intervalHours} h${nx}${state}`;
+        }
         let hs: string[] = [];
         try {
           hs = JSON.parse(r.times);
@@ -219,22 +527,152 @@ export class MedicationReminderService {
       .join('\n');
   }
 
-  /** "HH:MM" hora local (config.timezone) y fecha "YYYY-MM-DD" ahora. */
-  private static nowLocal(): { hhmm: string; minutes: number; date: string } {
-    const tz = config.timezone || 'America/Asuncion';
-    const d = new Date();
-    const hhmm = d.toLocaleTimeString('en-GB', { timeZone: tz, hour: '2-digit', minute: '2-digit', hour12: false });
-    const [h, m] = hhmm.split(':').map(Number);
-    const date = d.toLocaleDateString('en-CA', { timeZone: tz }); // YYYY-MM-DD
-    return { hhmm, minutes: h * 60 + m, date };
+  /**
+   * Consulta en lenguaje natural sobre la medicación / turnos del titular.
+   * Devuelve el texto de respuesta, o `null` si el mensaje no es una consulta de este tipo
+   * (para que el bot siga con su flujo normal). Determinístico (regex); sin costo de IA.
+   */
+  static async answerQuery(userId: string, text: string, _lang: string = 'es'): Promise<string | null> {
+    const t = (text || '').toLowerCase().trim();
+    if (!t) return null;
+    // Puerta barata: solo seguimos si el mensaje huele a consulta de medicación/turnos.
+    if (!/\b(tom(ar|o|e|é|as|a)|pastilla|remedio|medicaci|medicament|dosis|turno|cita|consulta|pr[oó]xim|cu[aá]nto falta|horario|a que hora|a qué hora)\b/.test(t))
+      return null;
+
+    const [meds, reminders] = await Promise.all([
+      prisma.user.findUnique({ where: { id: userId }, select: { currentMedications: true } }),
+      prisma.medicationReminder.findMany({ where: { userId, active: true }, orderBy: { createdAt: 'asc' } }),
+    ]);
+    const medList = parseMedications(meds?.currentMedications ?? null);
+    const medReminders = reminders.filter((r) => r.kind === 'MED');
+    const appts = reminders
+      .filter((r) => r.kind === 'APPOINTMENT' && r.whenAt)
+      .sort((a, b) => new Date(a.whenAt!).getTime() - new Date(b.whenAt!).getTime());
+    const now = new Date();
+
+    // --- "ya tomé [X]" → re-anclar los INTERVAL ---
+    if (/\b(ya\s+tom[eé]|reci[eé]n\s+tom[eé]|tom[eé]\s+(mi|el|la|un[ao]|ya))\b/.test(t) || /^tom[eé]\b/.test(t)) {
+      const nameHint = t.replace(/.*\btom[eé]\b/, '').replace(/\b(mi|el|la|un[ao]|ya|pastilla|remedio|medicaci[oó]n|reci[eé]n)\b/g, '').trim();
+      const targets = medReminders.filter(
+        (r) => r.scheduleKind === 'INTERVAL' && (!nameHint || normName(r.medication).includes(normName(nameHint)) || normName(nameHint).includes(normName(r.medication)))
+      );
+      if (!targets.length) {
+        return medReminders.some((r) => r.scheduleKind === 'INTERVAL')
+          ? 'No encontré ese medicamento entre tus recordatorios "cada X horas". Escribí *5* para verlos.'
+          : 'No tenés recordatorios "cada X horas" cargados. Los de horario fijo se avisan solos a la hora — no hace falta que confirmes.';
+      }
+      const lines: string[] = [];
+      for (const r of targets) {
+        const next = this.computeNextDose(now, r.intervalHours || 8, now);
+        await prisma.medicationReminder.update({
+          where: { id: r.id },
+          data: { anchorAt: now, nextDoseAt: next, lastSentSlot: null },
+        });
+        lines.push(`💊 *${r.medication}* — próxima toma ~${fmtHHMM(next)}`);
+      }
+      return `✅ Anotado que tomaste ahora.\n${lines.join('\n')}`;
+    }
+
+    // --- "¿qué estoy tomando?" / "¿cómo se llama lo que tomo?" ---
+    if (/\b(qu[eé]\s+(medicament|remedio|pastilla|medicaci)|c[oó]mo\s+se\s+llama|mi\s+medicaci[oó]n|qu[eé]\s+estoy\s+tomando|qu[eé]\s+tomo\b(?!\s+hoy))/.test(t) && !/\bhoy\b/.test(t) && !/a\s+qu[eé]\s+hora/.test(t)) {
+      const parts: string[] = [];
+      if (medList.length) parts.push(`💊 *Tu medicación cargada (${medList.length}):*\n${formatMedications(medList, { max: 20 })}`);
+      if (medReminders.length) {
+        parts.push(
+          `⏰ *Con recordatorio:*\n` +
+            medReminders
+              .map((r) =>
+                r.scheduleKind === 'INTERVAL'
+                  ? `• *${r.medication}*${r.dose ? ` (${r.dose})` : ''} — cada ${r.intervalHours} h`
+                  : `• *${r.medication}*${r.dose ? ` (${r.dose})` : ''} — ${(JSON.parse(r.times || '[]') as string[]).join(', ')}`
+              )
+              .join('\n')
+        );
+      }
+      if (!parts.length) return 'Todavía no tenés medicación cargada. Escribí *1* para cargar un medicamento o *5* para programar un horario.';
+      return parts.join('\n\n');
+    }
+
+    // --- "¿cuándo es mi próximo turno?" ---
+    if (/\b(turno|cita|consulta)\b/.test(t) && /\b(pr[oó]xim|cu[aá]ndo|tengo|hay|mi)\b/.test(t)) {
+      const nextAppt = appts.find((r) => new Date(r.whenAt!).getTime() > now.getTime() - 3600_000);
+      if (!nextAppt) return 'No tenés turnos agendados. Escribí *5* y decime, por ejemplo: _"turno con cardiólogo el 20/10 a las 10:00"_.';
+      return `🩺 *Tu próximo turno:* ${nextAppt.medication}\n📅 ${fmtDateTime(new Date(nextAppt.whenAt!))}\nTe voy a avisar ${leadLabel(nextAppt.leadMinutes || 120)} antes.`;
+    }
+
+    // Próximas tomas (una función común para "a qué hora" y "próxima toma").
+    const upcoming = this.upcomingDoses(medReminders, now);
+
+    // --- "¿a qué hora tomo el losartán?" (medicamento nombrado) ---
+    const hourAsk = t.match(/a\s+qu[eé]\s+hora\s+(?:tengo\s+que\s+|debo\s+|me\s+toca\s+)?tom(?:ar|o)\s+(?:el|la|los|las|mi)?\s*(.+)/) ||
+      t.match(/\bcu[aá]ndo\s+(?:tengo\s+que\s+|debo\s+|me\s+toca\s+)?tom(?:ar|o)\s+(?:el|la|los|las|mi)?\s*(.+)/);
+    if (hourAsk) {
+      const q = normName(hourAsk[1].replace(/[?¿!¡.]+$/g, ''));
+      const hit = medReminders.find((r) => q && (normName(r.medication).includes(q) || q.includes(normName(r.medication))));
+      if (hit) {
+        if (hit.scheduleKind === 'INTERVAL') {
+          const nx = hit.nextDoseAt ? fmtHHMM(new Date(hit.nextDoseAt)) : '—';
+          return `💊 *${hit.medication}*${hit.dose ? ` (${hit.dose})` : ''}: cada ${hit.intervalHours} h · próxima ~${nx}.`;
+        }
+        return `💊 *${hit.medication}*${hit.dose ? ` (${hit.dose})` : ''}: ${(JSON.parse(hit.times || '[]') as string[]).join(', ')} todos los días.`;
+      }
+      // no lo encontró por nombre → cae a "próxima toma"
+    }
+
+    // --- "¿qué tengo que tomar ahora?" / "¿cuál es mi próxima toma?" / "¿cuánto falta?" ---
+    if (/\b(pr[oó]xim|cu[aá]nto\s+falta|ahora|qu[eé]\s+(tengo\s+que\s+|debo\s+)?tom|a\s+qu[eé]\s+hora)\b/.test(t)) {
+      if (!upcoming.length) return 'No tenés medicación con horario cargada. Escribí *5* para programar una.';
+      const next = upcoming[0];
+      const rest = upcoming.slice(1, 4).map((u) => `• ${u.label} — ${fmtHHMM(u.at)}`);
+      return (
+        `⏭️ *Tu próxima toma:* ${next.label}\n🕒 ${fmtHHMM(next.at)} (en ${humanIn(next.at.getTime() - now.getTime())})` +
+        (rest.length ? `\n\n*Después:*\n${rest.join('\n')}` : '')
+      );
+    }
+
+    return null;
+  }
+
+  /** Próximas tomas (24 h) de una lista de recordatorios MED, ordenadas. */
+  private static upcomingDoses(
+    medReminders: Array<{ medication: string; dose: string | null; times: string; scheduleKind: string | null; intervalHours: number | null; nextDoseAt: Date | null }>,
+    now: Date
+  ): Array<{ at: Date; label: string }> {
+    const out: Array<{ at: Date; label: string }> = [];
+    for (const r of medReminders) {
+      const label = `${r.medication}${r.dose ? ` (${r.dose})` : ''}`;
+      if (r.scheduleKind === 'INTERVAL') {
+        if (r.nextDoseAt) out.push({ at: new Date(r.nextDoseAt), label });
+        continue;
+      }
+      let times: string[] = [];
+      try {
+        times = JSON.parse(r.times || '[]');
+      } catch {
+        /* noop */
+      }
+      for (const hm of times) {
+        const [hh, mm] = hm.split(':').map(Number);
+        if (Number.isNaN(hh)) continue;
+        let at = todayAtLocal(hh, mm, now);
+        if (at.getTime() < now.getTime() - 5 * 60_000) at = new Date(at.getTime() + 86_400_000); // ya pasó → mañana
+        out.push({ at, label });
+      }
+    }
+    return out.sort((a, b) => a.at.getTime() - b.at.getTime());
   }
 
   /**
-   * Tick del CRON (cada 5 min): dispara los recordatorios cuya hora cae dentro de
-   * los últimos ~6 minutos y que no se enviaron ya en ese slot/día.
+   * Tick del CRON (cada 5 min): dispara los recordatorios cuya hora cae en la ventana
+   * y que no se enviaron ya en ese slot. Si el bot de WhatsApp está desconectado, no
+   * hace nada (los recordatorios no avanzan → se reintentan en el próximo tick).
    */
   static async tick(): Promise<number> {
-    const { minutes: nowMin, date } = this.nowLocal();
+    if (!whatsappBot.getStatus().connected) {
+      return 0;
+    }
+    const { minutes: nowMin, date } = nowLocal();
+    const nowMs = Date.now();
     let sent = 0;
 
     const reminders = await prisma.medicationReminder.findMany({
@@ -242,50 +680,95 @@ export class MedicationReminderService {
       include: { user: { select: { phoneNumber: true, whatsappJid: true, status: true, language: true } } },
     });
 
-    const nowMs = Date.now();
-
     for (const r of reminders) {
       if (!r.user || (r.user.status !== 'ACTIVE' && r.user.status !== 'EXPIRED')) continue;
-      const gnU = r.user.language === 'GN';
+      const gn = r.user.language === 'GN';
       const target = r.user.whatsappJid || r.user.phoneNumber;
+      const lead = Math.max(1, r.leadMinutes || 10);
 
       // --- Turno / consulta médica (una sola vez) ---
       if (r.kind === 'APPOINTMENT') {
         if (!r.whenAt) continue;
         const whenMs = new Date(r.whenAt).getTime();
-        const dtLocal = new Date(r.whenAt).toLocaleString('es-PY', {
-          timeZone: config.timezone || 'America/Asuncion',
-          weekday: 'long', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit',
-        });
-        // Aviso 24 h antes
-        if (r.lastSentSlot !== 'D-1' && whenMs - nowMs <= 24 * 3600_000 && whenMs - nowMs > 22 * 3600_000) {
-          const msg = gnU
+        const dtLocal = fmtDateTime(new Date(r.whenAt));
+
+        // Cortesía 24 h antes (salvo que el aviso pedido ya sea de ~1 día).
+        if (lead < 1200 && r.lastSentSlot !== 'D-1' && r.lastSentSlot !== 'LEAD' && whenMs - nowMs <= 24 * 3600_000 && whenMs - nowMs > 24 * 3600_000 - 6 * 60_000) {
+          const msg = gn
             ? `📅 *Momandu'a: turno* ko'ẽrõ\n\n*${r.medication}*\n🕒 ${dtLocal}`
             : `📅 *Recordatorio: turno mañana*\n\n*${r.medication}*\n🕒 ${dtLocal}`;
-          await whatsappBot.sendMessage(target, msg).catch(() => {});
-          await prisma.medicationReminder.update({ where: { id: r.id }, data: { lastSentAt: new Date(), lastSentSlot: 'D-1' } });
-          sent++;
+          if (await whatsappBot.sendMessage(target, msg)) {
+            await prisma.medicationReminder.update({ where: { id: r.id }, data: { lastSentAt: new Date(), lastSentSlot: 'D-1' } });
+            sent++;
+          }
           continue;
         }
-        // Aviso el día del turno (2 h antes hasta la hora)
-        if (r.lastSentSlot !== 'DAY' && whenMs - nowMs <= 2 * 3600_000 && whenMs - nowMs > -15 * 60_000) {
-          const msg = gnU
-            ? `📅 *Turno ko'ág̃a*\n\n*${r.medication}*\n🕒 ${dtLocal}`
-            : `📅 *Tu turno médico es hoy*\n\n*${r.medication}*\n🕒 ${dtLocal}\n\n_No faltes. Escribí *MENU* para tus opciones._`;
-          await whatsappBot.sendMessage(target, msg).catch(() => {});
-          await prisma.medicationReminder.update({
-            where: { id: r.id },
-            data: { lastSentAt: new Date(), lastSentSlot: 'DAY', active: whenMs > nowMs },
-          });
-          sent++;
+        // Aviso principal: `leadMinutes` antes (con tolerancia hasta la hora del turno).
+        const untilLead = whenMs - nowMs - lead * 60_000;
+        if (r.lastSentSlot !== 'LEAD' && untilLead <= 150_000 && whenMs - nowMs > -15 * 60_000) {
+          const msg = gn
+            ? `📅 *Turno* — *${r.medication}*\n🕒 ${dtLocal}`
+            : `📅 *Tu turno médico*\n\n*${r.medication}*\n🕒 ${dtLocal}\n\n_Faltan ${leadLabel(lead)}. No faltes._`;
+          if (await whatsappBot.sendMessage(target, msg)) {
+            await prisma.medicationReminder.update({
+              where: { id: r.id },
+              data: { lastSentAt: new Date(), lastSentSlot: 'LEAD', active: whenMs > nowMs },
+            });
+            sent++;
+          }
         }
-        // Desactivar turnos ya pasados
         if (whenMs < nowMs - 3600_000) {
           await prisma.medicationReminder.update({ where: { id: r.id }, data: { active: false } });
         }
         continue;
       }
 
+      // --- Medicación por INTERVALO (cada N horas desde la última toma) ---
+      if (r.scheduleKind === 'INTERVAL') {
+        if (!r.nextDoseAt || !r.intervalHours) continue;
+        const nd = new Date(r.nextDoseAt).getTime();
+        const dueTag = new Date(nd).toISOString();
+        const preTag = `PRE:${dueTag}`;
+
+        // Pre-aviso `leadMinutes` antes.
+        if (r.lastSentSlot !== preTag && r.lastSentSlot !== dueTag) {
+          const untilPre = nd - nowMs - lead * 60_000;
+          if (untilPre <= 150_000 && untilPre > -150_000) {
+            const msg = gn
+              ? `⏰ *Momandu'a: ${leadLabel(lead)} rupi*\n\n*${r.medication}*${r.dose ? ` (${r.dose})` : ''} — ${fmtHHMM(new Date(nd))}.`
+              : `⏰ *En ${leadLabel(lead)} toca tu medicación*\n\n*${r.medication}*${r.dose ? ` (${r.dose})` : ''} a las ${fmtHHMM(new Date(nd))}.`;
+            if (await whatsappBot.sendMessage(target, msg)) {
+              await prisma.medicationReminder.update({ where: { id: r.id }, data: { lastSentAt: new Date(), lastSentSlot: preTag } });
+              sent++;
+            }
+            continue;
+          }
+        }
+
+        // Aviso a la hora.
+        if (r.lastSentSlot !== dueTag && nowMs >= nd) {
+          if (nowMs - nd <= 30 * 60_000) {
+            const msg = gn
+              ? `⏰ *Momandu'a pohã*\n\nHi'ára reipuru hag̃ua *${r.medication}*${r.dose ? ` (${r.dose})` : ''}.\n\n_Ehai *YA TOMÉ* rejapo rire._`
+              : `⏰ *Recordatorio de medicación*\n\nEs hora de tomar *${r.medication}*${r.dose ? ` (${r.dose})` : ''}.\n\n_Cuando la tomes escribí *YA TOMÉ* y recalculo la próxima._`;
+            if (await whatsappBot.sendMessage(target, msg)) {
+              const next = this.computeNextDose(new Date(nd), r.intervalHours, new Date());
+              await prisma.medicationReminder.update({
+                where: { id: r.id },
+                data: { lastSentAt: new Date(), lastSentSlot: dueTag, nextDoseAt: next },
+              });
+              sent++;
+            }
+          } else {
+            // Atraso grande (bot caído un buen rato) → avanzar en silencio, sin spamear.
+            const next = this.computeNextDose(new Date(nd), r.intervalHours, new Date());
+            await prisma.medicationReminder.update({ where: { id: r.id }, data: { nextDoseAt: next, lastSentSlot: dueTag } });
+          }
+        }
+        continue;
+      }
+
+      // --- Medicación por HORARIOS FIJOS del día (CLOCK) ---
       let slots: string[] = [];
       try {
         slots = JSON.parse(r.times);
@@ -298,49 +781,35 @@ export class MedicationReminderService {
         if (Number.isNaN(sh) || Number.isNaN(sm)) continue;
         const slotMin = sh * 60 + sm;
 
-        // Aviso previo, 10 minutos antes de la hora. El cron corre cada 5 min y
-        // "10 minutos antes" no cae siempre en un múltiplo de 5 exacto, así que
-        // se usa una ventana de 5 minutos [8,12] — como nowMin siempre avanza de
-        // a 5, esa ventana garantiza exactamente un tick que la matchea.
-        const lead = slotMin - nowMin;
-        if (lead >= 8 && lead <= 12) {
+        // Pre-aviso `leadMinutes` antes (ventana de 5 min alrededor).
+        const toLead = slotMin - nowMin;
+        if (toLead >= lead - 2 && toLead <= lead + 3) {
           const preTag = `PRE10:${slot}|${date}`;
           if (r.lastSentSlot !== preTag) {
-            const gnPre = r.user.language === 'GN';
-            const preMsg = gnPre
-              ? `⏰ *Momandu'a: 10 aja rupi*\n\n10 aja rupi reipuru va'erã *${r.medication}*${r.dose ? ` (${r.dose})` : ''} — ${slot}.`
-              : `⏰ *En 10 minutos toca tu medicación*\n\n*${r.medication}*${r.dose ? ` (${r.dose})` : ''} a las ${slot}.\n\n_Preparala con tiempo._`;
-            await whatsappBot.sendMessage(r.user.whatsappJid || r.user.phoneNumber, preMsg).catch((e) => {
-              console.warn(`[REMINDER] no se pudo enviar preaviso a ${r.user?.phoneNumber}:`, e?.message);
-            });
-            await prisma.medicationReminder.update({
-              where: { id: r.id },
-              data: { lastSentAt: new Date(), lastSentSlot: preTag },
-            });
-            sent++;
+            const preMsg = gn
+              ? `⏰ *Momandu'a: ${leadLabel(lead)} rupi*\n\n*${r.medication}*${r.dose ? ` (${r.dose})` : ''} — ${slot}.`
+              : `⏰ *En ${leadLabel(lead)} toca tu medicación*\n\n*${r.medication}*${r.dose ? ` (${r.dose})` : ''} a las ${slot}.\n\n_Preparala con tiempo._`;
+            if (await whatsappBot.sendMessage(target, preMsg)) {
+              await prisma.medicationReminder.update({ where: { id: r.id }, data: { lastSentAt: new Date(), lastSentSlot: preTag } });
+              sent++;
+            }
             break;
           }
         }
 
+        // Aviso a la hora — ventana [0, 30] min (tolera que el bot haya estado caído).
         const diff = nowMin - slotMin;
-        // ventana: [0, 6] minutos después de la hora
-        if (diff < 0 || diff > 6) continue;
+        if (diff < 0 || diff > 30) continue;
         const tag = `${slot}|${date}`;
         if (r.lastSentSlot === tag) continue;
 
-        const gn = r.user.language === 'GN';
         const msg = gn
-          ? `⏰ *Momandu'a pohã*\n\nHi'ára reipuru hag̃ua *${r.medication}*${r.dose ? ` (${r.dose})` : ''}.\n\n_Ehai *LISTO* rejapo rire, térã *MENU* rehecha hag̃ua opciones._`
+          ? `⏰ *Momandu'a pohã*\n\nHi'ára reipuru hag̃ua *${r.medication}*${r.dose ? ` (${r.dose})` : ''}.\n\n_Ehai *MENU* rehecha hag̃ua opciones._`
           : `⏰ *Recordatorio de medicación*\n\nEs hora de tomar *${r.medication}*${r.dose ? ` (${r.dose})` : ''}.\n\n_Cuidá tu salud. Escribí *MENU* para ver tus opciones._`;
-
-        await whatsappBot.sendMessage(r.user.whatsappJid || r.user.phoneNumber, msg).catch((e) => {
-          console.warn(`[REMINDER] no se pudo enviar a ${r.user?.phoneNumber}:`, e?.message);
-        });
-        await prisma.medicationReminder.update({
-          where: { id: r.id },
-          data: { lastSentAt: new Date(), lastSentSlot: tag },
-        });
-        sent++;
+        if (await whatsappBot.sendMessage(target, msg)) {
+          await prisma.medicationReminder.update({ where: { id: r.id }, data: { lastSentAt: new Date(), lastSentSlot: tag } });
+          sent++;
+        }
         break; // un envío por reminder por tick
       }
     }

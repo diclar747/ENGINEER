@@ -92,6 +92,7 @@ router.post('/admin/bot/send-test', requireAdmin, BotController.sendTest);
 router.post('/bot/reconnect', requireAdmin, BotController.reconnect);
 router.post('/bot/simulate-message', requireAdmin, upload.single('media'), BotController.simulateMessage);
 router.post('/bot/run-cron', requireAdmin, BotController.triggerCronCheck);
+router.post('/bot/run-reminders', requireAdmin, BotController.triggerReminders);
 
 // ---- Admin panel ----
 router.post('/admin/login', AdminController.login);

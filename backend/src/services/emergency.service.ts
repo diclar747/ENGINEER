@@ -149,9 +149,15 @@ export class EmergencyService {
     const reminders = await prisma.medicationReminder.findMany({
       where: { userId: user.id, active: true, kind: 'MED' },
       orderBy: { createdAt: 'asc' },
-      select: { medication: true, dose: true, times: true },
+      select: { medication: true, dose: true, times: true, scheduleKind: true, intervalHours: true, nextDoseAt: true },
     });
     const medicationSchedule = reminders.map((r) => {
+      if (r.scheduleKind === 'INTERVAL' && r.intervalHours) {
+        const next = r.nextDoseAt
+          ? new Date(r.nextDoseAt).toLocaleTimeString('es-PY', { timeZone: config.timezone, hour: '2-digit', minute: '2-digit', hour12: false })
+          : null;
+        return { medication: r.medication, dose: r.dose || undefined, times: [`cada ${r.intervalHours} h${next ? ` · próxima ${next}` : ''}`] };
+      }
       let times: string[] = [];
       try { times = JSON.parse(r.times); } catch { /* noop */ }
       return { medication: r.medication, dose: r.dose || undefined, times };

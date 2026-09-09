@@ -41,6 +41,21 @@ export interface EmergencyContact {
   isPrimary?: boolean;
 }
 
+export interface Reminder {
+  id: string;
+  kind: 'MED' | 'APPOINTMENT';
+  scheduleKind?: 'CLOCK' | 'INTERVAL' | null;
+  medication: string;
+  dose?: string | null;
+  times: string[];
+  intervalHours?: number | null;
+  anchorAt?: string | null;
+  nextDoseAt?: string | null;
+  leadMinutes?: number | null;
+  whenAt?: string | null;
+  active: boolean;
+}
+
 export interface MedicalStudy {
   id: string;
   title: string;
