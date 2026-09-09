@@ -45,6 +45,18 @@ export class BaileysClient {
   private lastError: string | null = null;
   private gaveUp = false;
   private lastLogoutAt = 0;
+  /** IDs de mensajes ya atendidos — evita procesar dos veces el mismo (append + notify, replays al reconectar). */
+  private seenMsgIds = new Set<string>();
+
+  private markSeen(id: string): boolean {
+    if (this.seenMsgIds.has(id)) return false;
+    this.seenMsgIds.add(id);
+    if (this.seenMsgIds.size > 2000) {
+      // recorta el más viejo (orden de inserción)
+      this.seenMsgIds.delete(this.seenMsgIds.values().next().value as string);
+    }
+    return true;
+  }
 
   public async start(): Promise<void> {
     if (this.isConnecting || this.isConnected) return;
@@ -188,15 +200,35 @@ export class BaileysClient {
         }
       });
 
-      // Handle inbound messages — 1:1 DMs only
+      // Handle inbound messages — 1:1 DMs only.
+      // `notify` = mensaje nuevo en vivo (caso normal). `append` = mensajes que WhatsApp
+      // agrega al chat: casi siempre historial (a ignorar), PERO justo después de
+      // re-escanear el QR los primeros mensajes REALES llegan como `append` mientras
+      // termina la sincronización. Para no perderlos, procesamos también los `append`
+      // RECIENTES (< 2 min) y dedupeamos por id para no atender dos veces el mismo.
       this.sock.ev.on('messages.upsert', async (m) => {
-        if (m.type !== 'notify') {
+        if (m.type !== 'notify' && m.type !== 'append') {
           console.log(`[WHATSAPP BOT] messages.upsert ignorado (type="${m.type}", ${m.messages?.length ?? 0} msgs)`);
           return;
         }
+        const nowSec = Math.floor(Date.now() / 1000);
 
         for (const msg of m.messages) {
           if (!msg.key) continue;
+
+          if (m.type === 'append') {
+            const ts = Number(msg.messageTimestamp) || 0;
+            if (!ts || nowSec - ts > 120) {
+              // historial viejo — ignorar en silencio
+              continue;
+            }
+            console.log(`[WHATSAPP BOT] procesando mensaje 'append' reciente (${nowSec - ts}s) — post-vinculación`);
+          }
+
+          if (msg.key.id && !this.markSeen(msg.key.id)) {
+            continue; // ya atendido (append + notify del mismo mensaje, o replay)
+          }
+
           if (msg.key.fromMe) {
             // Messages sent FROM the bot's own linked account (e.g. testing by writing
             // to yourself from the same phone the bot is paired to) are ignored on
@@ -424,11 +456,49 @@ export class BaileysClient {
     return /^\d{7,15}$/.test(cleanPhone) ? `${cleanPhone}@s.whatsapp.net` : null;
   }
 
+  private jidCache = new Map<string, string>();
+
+  /**
+   * Resuelve un target a un JID válido para ENVIAR. Si es un número pelado, consulta
+   * `onWhatsApp`: WhatsApp está migrando a direccionamiento LID y en varias cuentas los
+   * envíos a `<num>@s.whatsapp.net` NO se entregan (sin lanzar error) — hay que usar el
+   * `jid`/`lid` que devuelve la API. Si el número no está en WhatsApp, devuelve null.
+   */
+  private async resolveJidForSend(target: string): Promise<string | null> {
+    const raw = (target || '').trim();
+    if (raw.includes('@')) {
+      return /^\d{7,20}@(s\.whatsapp\.net|lid)$/.test(raw) ? raw : null;
+    }
+    const cleanPhone = raw.replace(/[^0-9]/g, '');
+    if (!/^\d{7,15}$/.test(cleanPhone)) return null;
+
+    const cached = this.jidCache.get(cleanPhone);
+    if (cached) return cached;
+
+    const fallback = `${cleanPhone}@s.whatsapp.net`;
+    if (!this.sock) return fallback;
+    try {
+      const res = await this.sock.onWhatsApp(cleanPhone);
+      const hit: any = Array.isArray(res) ? res[0] : undefined;
+      console.log(`[WHATSAPP BOT] onWhatsApp(${cleanPhone}) -> ${JSON.stringify(hit || null)}`);
+      if (!hit || hit.exists === false) {
+        console.warn(`[WHATSAPP BOT] ${cleanPhone} NO está en WhatsApp — no se envía.`);
+        return null;
+      }
+      const jid = hit.lid || hit.jid || fallback;
+      this.jidCache.set(cleanPhone, jid);
+      return jid;
+    } catch (e: any) {
+      console.warn(`[WHATSAPP BOT] onWhatsApp(${cleanPhone}) falló (${e?.message}) — uso ${fallback}`);
+      return fallback;
+    }
+  }
+
   /**
    * Sends a plain text WhatsApp message
    */
   public async sendMessage(target: string, text: string): Promise<boolean> {
-    const jid = this.resolveJid(target);
+    const jid = await this.resolveJidForSend(target);
     if (!jid) {
       console.warn(`[WHATSAPP BOT] Refusing to send to invalid target "${target}"`);
       return false;
@@ -458,7 +528,7 @@ export class BaileysClient {
     caption?: string,
     mimetype = 'image/png'
   ): Promise<boolean> {
-    const jid = this.resolveJid(target);
+    const jid = await this.resolveJidForSend(target);
     if (!jid) {
       console.warn(`[WHATSAPP BOT] Refusing to send image to invalid target "${target}"`);
       return false;
@@ -489,7 +559,7 @@ export class BaileysClient {
     mimetype = 'application/pdf',
     caption?: string
   ): Promise<boolean> {
-    const jid = this.resolveJid(target);
+    const jid = await this.resolveJidForSend(target);
     if (!jid) {
       console.warn(`[WHATSAPP BOT] Refusing to send document to invalid target "${target}"`);
       return false;

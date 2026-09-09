@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, Navigate } from 'react-router-dom';
 import axios from 'axios';
 import {
   Send,
@@ -34,7 +34,13 @@ const prettySize = (b: number) => (b < 1024 ? `${b} B` : b < 1048576 ? `${(b / 1
 
 type PickKind = 'document' | 'gallery' | 'camera' | 'selfie';
 
+const hasAdminToken = (): boolean => {
+  try { return !!localStorage.getItem('biopass_admin_token'); } catch { return false; }
+};
+
 export const BotSimulator: React.FC = () => {
+  // Herramienta interna: solo admin. Guard antes de cualquier hook.
+  if (!hasAdminToken()) return <Navigate to="/admin/login" replace />;
   const navigate = useNavigate();
   const [phone, setPhone] = useState(() => {
     try {

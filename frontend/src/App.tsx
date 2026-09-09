@@ -51,6 +51,11 @@ const App: React.FC = () => {
         <Route path="/e/:token" element={<EmergencyView />} />
         <Route path="/admin/login" element={<AdminLogin />} />
         <Route path="/admin" element={<AdminPanel />} />
+        {/* Admin-only, full-screen (sin barra de usuario). BotConnect/BotSimulator
+            redirigen a /admin/login si no hay sesión de admin. */}
+        <Route path="/admin/bot-connect" element={<BotConnect />} />
+        <Route path="/bot-connect" element={<BotConnect />} />
+        <Route path="/admin/bot-simulator" element={<BotSimulator />} />
 
         {/* Full-screen, no chrome */}
         <Route path="/bot-simulator" element={<BotSimulator />} />
@@ -59,8 +64,6 @@ const App: React.FC = () => {
         {/* Everything else shares the layout shell */}
         <Route element={<AppLayout />}>
           <Route path="/login" element={<Login />} />
-          {/* Admin-only: WhatsApp bot pairing */}
-          <Route path="/bot-connect" element={<BotConnect />} />
           <Route path="/checkout" element={<Checkout />} />
 
           {/* Authenticated user panel */}
