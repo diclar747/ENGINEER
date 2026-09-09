@@ -303,23 +303,31 @@ export class BotStateMachine {
     // Para un miembro ACTIVO no se borra nada: se lo lleva a su menú.
     if (isResetCmd(cleanText)) {
       if (user.status === 'ACTIVE') {
-        // Miembro activo: no se toca su ficha. Se lo deja en el menú y el
-        // siguiente mensaje ("menu"/cualquier cosa) muestra el menú real.
+        // Miembro activo: no se toca su ficha. Se lo deja en el menú.
         await updateState('ACTIVE_MEMBER', {});
+        // "menu"/"inicio"/"volver al inicio"/"opciones" YA significan "mostrame
+        // el menú" — devolverles "escribí MENU" acá era un loop infinito: al
+        // escribir "menu" de nuevo, esta misma rama volvía a matchear (menu
+        // también dispara isResetCmd) y nunca se llegaba a mostrar el menú
+        // real. Para esos casos puntuales NO se corta acá: se deja caer al
+        // bloque de miembro activo de más abajo, que arma el menú real.
+        if (!/^(menu|men[uú]|men[uú] principal|inicio|volver al inicio|opciones)$/.test(norm(cleanText))) {
+          return {
+            replyText:
+              `🔄 *Listo, volviste al menú principal.*\n\n` +
+              `Escribí *MENU* para ver tus opciones, o directamente lo que querés hacer ` +
+              `(ej: "subir estudio", "agregar medicación", "cambiar contacto").`,
+          };
+        }
+      } else {
+        await updateState('STEP1_WELCOME', {});
         return {
           replyText:
-            `🔄 *Listo, volviste al menú principal.*\n\n` +
-            `Escribí *MENU* para ver tus opciones, o directamente lo que querés hacer ` +
-            `(ej: "subir estudio", "agregar medicación", "cambiar contacto").`,
+            `🔄 *Empezamos de nuevo · Ñepyrũ jey · Recomeçar · Start over.*\n\n` +
+            `*[1]* Español 🇪🇸  *[2]* Guaraní 🇵🇾  *[3]* Português 🇧🇷  *[4]* English 🇬🇧\n\n` +
+            `_Escribí *REINICIAR* en cualquier momento para volver acá._`,
         };
       }
-      await updateState('STEP1_WELCOME', {});
-      return {
-        replyText:
-          `🔄 *Empezamos de nuevo · Ñepyrũ jey · Recomeçar · Start over.*\n\n` +
-          `*[1]* Español 🇪🇸  *[2]* Guaraní 🇵🇾  *[3]* Português 🇧🇷  *[4]* English 🇬🇧\n\n` +
-          `_Escribí *REINICIAR* en cualquier momento para volver acá._`,
-      };
     }
 
     // ==========================================
