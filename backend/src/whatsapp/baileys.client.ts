@@ -61,6 +61,25 @@ export class BaileysClient {
   private sessionSince: number | null = null;
   /** IDs de mensajes ya atendidos — evita procesar dos veces el mismo (append + notify, replays al reconectar). */
   private seenMsgIds = new Set<string>();
+  /** Nº de generación del socket. Los listeners de un socket viejo (fugado tras un
+   *  reconnect que no lo destruyó) comparan contra esto y se abortan solos, así no
+   *  hay doble procesado del mismo inbound. */
+  private socketGen = 0;
+  /** Última vez que se procesó un inbound por chat — freno anti-rebote (mismo mensaje entregado dos veces). */
+  private lastInboundAt = new Map<string, number>();
+
+  /** Cierra y desengancha el socket actual antes de crear uno nuevo (evita listeners fugados). */
+  private teardownSocket(): void {
+    const s = this.sock;
+    this.sock = null;
+    if (!s) return;
+    try { s.ev.removeAllListeners('messages.upsert'); } catch { /* noop */ }
+    try { s.ev.removeAllListeners('messages.update'); } catch { /* noop */ }
+    try { s.ev.removeAllListeners('connection.update'); } catch { /* noop */ }
+    try { s.ev.removeAllListeners('creds.update'); } catch { /* noop */ }
+    try { (s as any).end?.(undefined); } catch { /* noop */ }
+    try { (s as any).ws?.close?.(); } catch { /* noop */ }
+  }
 
   /** Búfer en memoria de los últimos eventos del bot (para el panel admin). Se pierde al reiniciar. */
   private events: BotEvent[] = [];
@@ -163,6 +182,9 @@ export class BaileysClient {
     if (this.isConnecting || this.isConnected) return;
     this.isConnecting = true;
     this.gaveUp = false;
+    // Un reconnect anterior pudo dejar un socket vivo con sus listeners → destruílo.
+    this.teardownSocket();
+    const myGen = ++this.socketGen;
 
     try {
       const authDir = config.baileys.authDir;
@@ -203,6 +225,7 @@ export class BaileysClient {
       this.sock.ev.on('creds.update', saveCreds);
 
       this.sock.ev.on('connection.update', async (update) => {
+        if (this.socketGen !== myGen) return; // listener de un socket viejo
         const { connection, lastDisconnect, qr } = update;
 
         if (qr) {
@@ -308,6 +331,7 @@ export class BaileysClient {
 
       // Acuses de entrega / lectura → actualizan el estado del evento saliente.
       this.sock.ev.on('messages.update', (updates) => {
+        if (this.socketGen !== myGen) return;
         for (const u of updates) {
           const st = (u.update as any)?.status;
           if (st == null) continue;
@@ -325,6 +349,7 @@ export class BaileysClient {
       // termina la sincronización. Para no perderlos, procesamos también los `append`
       // RECIENTES (< 2 min) y dedupeamos por id para no atender dos veces el mismo.
       this.sock.ev.on('messages.upsert', async (m) => {
+        if (this.socketGen !== myGen) return; // listener de un socket viejo → ignorar
         if (m.type !== 'notify' && m.type !== 'append') {
           console.log(`[WHATSAPP BOT] messages.upsert ignorado (type="${m.type}", ${m.messages?.length ?? 0} msgs)`);
           return;
@@ -400,6 +425,23 @@ export class BaileysClient {
     if (!/^\d{7,15}$/.test(rawId)) {
       console.warn(`[WHATSAPP BOT] Ignoring message from unparseable JID: ${remoteJid}`);
       return;
+    }
+
+    // Freno anti-rebote: si WhatsApp reentrega el mismo mensaje (o un socket fugado lo
+    // procesa en paralelo) con un id distinto, `seenMsgIds` no lo agarra y el bot
+    // respondía dos veces avanzando de estado en el medio. Un inbound cada <2.5 s del
+    // MISMO chat casi nunca es legítimo → se ignora.
+    const nowMs = Date.now();
+    const prev = this.lastInboundAt.get(remoteJid) || 0;
+    if (nowMs - prev < 1500) {
+      console.warn(`[WHATSAPP BOT] Anti-rebote: ignoro inbound de ${remoteJid} (${nowMs - prev}ms del anterior)`);
+      return;
+    }
+    this.lastInboundAt.set(remoteJid, nowMs);
+    if (this.lastInboundAt.size > 500) {
+      for (const [k, t] of this.lastInboundAt) {
+        if (nowMs - t > 60_000) this.lastInboundAt.delete(k);
+      }
     }
     // BotStateMachine keys users by "phone number". For @lid contacts we don't have
     // their real MSISDN (this Baileys version has no lid->phone resolver), so the lid
