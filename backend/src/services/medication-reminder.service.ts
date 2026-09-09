@@ -710,6 +710,16 @@ export class MedicationReminderService {
     // NO es una consulta → que lo maneje el router de intención del bot.
     if (/\b(cargar|carg[aá]|subir|sub[ií]|subime|alzar|alz[aá]|alzame|guardar|guard[aá]|agregar|agreg[aá]|anotar|anot[aá]|registrar|registr[aá]|adjuntar|dar\s+de\s+alta)\b/.test(t))
       return null;
+    // Si es un pedido de CREAR / PROGRAMAR un recordatorio o alarma ("quiero programar
+    // un recordatorio", "ponéme una alarma para tomar…", "hacéme recordar"), tampoco es
+    // una consulta → lo arranca el diálogo guiado del router.
+    if (
+      /\b(programar?|program[aá]|configurar?|configur[aá]|crear?|cre[aá]|armar?|arm[aá]|pon(?:er|é|eme|ele)|poné|hacer?me?\s+recordar|hac[eé]me\s+recordar|hagas?\s+recordar)\b/.test(t) &&
+      /\b(recordatorio|recordatorios|alarma|alarmas|aviso|avisos|recordar|recuerde|recuerd[ae]s?)\b/.test(t)
+    )
+      return null;
+    // "quiero que me recuerdes / recordame que tome…" → creación, no consulta.
+    if (/\b(recu[eé]rd[ae]me|record[aá]me|acord[aá]te|que\s+me\s+recuerdes|hacerme\s+recordar)\b/.test(t)) return null;
 
     // ¿Es claramente una PREGUNTA / pedido de información? (empieza con interrogativo,
     // trae "?", o verbos de consulta). Sirve para no dejarla caer en "cargar medicamento".

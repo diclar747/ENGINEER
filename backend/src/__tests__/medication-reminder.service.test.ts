@@ -254,6 +254,24 @@ describe('answerQuery — consulta de turnos/medicación (no debe caer en "carga
     db.reminders = [];
     expect(await MedicationReminderService.answerQuery('u1', 'Losartán 50 mg')).toBeNull();
   });
+
+  it('"quiero programar un recordatorio para tomar mi remedio" → null (lo arranca el diálogo guiado)', async () => {
+    db.user = { currentMedications: JSON.stringify([{ name: 'Losartán' }]) };
+    db.reminders = [{ id: 'm1', kind: 'MED', medication: 'Losartán', scheduleKind: 'INTERVAL', intervalHours: 12, nextDoseAt: new Date(Date.now() + 3600_000), anchorAt: new Date(), times: '[]', dose: null, active: true, whenAt: null, leadMinutes: 10 }];
+    expect(await MedicationReminderService.answerQuery('u1', 'quiero programar un recordatorio para tomar mi remedio')).toBeNull();
+  });
+
+  it('"ponéme una alarma para el ibuprofeno" → null (creación, no consulta)', async () => {
+    db.user = { currentMedications: null };
+    db.reminders = [];
+    expect(await MedicationReminderService.answerQuery('u1', 'ponéme una alarma para tomar el ibuprofeno')).toBeNull();
+  });
+
+  it('"recordame tomar la pastilla cada 8 horas" → null (creación)', async () => {
+    db.user = { currentMedications: null };
+    db.reminders = [];
+    expect(await MedicationReminderService.answerQuery('u1', 'recordame tomar la pastilla cada 8 horas')).toBeNull();
+  });
 });
 
 describe('draftNextStep', () => {
