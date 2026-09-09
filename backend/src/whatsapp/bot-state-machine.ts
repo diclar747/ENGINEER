@@ -1397,7 +1397,7 @@ export class BotStateMachine {
         }
         return {
           replyText: tr(
-            `📄 *Receta guardada en tu perfil.*\nNo pude leer la lista de medicamentos; si querés, cargalos con la opción *[1]* del menú.\n\n_Mandá otra receta o escribí *LISTO*._`,
+            `📄 *Receta guardada en tu perfil.* Ya la podés pedir cuando quieras (ej: _"mostrame mi receta"_).\n\n_Si querés que los medicamentos también aparezcan en tu lista, cargalos con la opción *[1]* del menú. Mandá otra receta o escribí *LISTO*._`,
             `📄 *Receta oñeguarda.*\n\n_Emondo ambue térã ehai *LISTO*._`
           ),
         };
@@ -1483,10 +1483,21 @@ export class BotStateMachine {
             source: 'photo',
           });
           if (!r) {
+            // No se pudo leer nombre/dosis automáticamente — igual se guarda la
+            // foto (no hace falta transcribirla para que quede en el perfil).
+            // Se puede pedir de vuelta después (ej: "mostrame mi medicamento").
+            const saved = await StorageService.saveFile(
+              'medical_studies',
+              `med_${user!.id}_${Date.now()}.${extFrom(msg.mediaFilename, msg.mediaMimeType)}`,
+              msg.mediaBuffer
+            );
+            await prisma.medicalStudy.create({
+              data: { userId: user!.id, title: 'Foto de medicamento', studyType: 'OTHER', studyDate: new Date(), fileUrl: saved.fileUrl },
+            });
             return {
               replyText: tr(
-                '😕 No pude leer el medicamento en la foto. Probá con más luz / acercándote, o escribí *nombre + dosis + frecuencia* (ej: "Losartán 50 mg, 1 vez al día").',
-                '😕 Ndaikatúi amoñe\'ẽ pe pohã. Emondo ta\'anga porãvéva, térã ehai *réra + dosis + mboýpa*.'
+                '✅ *Guardé la foto en tu perfil.*\n\nNo pude leer bien el nombre/dosis, así que no quedó en tu *lista de medicación* — pero la foto ya está guardada y te la puedo mandar cuando quieras (ej: _"mostrame mi medicamento"_).\n\n_Si querés que también aparezca en la lista, escribí nombre + dosis + frecuencia (ej: "Losartán 50 mg, 1 vez al día")._',
+                '✅ *Ajagarda pe ta\'anga nde perfílpe.*\n\n_Ehai iréra + dosis + mboýpa oĩ hag̃ua ne listápe._'
               ),
             };
           }
@@ -1973,7 +1984,7 @@ export class BotStateMachine {
       // Consulta de estudios/recetas en lenguaje natural (también por audio):
       // "pasame mi estudio de próstata", "mandame los análisis de sangre", "mostrame la receta del cardiólogo".
       const askDoc = cleanText.match(
-        /\b(pasame|pas[aá]|mandame|mand[aá]|env[ií]ame|env[ií]a|mostrame|mostr[aá]|dame|quiero ver|necesito|busc[aá]r?|ver|descargar|tra[eé]me|buscame)\b[\s\S]*?\b(estudios?|an[aá]lisis|resultados?|informes?|recetas?|radiograf\w*|tomograf\w*|laboratorio|placas?|ecograf\w*|electro\w*|ex[aá]menes?)\b/i
+        /\b(pasame|pas[aá]|mandame|mand[aá]|env[ií]ame|env[ií]a|mostrame|mostr[aá]|dame|quiero ver|necesito|busc[aá]r?|ver|descargar|tra[eé]me|buscame)\b[\s\S]*?\b(estudios?|an[aá]lisis|resultados?|informes?|recetas?|medicamentos?|radiograf\w*|tomograf\w*|laboratorio|placas?|ecograf\w*|electro\w*|ex[aá]menes?)\b/i
       );
       if (askDoc) {
         const wantsRx = /receta/i.test(askDoc[2]);
