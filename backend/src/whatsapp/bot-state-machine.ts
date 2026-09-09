@@ -1625,6 +1625,22 @@ export class BotStateMachine {
         return { replyText: `${body}\n\n_${tr('Escribí *MENU* para ver las opciones.', 'Ehai *MENU* rehecha hag̃ua opciones.')}_` };
       }
 
+      // Agradecimiento / muletilla ("gracias", "ok", "dale", "listo?"…) → no se procesa
+      // como dato en ningún sub-modo (antes "gracias" tras una respuesta daba error de
+      // "no entendí el medicamento"). No cambia de estado.
+      if (
+        !msg.mediaBuffer &&
+        !subMode.startsWith('ACTIVE_REMIND_') &&
+        /^(gracias+|muchas\s+gracias|mil\s+gracias|ok+|oka|okey|okay|dale|de\s+nada|perfecto|joya|barbaro|b[aá]rbaro|genial|buen[ií]simo|entendido|copiado|recibido|vale|va|listo\s*[!¡]*\??|👍|🙏|👌|✅)[\s.!¡]*$/i.test(cleanText.trim())
+      ) {
+        return {
+          replyText:
+            subMode === 'ACTIVE_MEMBER'
+              ? '🙂 Acá estoy. Escribí *MENU* para ver las opciones.'
+              : '🙂 Seguimos. Escribí *LISTO* para volver al menú.',
+        };
+      }
+
       // Consultas en lenguaje natural sobre medicación / turnos ("¿a qué hora tomo X?",
       // "¿qué estoy tomando?", "¿cuál es mi próxima toma?", "ya tomé", "¿mi próximo turno?").
       // Funciona en cualquier momento MENOS mientras se está completando un diálogo guiado.

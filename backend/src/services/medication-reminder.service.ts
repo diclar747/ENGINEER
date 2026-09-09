@@ -129,6 +129,11 @@ const LEAD_LABEL: Record<number, string> = {
 function leadLabel(mins: number): string {
   return LEAD_LABEL[mins] || (mins % 60 === 0 ? `${mins / 60} h` : `${mins} min`);
 }
+/** Anticipación efectiva para un TURNO: nunca menos de 30 min (el default 10 del
+ *  schema es para el pre-aviso de medicación, no para una consulta médica). */
+function apptLead(mins?: number | null): number {
+  return mins && mins >= 30 ? mins : 120;
+}
 
 const TZ = () => config.timezone || 'America/Asuncion';
 function fmtDateTime(d: Date): string {
@@ -630,7 +635,7 @@ export class MedicationReminderService {
     if (mentionsAppt && asksAppt && !this.parseAppointment(text)) {
       const nextAppt = appts.find((r) => new Date(r.whenAt!).getTime() > now.getTime() - 3600_000);
       if (!nextAppt) return '🩺 No tenés turnos agendados. Para agendar uno decime, por ejemplo: _"turno con cardiólogo el 20/10 a las 10:00"_.';
-      return `🩺 *Tu próximo turno:*\n*${nextAppt.medication}*\n📅 ${fmtDateTime(new Date(nextAppt.whenAt!))}\nTe voy a avisar ${leadLabel(nextAppt.leadMinutes || 120)} antes.`;
+      return `🩺 *Tu próximo turno:*\n*${nextAppt.medication}*\n📅 ${fmtDateTime(new Date(nextAppt.whenAt!))}\nTe voy a avisar ${leadLabel(apptLead(nextAppt.leadMinutes))} antes.`;
     }
 
     // --- "¿qué estoy tomando?" / "¿cómo se llama lo que tomo?" / "¿qué remedios tengo?" ---
@@ -750,7 +755,7 @@ export class MedicationReminderService {
       if (!r.user || (r.user.status !== 'ACTIVE' && r.user.status !== 'EXPIRED')) continue;
       const gn = r.user.language === 'GN';
       const target = r.user.whatsappJid || r.user.phoneNumber;
-      const lead = Math.max(1, r.leadMinutes || 10);
+      const lead = r.kind === 'APPOINTMENT' ? apptLead(r.leadMinutes) : Math.max(1, r.leadMinutes || 10);
 
       // --- Turno / consulta médica (una sola vez) ---
       if (r.kind === 'APPOINTMENT') {
