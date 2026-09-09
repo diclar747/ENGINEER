@@ -1522,11 +1522,23 @@ export class BotStateMachine {
             .map((s) => `• ${s.title} — ${(s.studyDate || s.createdAt).toLocaleDateString('es-PY', { timeZone: config.timezone })}`)
             .join('\n') || tr('_Nada cargado._', '_Ndaipóri._');
         const conflicts = medicationConflicts(meds, user!.severeAllergies, user!.contraindicatedMeds);
+        const reminders = await prisma.medicationReminder.findMany({
+          where: { userId: user!.id, active: true },
+          orderBy: { createdAt: 'asc' },
+          select: {
+            kind: true, scheduleKind: true, medication: true, dose: true, times: true,
+            intervalHours: true, nextDoseAt: true, whenAt: true, active: true,
+          },
+        });
+        const remBlock = reminders.length
+          ? `\n⏰ *${tr('Recordatorios y turnos', "Momandu'a")} (${reminders.length}):*\n${MedicationReminderService.format(reminders)}\n`
+          : '';
         return (
           `📁 *${tr('TU PERFIL MÉDICO', 'NE PERFIL MÉDICO')}*\n\n` +
           `💊 *${tr('Medicación actual', "Pohã ko'ág̃agua")} (${meds.length}):*\n` +
-          `${meds.length ? formatMedications(meds, { max: 15 }) : tr('_Sin medicamentos cargados._', '_Ndaipóri pohã._')}\n\n` +
-          `📄 *${tr('Recetas', 'Receta')} (${rx.length}):*\n${rows(rx)}\n\n` +
+          `${meds.length ? formatMedications(meds, { max: 15 }) : tr('_Sin medicamentos cargados._', '_Ndaipóri pohã._')}\n` +
+          remBlock +
+          `\n📄 *${tr('Recetas', 'Receta')} (${rx.length}):*\n${rows(rx)}\n\n` +
           `🧪 *${tr('Estudios', 'Estudio')} (${est.length}):*\n${rows(est)}\n` +
           (conflicts.length ? `\n⚠️ *${tr('Atención', 'Ejesareko')}:*\n${conflicts.map((c) => `• ${c}`).join('\n')}\n` : '') +
           `\n🔐 ${tr('Ver todo en detalle en la web (con tu PIN)', 'Ahecha opavave webpe (nde PIN reheve)')}: https://bio-pass.cnid.com.py/\n` +
@@ -2040,9 +2052,9 @@ export class BotStateMachine {
             };
           }
           await MedicationReminderService.createFromDraft(user.id, draft);
-          // Volvemos al menú principal (no al submenú) para que "4", "menu" o una
-          // consulta funcionen sin quedar "atascado" en recordatorios.
-          await updateState('ACTIVE_MEMBER', { rdraft: null });
+          // Quedamos en el submenú de recordatorios (para "borrar N" / "pausar N" /
+          // agregar otro). "1-8" / "menu" / "perfil" salen solos; "LISTO" vuelve al menú.
+          await updateState('ACTIVE_REMINDER', { rdraft: null });
           const conflicts =
             draft.kind === 'MED'
               ? medicationConflicts([{ name: draft.medication || '', source: 'manual', addedAt: '' }], user.severeAllergies, user.contraindicatedMeds)
@@ -2065,7 +2077,7 @@ export class BotStateMachine {
               `✅ *¡Guardado en tu bóveda!*\n\n${MedicationReminderService.describeDraft(draft)}\n${how}\n` +
               (conflicts.length ? `\n⚠️ ${conflicts.map((c) => `• ${c}`).join('\n')}\n` : '') +
               `\n*${tr('Tus recordatorios', "Ne momandu'a")}:*\n${MedicationReminderService.format(all)}\n\n` +
-              `_${tr('Escribí *5* para agregar otro, o *MENU*.', 'Ehai *5* térã *MENU*.')}_`,
+              `_${tr('Agregá otro, "borrar N" / "pausar N", o *LISTO* para volver al menú.', 'Emoĩ ambue, "borrar N", térã *LISTO*.')}_`,
           };
         }
 
