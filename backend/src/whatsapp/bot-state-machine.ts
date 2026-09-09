@@ -1659,7 +1659,7 @@ export class BotStateMachine {
         const rms = await prisma.medicationReminder.findMany({
           where: { userId: user.id, active: true, kind: 'MED' },
           orderBy: { createdAt: 'asc' },
-          select: { medication: true, dose: true, times: true },
+          select: { medication: true, dose: true, times: true, scheduleKind: true, intervalHours: true, nextDoseAt: true },
         });
         if (!rms.length) {
           return {
@@ -1678,6 +1678,11 @@ export class BotStateMachine {
         const pending: string[] = [];
         const done: string[] = [];
         for (const r of rms) {
+          if (r.scheduleKind === 'INTERVAL' && r.nextDoseAt) {
+            const nx = new Date(r.nextDoseAt).toLocaleTimeString('en-GB', { timeZone: tz, hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
+            pending.push(`💊 *${r.medication}*${r.dose ? ` (${r.dose})` : ''} — 🔁 cada ${r.intervalHours} h · próxima ${nx}`);
+            continue;
+          }
           let times: string[] = [];
           try { times = JSON.parse(r.times); } catch { /* noop */ }
           for (const t of times) {
@@ -1845,7 +1850,10 @@ export class BotStateMachine {
           prisma.medicationReminder.findMany({
             where: { userId: user!.id },
             orderBy: { createdAt: 'asc' },
-            select: { id: true, kind: true, medication: true, dose: true, times: true, whenAt: true, active: true },
+            select: {
+              id: true, kind: true, scheduleKind: true, medication: true, dose: true, times: true,
+              intervalHours: true, nextDoseAt: true, whenAt: true, active: true,
+            },
           });
 
         let rows = await list();
@@ -2026,7 +2034,9 @@ export class BotStateMachine {
             };
           }
           await MedicationReminderService.createFromDraft(user.id, draft);
-          await updateState('ACTIVE_REMINDER', { rdraft: null });
+          // Volvemos al menú principal (no al submenú) para que "4", "menu" o una
+          // consulta funcionen sin quedar "atascado" en recordatorios.
+          await updateState('ACTIVE_MEMBER', { rdraft: null });
           const conflicts =
             draft.kind === 'MED'
               ? medicationConflicts([{ name: draft.medication || '', source: 'manual', addedAt: '' }], user.severeAllergies, user.contraindicatedMeds)
@@ -2046,9 +2056,10 @@ export class BotStateMachine {
           const how = draft.kind === 'APPOINTMENT' ? `Te aviso ${MedicationReminderService.leadLabel(draft.leadMinutes ?? 120)} antes.` : howMed;
           return {
             replyText:
-              `✅ *Guardado.*\n\n${MedicationReminderService.describeDraft(draft)}\n${how}\n` +
+              `✅ *¡Guardado en tu bóveda!*\n\n${MedicationReminderService.describeDraft(draft)}\n${how}\n` +
               (conflicts.length ? `\n⚠️ ${conflicts.map((c) => `• ${c}`).join('\n')}\n` : '') +
-              `\n${MedicationReminderService.format(all)}`,
+              `\n*${tr('Tus recordatorios', "Ne momandu'a")}:*\n${MedicationReminderService.format(all)}\n\n` +
+              `_${tr('Escribí *5* para agregar otro, o *MENU*.', 'Ehai *5* térã *MENU*.')}_`,
           };
         }
 

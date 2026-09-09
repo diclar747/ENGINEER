@@ -30,10 +30,16 @@ export interface ReminderDraft {
 const DOSE_RE =
   /\b\d+(?:[.,]\d+)?\s?(?:mg|mcg|µg|g|ml|ui|u|%|comp(?:rimidos?)?|caps?(?:ulas?)?|gotas?|cucharad(?:it)?as?|cdta?s?|cditas?|sobres?|sachets?|ampollas?|aplicaci[oó]n(?:es)?|inhalaci[oó]n(?:es)?|pulverizaci[oó]n(?:es)?|nebulizaci[oó]n(?:es)?|unidad(?:es)?|pastillas?|tabletas?|parches?|puff)\b/i;
 
+/** Frases de anticipación de aviso ("avisame 1 hora antes", "2 horas antes",
+ *  "con 30 minutos de anticipación") — NO son la hora del turno. Se sacan antes de
+ *  buscar horarios. */
+const LEAD_PHRASE_RE =
+  /\b(?:avisa(?:me|r)?\s+)?(?:con\s+)?\d{1,3}\s*(?:h|hs|hrs|horas?|min|minutos?|d[ií]as?)\s*(?:antes|de\s+anticipaci[oó]n|de\s+antelaci[oó]n)\b|\bel\s+d[ií]a\s+(?:antes|anterior)\b/gi;
+
 /** Extrae horarios de un texto: "08:00", "8", "8hs", "8 am", "20:30", "a las 9". */
 function extractTimes(text: string): string[] {
   const out = new Set<string>();
-  const t = text.toLowerCase();
+  const t = text.toLowerCase().replace(LEAD_PHRASE_RE, ' ');
 
   // HH:MM / HH.MM
   for (const m of t.matchAll(/\b([01]?\d|2[0-3])[:.]([0-5]\d)\b/g)) {
@@ -389,12 +395,15 @@ export class MedicationReminderService {
       }
     }
 
-    // Respaldo regex — completa lo que la IA no trajo.
+    // Respaldo regex — completa lo que la IA no trajo. Y CORRIGE: si el texto tiene
+    // una hora explícita ("a las 14:30"), esa manda sobre lo que dijo la IA (Niro
+    // a veces confunde "avisame 1 hora antes" con la hora del turno).
     if (!draft.whenAt || draft.kind === 'APPOINTMENT') {
-      const appt = this.parseAppointment(raw);
-      if (appt && !draft.whenAt) {
+      const appt = this.parseAppointment(original);
+      if (appt) {
         draft.kind = 'APPOINTMENT';
-        draft.whenAt = appt.whenAt.toISOString();
+        const hasExplicitClock = /\b([01]?\d|2[0-3])[:.][0-5]\d\b/.test((original || '').toLowerCase().replace(LEAD_PHRASE_RE, ' '));
+        if (!draft.whenAt || hasExplicitClock) draft.whenAt = appt.whenAt.toISOString();
         draft.medication = draft.medication || appt.note;
       }
     }
@@ -448,20 +457,26 @@ export class MedicationReminderService {
     return '';
   }
 
+  /** Primera letra en mayúscula ("cardiólogo" → "Cardiólogo", "losartán" → "Losartán"). */
+  private static cap(s: string): string {
+    const t = (s || '').trim();
+    return t ? t.charAt(0).toLocaleUpperCase('es') + t.slice(1) : t;
+  }
+
   /** Resumen legible del borrador para el paso de confirmación. */
   static describeDraft(d: Partial<ReminderDraft>): string {
     if (d.kind === 'APPOINTMENT') {
       const when = d.whenAt ? fmtDateTime(new Date(d.whenAt)) : '—';
       const lead = d.leadMinutes ? ` · aviso ${leadLabel(d.leadMinutes)} antes` : '';
-      return `🩺 *${d.medication || 'Consulta médica'}*\n📅 ${when}${lead}`;
+      return `🩺 *${this.cap(d.medication || 'Consulta médica')}*\n📅 ${when}${lead}`;
     }
     const dose = d.dose ? ` (${d.dose})` : '';
     if (d.scheduleKind === 'INTERVAL') {
       const anchor = d.anchorAt ? new Date(d.anchorAt) : new Date();
       const next = this.computeNextDose(anchor, d.intervalHours || 8);
-      return `💊 *${d.medication}*${dose}\n🔁 cada ${d.intervalHours} h · próxima ~${fmtHHMM(next)}`;
+      return `💊 *${this.cap(d.medication || '')}*${dose}\n🔁 cada ${d.intervalHours} h · próxima ~${fmtHHMM(next)}`;
     }
-    return `💊 *${d.medication}*${dose}\n⏰ ${(d.times || []).join(', ')} todos los días`;
+    return `💊 *${this.cap(d.medication || '')}*${dose}\n⏰ ${(d.times || []).join(', ')} todos los días`;
   }
 
   /** Persiste un borrador ya confirmado. Calcula `nextDoseAt` para INTERVAL. */
@@ -471,7 +486,7 @@ export class MedicationReminderService {
         data: {
           userId,
           kind: 'APPOINTMENT',
-          medication: (d.medication || 'Consulta médica').slice(0, 120),
+          medication: this.cap((d.medication || 'Consulta médica').slice(0, 120)),
           whenAt: d.whenAt ? new Date(d.whenAt) : null,
           times: '[]',
           leadMinutes: d.leadMinutes ?? 120,
@@ -483,7 +498,7 @@ export class MedicationReminderService {
       userId,
       kind: 'MED',
       scheduleKind,
-      medication: (d.medication || 'Medicación').slice(0, 80),
+      medication: this.cap((d.medication || 'Medicación').slice(0, 80)),
       dose: d.dose ? String(d.dose).slice(0, 60) : null,
       leadMinutes: d.leadMinutes ?? 10,
     };

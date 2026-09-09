@@ -106,6 +106,24 @@ describe('parseAppointment — limpieza de la nota', () => {
     const r = MedicationReminderService.parseAppointment('tengo una cita con el cardiologo el 15/12 a las 14:30');
     expect(r?.note).toBe('Cardiologo');
   });
+
+  it('"avisame 1 hora antes" NO se toma como la hora del turno', () => {
+    const r = MedicationReminderService.parseAppointment('turno con cardiólogo el 20/11 a las 14:30, avisame 1 hora antes');
+    // 14:30 local PY (-03:00)
+    const d = r!.whenAt;
+    const hhmm = d.toLocaleTimeString('en-GB', { timeZone: 'America/Asuncion', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
+    expect(hhmm).toBe('14:30');
+  });
+
+  it('parseReminderRequest: turno con lead → hora correcta + leadMinutes', async () => {
+    const dt = new Date(Date.now() + 20 * 86400_000);
+    const dd = String(dt.getDate()).padStart(2, '0');
+    const mm = String(dt.getMonth() + 1).padStart(2, '0');
+    const d = await MedicationReminderService.parseReminderRequest(`tengo una cita con el traumatólogo el ${dd}/${mm} a las 09:15, avisame 2 horas antes`);
+    expect(d.kind).toBe('APPOINTMENT');
+    const hhmm = new Date(d.whenAt!).toLocaleTimeString('en-GB', { timeZone: 'America/Asuncion', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
+    expect(hhmm).toBe('09:15');
+  });
 });
 
 describe('draftNextStep', () => {
