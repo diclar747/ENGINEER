@@ -24,6 +24,19 @@ export interface ReminderDraft {
   anchorAt?: string; // ISO — última toma (INTERVAL)
   whenAt?: string; // ISO — turno (APPOINTMENT)
   leadMinutes?: number;
+  endsAt?: string; // ISO — fin del tratamiento ("por 3 días")
+}
+
+/** "por 3 días" / "durante una semana" / "por 10 dias" → Date de fin, o null. */
+export function parseTreatmentEnd(text: string, from: Date = new Date()): Date | null {
+  const t = (text || '').toLowerCase();
+  const m = t.match(/\b(?:por|durante|during)\s+(un[ao]?|\d{1,3})\s*(d[ií]as?|semanas?|mes(?:es)?)\b/);
+  if (!m) return null;
+  const n = /^un/.test(m[1]) ? 1 : parseInt(m[1], 10);
+  if (!(n >= 1 && n <= 365)) return null;
+  const unit = m[2];
+  const days = /semana/.test(unit) ? n * 7 : /mes/.test(unit) ? n * 30 : n;
+  return new Date(from.getTime() + days * 86400_000);
 }
 
 // Vocabulario de dosis: mg/ml/gotas… + formas caseras (cucharada, sobre, ampolla, parche…).
@@ -374,7 +387,8 @@ export class MedicationReminderService {
           'times (array de horarios "HH:MM" en 24h si dio horarios puntuales, si no []); ' +
           'lastTaken (cuándo tomó la última vez tal cual lo dijo: "hace 1 hora", "recién", "a las 14:00"… o null); ' +
           'apptDate ("YYYY-MM-DD" del turno o null); apptTime ("HH:MM" del turno o null); ' +
-          'leadMinutes (minutos de anticipación del aviso que pidió: "una hora antes"→60, "el día antes"→1440, o null).'
+          'leadMinutes (minutos de anticipación del aviso que pidió: "una hora antes"→60, "el día antes"→1440, o null); ' +
+          'durationDays (número de días que dura el tratamiento si lo dijo: "por 3 días"→3, "una semana"→7, o null).'
       );
       if (ai) {
         const k = String(ai.kind || '').toUpperCase();
@@ -408,7 +422,19 @@ export class MedicationReminderService {
         }
         const lm = parseInt(String(ai.leadMinutes), 10);
         if (lm >= 5 && lm <= 10080) draft.leadMinutes = lm;
+        if (ai.durationDays && Number(ai.durationDays) >= 1 && Number(ai.durationDays) <= 365) {
+          draft.endsAt = new Date(Date.now() + Number(ai.durationDays) * 86400_000).toISOString();
+        } else if (ai.endsAt && /^\d{4}-\d{2}-\d{2}/.test(String(ai.endsAt))) {
+          const e = new Date(String(ai.endsAt));
+          if (!isNaN(e.getTime()) && e.getTime() > Date.now()) draft.endsAt = e.toISOString();
+        }
       }
+    }
+
+    // Respaldo: "por 3 días" / "durante una semana".
+    if (!draft.endsAt) {
+      const end = parseTreatmentEnd(original);
+      if (end) draft.endsAt = end.toISOString();
     }
 
     // Respaldo regex — completa lo que la IA no trajo. Y CORRIGE: si el texto tiene
@@ -487,12 +513,16 @@ export class MedicationReminderService {
       return `🩺 *${this.cap(d.medication || 'Consulta médica')}*\n📅 ${when}${lead}`;
     }
     const dose = d.dose ? ` (${d.dose})` : '';
+    const until = d.endsAt
+      ? `\n📆 hasta el ${new Date(d.endsAt).toLocaleDateString('es-PY', { timeZone: TZ(), day: '2-digit', month: '2-digit' })} (después se desactiva solo)`
+      : '';
     if (d.scheduleKind === 'INTERVAL') {
       const anchor = d.anchorAt ? new Date(d.anchorAt) : new Date();
       const next = this.computeNextDose(anchor, d.intervalHours || 8);
-      return `💊 *${this.cap(d.medication || '')}*${dose}\n🔁 cada ${d.intervalHours} h · próxima ~${fmtHHMM(next)}`;
+      const lead = d.leadMinutes && d.leadMinutes !== 10 ? ` · aviso ${leadLabel(d.leadMinutes)} antes` : '';
+      return `💊 *${this.cap(d.medication || '')}*${dose}\n🔁 cada ${d.intervalHours} h · próxima ~${fmtHHMM(next)}${lead}${until}`;
     }
-    return `💊 *${this.cap(d.medication || '')}*${dose}\n⏰ ${(d.times || []).join(', ')} todos los días`;
+    return `💊 *${this.cap(d.medication || '')}*${dose}\n⏰ ${(d.times || []).join(', ')} todos los días${until}`;
   }
 
   /** Persiste un borrador ya confirmado. Calcula `nextDoseAt` para INTERVAL. */
@@ -517,6 +547,7 @@ export class MedicationReminderService {
       medication: this.cap((d.medication || 'Medicación').slice(0, 80)),
       dose: d.dose ? String(d.dose).slice(0, 60) : null,
       leadMinutes: d.leadMinutes ?? 10,
+      endsAt: d.endsAt && !isNaN(new Date(d.endsAt).getTime()) ? new Date(d.endsAt) : null,
     };
     if (scheduleKind === 'INTERVAL') {
       const anchor = d.anchorAt ? new Date(d.anchorAt) : new Date();
@@ -541,6 +572,7 @@ export class MedicationReminderService {
       intervalHours?: number | null;
       nextDoseAt?: Date | null;
       whenAt?: Date | null;
+      endsAt?: Date | null;
       active: boolean;
     }>
   ): string {
@@ -548,6 +580,9 @@ export class MedicationReminderService {
     return rows
       .map((r, i) => {
         const state = r.active ? '' : ' _(pausado)_';
+        const until = r.endsAt
+          ? ` · hasta ${new Date(r.endsAt).toLocaleDateString('es-PY', { timeZone: TZ(), day: '2-digit', month: '2-digit' })}`
+          : '';
         if (r.kind === 'APPOINTMENT') {
           const w = r.whenAt
             ? new Date(r.whenAt).toLocaleString('es-PY', {
@@ -563,7 +598,7 @@ export class MedicationReminderService {
         }
         if (r.scheduleKind === 'INTERVAL') {
           const nx = r.nextDoseAt ? ` · próxima ${fmtHHMM(new Date(r.nextDoseAt))}` : '';
-          return `*${i + 1}.* 💊 *${r.medication}*${r.dose ? ` (${r.dose})` : ''} — 🔁 cada ${r.intervalHours} h${nx}${state}`;
+          return `*${i + 1}.* 💊 *${r.medication}*${r.dose ? ` (${r.dose})` : ''} — 🔁 cada ${r.intervalHours} h${nx}${until}${state}`;
         }
         let hs: string[] = [];
         try {
@@ -571,7 +606,7 @@ export class MedicationReminderService {
         } catch {
           /* noop */
         }
-        return `*${i + 1}.* 💊 *${r.medication}*${r.dose ? ` (${r.dose})` : ''} — ⏰ ${hs.join(', ')}${state}`;
+        return `*${i + 1}.* 💊 *${r.medication}*${r.dose ? ` (${r.dose})` : ''} — ⏰ ${hs.join(', ')}${until}${state}`;
       })
       .join('\n');
   }
@@ -620,7 +655,15 @@ export class MedicationReminderService {
     const now = new Date();
 
     // --- "ya tomé [X]" → re-anclar los INTERVAL ---
-    if (/\b(ya\s+tom[eé]|reci[eé]n\s+tom[eé]|tom[eé]\s+(mi|el|la|un[ao]|ya))\b/.test(t) || /^tom[eé]\b/.test(t)) {
+    // Solo si es un acuse corto — NO si el mensaje además pide crear/registrar un
+    // recordatorio ("necesito registrar… ya tomé uno hace una hora" = el "ya tomé" es
+    // el ancla de un recordatorio NUEVO, lo maneja el router de creación).
+    const isJustTook =
+      (/\b(ya\s+tom[eé]|reci[eé]n\s+tom[eé]|tom[eé]\s+(mi|el|la|un[ao]|ya))\b/.test(t) || /^tom[eé]\b/.test(t)) &&
+      !/(necesito|quiero|voy\s+a|debo|tengo\s+que\s+tomar|registrar|program|configurar|hac(er|es|é|éme|eme)\s+.{0,15}recordar|hagas?\s+recordar|record(a|á)r?me|avis(a|á)r?me|cargar\s+un\s+horario|cada\s+\d{1,2}\s*(h|hora)|por\s+\d+\s+(d[ií]a|semana))/.test(
+        t
+      );
+    if (isJustTook) {
       const nameHint = t.replace(/.*\btom[eé]\b/, '').replace(/\b(mi|el|la|un[ao]|ya|pastilla|remedio|medicaci[oó]n|reci[eé]n)\b/g, '').trim();
       const targets = medReminders.filter(
         (r) => r.scheduleKind === 'INTERVAL' && (!nameHint || normName(r.medication).includes(normName(nameHint)) || normName(nameHint).includes(normName(r.medication)))
@@ -784,6 +827,24 @@ export class MedicationReminderService {
 
     for (const r of reminders) {
       if (!r.user || (r.user.status !== 'ACTIVE' && r.user.status !== 'EXPIRED')) continue;
+
+      // Fin del tratamiento ("por 3 días") → se desactiva solo, con un aviso de cierre.
+      if (r.kind === 'MED' && r.endsAt && nowMs > new Date(r.endsAt).getTime()) {
+        const gnEnd = r.user.language === 'GN';
+        if (r.lastSentSlot !== 'ENDED') {
+          const msg = gnEnd
+            ? `✅ *${r.medication}* — opa pe tratamiento. Ndorohechavéima momandu'a.`
+            : `✅ Terminó el tratamiento de *${r.medication}*. No te aviso más por este. _Si seguís tomándolo, escribí *5* y cargalo de nuevo._`;
+          if (await whatsappBot.sendMessage(r.user.whatsappJid || r.user.phoneNumber, msg)) {
+            await prisma.medicationReminder.update({ where: { id: r.id }, data: { active: false, lastSentSlot: 'ENDED' } });
+            sent++;
+          }
+        } else {
+          await prisma.medicationReminder.update({ where: { id: r.id }, data: { active: false } });
+        }
+        continue;
+      }
+
       const gn = r.user.language === 'GN';
       const target = r.user.whatsappJid || r.user.phoneNumber;
       const lead = r.kind === 'APPOINTMENT' ? apptLead(r.leadMinutes) : Math.max(1, r.leadMinutes || 10);

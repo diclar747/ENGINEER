@@ -166,6 +166,7 @@ model MedicationReminder {
   anchorAt      DateTime?                        // INTERVAL: momento de la última toma (ancla del cálculo)
   nextDoseAt    DateTime?                        // INTERVAL: próxima toma calculada
   leadMinutes   Int       @default(10)           // anticipación del pre-aviso (MED) / del aviso (APPOINTMENT)
+  endsAt        DateTime?                        // MED: fin del tratamiento ("por 3 días") — se desactiva solo al pasar
   whenAt        DateTime?                        // APPOINTMENT: fecha y hora del turno
   active        Boolean   @default(true)
   lastSentAt    DateTime?

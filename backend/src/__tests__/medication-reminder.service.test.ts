@@ -11,7 +11,38 @@ vi.mock('../database/prisma', () => ({
 vi.mock('../whatsapp/baileys.client', () => ({ whatsappBot: { getStatus: () => ({ connected: false }), sendMessage: vi.fn() } }));
 vi.mock('../services/niro.service', () => ({ NiroService: { enabled: false, extractFields: vi.fn() } }));
 
-import { MedicationReminderService } from '../services/medication-reminder.service';
+import { MedicationReminderService, parseTreatmentEnd } from '../services/medication-reminder.service';
+
+describe('parseTreatmentEnd', () => {
+  const from = new Date('2026-09-10T12:00:00-03:00');
+  it('"por 3 días" → +3 días', () => {
+    expect(parseTreatmentEnd('ibuprofeno cada 4 horas por 3 días', from)!.getTime()).toBe(from.getTime() + 3 * 86400_000);
+  });
+  it('"durante una semana" → +7 días', () => {
+    expect(parseTreatmentEnd('tomar durante una semana', from)!.getTime()).toBe(from.getTime() + 7 * 86400_000);
+  });
+  it('sin duración → null', () => {
+    expect(parseTreatmentEnd('losartán cada 8 horas', from)).toBeNull();
+  });
+});
+
+describe('answerQuery — "ya tomé" NO se dispara si además pide crear un recordatorio', () => {
+  it('mensaje largo de alta con "ya tomé uno hace una hora" → null (lo maneja el router)', async () => {
+    db.user = { currentMedications: null };
+    db.reminders = [];
+    const audio =
+      'necesito registrar los horarios de medicamento. voy a tomar cada cuatro horas un ibuprofeno y necesito que me hagas recordar diez minutos antes. ahora ya tomé uno hace una hora, por tres días';
+    expect(await MedicationReminderService.answerQuery('u1', audio)).toBeNull();
+  });
+  it('"ya tomé" a secas sigue funcionando', async () => {
+    db.user = { currentMedications: null };
+    db.reminders = [
+      { id: 'r1', kind: 'MED', scheduleKind: 'INTERVAL', intervalHours: 4, medication: 'Ibuprofeno', dose: null, times: '[]', nextDoseAt: new Date(), whenAt: null, active: true, leadMinutes: 10 },
+    ];
+    const r = await MedicationReminderService.answerQuery('u1', 'ya tomé');
+    expect(r).toMatch(/Anotado/i);
+  });
+});
 
 describe('computeNextDose', () => {
   it('devuelve la primera toma futura a partir del ancla + intervalo', () => {

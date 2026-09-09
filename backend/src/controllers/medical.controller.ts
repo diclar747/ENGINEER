@@ -164,6 +164,13 @@ export class MedicalController {
 
     const dose = req.body?.dose ? String(req.body.dose).trim() : null;
     const scheduleKind = req.body?.scheduleKind === 'INTERVAL' ? 'INTERVAL' : 'CLOCK';
+    let endsAt: Date | null = null;
+    if (req.body?.endsAt) {
+      const e = new Date(req.body.endsAt);
+      if (!isNaN(e.getTime())) endsAt = e;
+    } else if (req.body?.durationDays && Number(req.body.durationDays) >= 1 && Number(req.body.durationDays) <= 365) {
+      endsAt = new Date(Date.now() + Number(req.body.durationDays) * 86400_000);
+    }
 
     if (scheduleKind === 'INTERVAL') {
       const intervalHours = parseInt(String(req.body?.intervalHours), 10);
@@ -172,7 +179,7 @@ export class MedicalController {
       if (isNaN(anchorAt.getTime())) { res.status(400).json({ error: 'Fecha de última toma inválida.' }); return; }
       const nextDoseAt = MedicationReminderService.computeNextDose(anchorAt, intervalHours);
       const row = await prisma.medicationReminder.create({
-        data: { userId: req.user.userId, kind: 'MED', scheduleKind: 'INTERVAL', medication, dose, times: '[]', intervalHours, anchorAt, nextDoseAt, leadMinutes },
+        data: { userId: req.user.userId, kind: 'MED', scheduleKind: 'INTERVAL', medication, dose, times: '[]', intervalHours, anchorAt, nextDoseAt, leadMinutes, endsAt },
       });
       res.json({ reminder: { ...row, times: [] } });
       return;
@@ -183,7 +190,7 @@ export class MedicalController {
       : [];
     if (!times.length) { res.status(400).json({ error: 'Agregá al menos un horario válido (HH:MM).' }); return; }
     const row = await prisma.medicationReminder.create({
-      data: { userId: req.user.userId, kind: 'MED', scheduleKind: 'CLOCK', medication, dose, times: JSON.stringify(times), leadMinutes },
+      data: { userId: req.user.userId, kind: 'MED', scheduleKind: 'CLOCK', medication, dose, times: JSON.stringify(times), leadMinutes, endsAt },
     });
     res.json({ reminder: { ...row, times } });
   }

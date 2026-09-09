@@ -1554,7 +1554,7 @@ export class BotStateMachine {
           orderBy: { createdAt: 'asc' },
           select: {
             kind: true, scheduleKind: true, medication: true, dose: true, times: true,
-            intervalHours: true, nextDoseAt: true, whenAt: true, active: true,
+            intervalHours: true, nextDoseAt: true, whenAt: true, endsAt: true, active: true,
           },
         });
         const remBlock = reminders.length
@@ -1928,7 +1928,7 @@ export class BotStateMachine {
             orderBy: { createdAt: 'asc' },
             select: {
               id: true, kind: true, scheduleKind: true, medication: true, dose: true, times: true,
-              intervalHours: true, nextDoseAt: true, whenAt: true, active: true,
+              intervalHours: true, nextDoseAt: true, whenAt: true, endsAt: true, active: true,
             },
           });
 
@@ -2126,13 +2126,16 @@ export class BotStateMachine {
             orderBy: { createdAt: 'asc' },
             select: {
               kind: true, scheduleKind: true, medication: true, dose: true, times: true,
-              intervalHours: true, nextDoseAt: true, whenAt: true, active: true,
+              intervalHours: true, nextDoseAt: true, whenAt: true, endsAt: true, active: true,
             },
           });
+          const dur = draft.endsAt
+            ? ` Se desactiva solo el ${new Date(draft.endsAt).toLocaleDateString('es-PY', { timeZone: config.timezone, day: '2-digit', month: '2-digit' })}.`
+            : '';
           const howMed =
             draft.scheduleKind === 'INTERVAL'
-              ? `Te aviso ${MedicationReminderService.leadLabel(draft.leadMinutes ?? 10)} antes y a la hora. Cuando la tomes escribí *YA TOMÉ* y recalculo la próxima.`
-              : `Te aviso ${MedicationReminderService.leadLabel(draft.leadMinutes ?? 10)} antes y a la hora, todos los días.`;
+              ? `Te aviso ${MedicationReminderService.leadLabel(draft.leadMinutes ?? 10)} antes y a la hora. Cuando la tomes escribí *YA TOMÉ* y recalculo la próxima.${dur}`
+              : `Te aviso ${MedicationReminderService.leadLabel(draft.leadMinutes ?? 10)} antes y a la hora, todos los días.${dur}`;
           const how = draft.kind === 'APPOINTMENT' ? `Te aviso ${MedicationReminderService.leadLabel(draft.leadMinutes ?? 120)} antes.` : howMed;
           return {
             replyText:
@@ -2313,9 +2316,14 @@ export class BotStateMachine {
         /\b(quiero|necesito|quisiera|pod[eé]s|puedes|me\s+gustar[ií]a)\b.{0,35}\b(record\w*|recu[eé]rd\w*|alarma|aviso|avis\w*|agend\w*|program\w*|arm[aá]r?\s+(una|un)?\s*(cita|turno))\b/.test(lc) ||
         /\bhacerme\s+recordar\b/.test(lc) ||
         /\b(record\w*|recu[eé]rd\w*)\b.{0,45}\b(tom(ar|e|é|o)|pastilla|remedio|medic|c[aá]psula|dosis|inyecci|gotas?|jarabe|cada\s+\d|a\s+las?\s+\d|\d{1,2}[:h]\d)/.test(lc) ||
-        /\b(pon(er|é|eme)|crear|cre[aá]|arm(ar|á|ame)|hacer|hac[eé]me)\b.{0,20}\b(recordatorio|alarma|aviso)\b/.test(lc) ||
+        /\b(pon(er|é|eme)|crear|cre[aá]|arm(ar|á|ame)|hacer|hac[eé]me|hagas?)\b.{0,25}\b(recordatorio|recordar|alarma|aviso)\b/.test(lc) ||
         /\b(tengo|sacar|saqu[eé]|agend\w*|reserv\w*|me\s+dieron|dan|me\s+agendaron|arm\w*|program\w*|anot\w*|registr\w*|pon\w*|crear|cre[aá])\b.{0,30}\b(cita|turno|consulta|hora\s+m[eé]dica)\b/.test(lc) ||
         /\b(cita|turno|consulta)\s+(nuev|m[eé]dic|con\s+(el|la|mi|dr|dra|doctor|traumat|cardi|ped|gine|derma|oftalm|neuro))/.test(lc) ||
+        // "necesito registrar los horarios de medicamento", "voy a tomar cada 4 horas un ibuprofeno"
+        /\b(necesito|quiero|voy\s+a|debo|tengo\s+que)\b.{0,45}\b(registrar|program\w*|configurar|anotar|poner|arm\w*|cargar\s+un\s+horario)\b.{0,30}\b(horario|recordatorio|toma\b|medic|remedio|pastilla)/.test(lc) ||
+        /\bregistrar\s+(los\s+|el\s+|mi\s+|un\s+)?horario/.test(lc) ||
+        (/\b(voy\s+a\s+tomar|tengo\s+que\s+tomar|debo\s+tomar|me\s+recetaron|me\s+indicaron)\b/.test(lc) &&
+          /\b(cada\s+\d{1,2}\s*(h|hora)|a\s+las?\s+\d|\d{1,2}:\d{2}|\d+\s*veces?\s+(al|por)\s+d[ií]a)\b/.test(lc)) ||
         (/\b(a\s+las?\s+\d|cada\s+\d+\s*h|\d{1,2}:\d{2})\b/.test(lc) && !!MedicationReminderService.parse(cleanText)))
       ) {
         const parsedReq = await MedicationReminderService.parseReminderRequest(cleanText);
@@ -2402,7 +2410,7 @@ export class BotStateMachine {
           orderBy: { createdAt: 'asc' },
           select: {
             kind: true, scheduleKind: true, medication: true, dose: true, times: true,
-            intervalHours: true, nextDoseAt: true, whenAt: true, active: true,
+            intervalHours: true, nextDoseAt: true, whenAt: true, endsAt: true, active: true,
           },
         });
         return {
