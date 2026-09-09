@@ -1,4 +1,5 @@
 import { prisma } from '../database/prisma';
+import { PaymentService } from './payment.service';
 
 export type PromptScope = 'GENERAL' | 'PRE_REGISTRO' | 'MIEMBRO_ACTIVO';
 
@@ -12,7 +13,7 @@ const DEFAULT_BASE = [
   'Qué es Bio-Pass: una ficha médica de emergencia accesible por un QR (sticker 3x3 cm). Acceso público sin PIN (datos críticos: nombre, grupo sanguíneo, alergias, condiciones, medicación, contacto de emergencia) y acceso privado con PIN de 4 dígitos (historial e estudios, cifrado Zero-Knowledge: ni los administradores pueden ver los estudios sin el PIN).',
   'El registro es 100% self-service por WhatsApp, dura menos de 3 minutos: idioma → foto de cédula (OCR) → contacto de emergencia → domicilio → correo → datos médicos críticos → PIN → pago. El QR se genera recién cuando el pago se confirma.',
   'Se pueden cargar por WhatsApp: medicamentos, recetas y estudios (foto o PDF), y configurar recordatorios de toma de medicación con horario.',
-  'No inventes precios exactos, datos médicos ni diagnósticos. Para pasos concretos, sugerí escribir *MENU*. Si preguntan algo fuera de tema, redirigí amablemente.',
+  'Los precios que se te dan más abajo (si los hay) son exactos y actuales — compartilos con confianza, sin redondear ni inventar otros. No inventes datos médicos ni diagnósticos. Para pasos concretos, sugerí escribir *MENU*. Si preguntan algo fuera de tema, redirigí amablemente.',
 ].join(' ');
 
 const DEFAULT_BY_SCOPE: Record<PromptScope, string> = {
@@ -71,6 +72,10 @@ export class AiPromptService {
   /**
    * System prompt para una consulta: concatena los prompts activos de scope
    * GENERAL + los del scope pedido. Cae al default si no hay nada cargado.
+   * Para PRE_REGISTRO se agregan los precios reales y actuales (tabla de
+   * AppSetting/env, la misma que usa el checkout) — antes el prompt le decía
+   * a la IA "no inventes precios exactos" y no le daba ninguno, así que
+   * cualquier pregunta de costo quedaba sin responder de verdad.
    */
   static async getSystemPrompt(scope: PromptScope): Promise<string> {
     const rows = await this.rows();
@@ -78,7 +83,17 @@ export class AiPromptService {
       .filter((r) => r.scope === 'GENERAL' || r.scope === scope)
       .map((r) => r.content.trim())
       .filter(Boolean);
-    if (picked.length) return picked.join('\n\n');
-    return `${DEFAULT_BASE}\n\n${DEFAULT_BY_SCOPE[scope]}`;
+    const base = picked.length ? picked.join('\n\n') : `${DEFAULT_BASE}\n\n${DEFAULT_BY_SCOPE[scope]}`;
+    if (scope !== 'PRE_REGISTRO') return base;
+    try {
+      const p = await PaymentService.getPlanPrices();
+      const priceLine =
+        `Precios actuales: Paraguay — Gs. ${p.PY.MONTHLY.toLocaleString('es-PY')}/mes ` +
+        `o Gs. ${p.PY.ANNUAL.toLocaleString('es-PY')}/año. Brasil — R$ ${p.BR.MONTHLY.toFixed(2)}/mês ` +
+        `ou R$ ${p.BR.ANNUAL.toFixed(2)}/ano.`;
+      return `${base}\n\n${priceLine}`;
+    } catch {
+      return base;
+    }
   }
 }

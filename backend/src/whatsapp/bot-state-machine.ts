@@ -165,6 +165,36 @@ async function getConditionOptions(): Promise<CondOpt[]> {
   return DEFAULT_CONDITIONS;
 }
 
+/**
+ * Reconoce, dentro de un texto libre ("tengo hipertensión", "ya no tengo
+ * diabetes"), a cuál condición del picklist se refiere (comparando contra
+ * labelEs/labelGn de las opciones activas, incluidas las que agregó el
+ * admin). Devuelve null si no matchea ninguna.
+ */
+async function matchConditionLabel(text: string): Promise<string | null> {
+  const opts = await getConditionOptions();
+  const t = norm(text);
+  if (!t) return null;
+  for (const o of opts) {
+    if (t.includes(norm(o.labelEs)) || t.includes(norm(o.labelGn))) return o.labelEs;
+  }
+  return null;
+}
+
+/** ¿La frase pide QUITAR la condición (en vez de agregarla)? */
+function isRemoveConditionCmd(text: string): boolean {
+  return /\b(ya no tengo|ya no|saqu[eé]|sac[aá]|quit[aá]|elimin[aá]|borr[aá])\b/i.test(text);
+}
+
+/** Aplica un alta/baja de condición médica sobre `emergencyConditions` (JSON array string). */
+async function applyConditionChange(userId: string, current: string | null, label: string, remove: boolean): Promise<string[]> {
+  let list: string[] = [];
+  try { list = current ? JSON.parse(current) : []; } catch { list = []; }
+  const next = remove ? list.filter((c) => c !== label) : list.includes(label) ? list : [...list, label];
+  await prisma.user.update({ where: { id: userId }, data: { emergencyConditions: JSON.stringify(next) } });
+  return next;
+}
+
 /** Comando global disponible en CUALQUIER paso: volver a empezar / menú. */
 function isResetCmd(text: string): boolean {
   const t = norm(text);
@@ -1772,7 +1802,8 @@ export class BotStateMachine {
             `• _"Cambiar alergia a Penicilina e Ibuprofeno"_\n` +
             `• _"Nuevo contacto Carlos Perez 0981999888"_\n` +
             `• _"Cambiar dirección a Avda España 500"_\n` +
-            `• _"Ya no tomo Enalapril"_\n\n` +
+            `• _"Ya no tomo Enalapril"_\n` +
+            `• _"Tengo Hipertensión" / "Ya no tengo Diabetes"_\n\n` +
             `_Escribí *LISTO* o *SALIR* para volver al menú._`,
           `✏️ *Emoambue perfil*\n\n_Ehai *LISTO* térã *SALIR* rehóvo._`
         );
@@ -1823,6 +1854,19 @@ export class BotStateMachine {
         if (freeIntent.intent === 'CHANGE_ADDRESS' && freeIntent.value) {
           await prisma.user.update({ where: { id: user.id }, data: { address: freeIntent.value } });
           return { replyText: `✅ *Dirección actualizada:* ${freeIntent.value}` + contMsg };
+        }
+        if (freeIntent.intent === 'CHANGE_CONDITIONS' && freeIntent.value) {
+          const label = await matchConditionLabel(freeIntent.value);
+          if (label) {
+            const remove = isRemoveConditionCmd(freeIntent.value);
+            const next = await applyConditionChange(user.id, user.emergencyConditions, label, remove);
+            return {
+              replyText:
+                `✅ *Condiciones médicas actualizadas${remove ? ` — se sacó "${label}"` : ` — se agregó "${label}"`}:*\n` +
+                (next.length ? next.map((c) => `• ${c}`).join('\n') : '_Ninguna declarada_') +
+                contMsg,
+            };
+          }
         }
 
         // No reconocido: NUNCA cae al menú general en silencio — se queda en el
@@ -1988,7 +2032,8 @@ export class BotStateMachine {
             `• _"Cambiar alergia a Penicilina e Ibuprofeno"_\n` +
             `• _"Nuevo contacto Carlos Perez 0981999888"_\n` +
             `• _"Cambiar dirección a Avda España 500"_\n` +
-            `• _"Ya no tomo Enalapril"_\n\n` +
+            `• _"Ya no tomo Enalapril"_\n` +
+            `• _"Tengo Hipertensión" / "Ya no tengo Diabetes"_\n\n` +
             `_Escribí tu mensaje a continuación, o *SALIR* para volver al menú._`,
         };
       }
@@ -2150,6 +2195,19 @@ export class BotStateMachine {
         return {
           replyText: `✅ *Dirección actualizada:* ${parsedIntent.value}`,
         };
+      }
+
+      if (parsedIntent.intent === 'CHANGE_CONDITIONS' && parsedIntent.value) {
+        const label = await matchConditionLabel(parsedIntent.value);
+        if (label) {
+          const remove = isRemoveConditionCmd(parsedIntent.value);
+          const next = await applyConditionChange(user.id, user.emergencyConditions, label, remove);
+          return {
+            replyText:
+              `✅ *Condiciones médicas actualizadas${remove ? ` — se sacó "${label}"` : ` — se agregó "${label}"`}:*\n` +
+              (next.length ? next.map((c) => `• ${c}`).join('\n') : '_Ninguna declarada_'),
+          };
+        }
       }
 
       {
