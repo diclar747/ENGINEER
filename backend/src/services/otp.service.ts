@@ -48,7 +48,14 @@ export class OtpService {
       `Vence en ${config.otp.ttlMinutes} minutos. No lo compartas con nadie.\n` +
       `_Si no solicitaste este código, ignora este mensaje._`;
 
-    const delivered = await whatsappBot.sendMessage(cleanPhone, text);
+    // Si el titular tiene un `whatsappJid` guardado (típico de cuentas @lid: el
+    // número real no es dialable), se manda ahí para que le llegue seguro.
+    let target = cleanPhone;
+    try {
+      const u = await prisma.user.findUnique({ where: { phoneNumber: cleanPhone }, select: { whatsappJid: true } });
+      if (u?.whatsappJid) target = u.whatsappJid;
+    } catch { /* sin acceso a user → se manda al número */ }
+    const delivered = await whatsappBot.sendMessage(target, text);
     const botOnline = whatsappBot.getStatus().connected;
 
     return {

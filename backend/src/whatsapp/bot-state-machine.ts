@@ -1353,6 +1353,12 @@ export class BotStateMachine {
 
     // AWAITING PAYMENT CONFIRMATION STATE
     if (state === 'AWAITING_PAYMENT_CONFIRMATION') {
+      // El admin ya activó la cuenta (o entró un pago) pero el estado quedó
+      // trabado acá → promover a miembro y seguir con el menú normal.
+      if (user.status === 'ACTIVE') {
+        await updateState('ACTIVE_MEMBER', {});
+        return BotStateMachine.handleMessage(msg);
+      }
       if (cleanText.toUpperCase().includes('PAGAR') || cleanText.toUpperCase().includes('CONFIRMAR')) {
         const lastOrder = await prisma.paymentOrder.findFirst({
           where: { userId: user.id, status: 'PENDING' },

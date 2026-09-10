@@ -331,7 +331,14 @@ export class AdminController {
     const { status, months } = req.body || {};
     const allowed = ['ACTIVE', 'PENDING_PAYMENT', 'EXPIRED', 'CANCELLED'];
     if (!allowed.includes(status)) { res.status(400).json({ error: 'Estado invalido' }); return; }
-    const user = await prisma.user.update({ where: { id: req.params.id }, data: { status } });
+    const before = await prisma.user.findUnique({ where: { id: req.params.id }, select: { onboardingState: true } });
+    // Al ACTIVAR a mano: si el onboarding quedó trabado en un paso de pre-alta /
+    // pago, se pasa a ACTIVE_MEMBER para que el bot lo trate como miembro (antes
+    // seguía respondiendo "tu pago está pendiente" aunque el admin ya lo activó).
+    const PRE_ACTIVE = ['AWAITING_PAYMENT_CONFIRMATION', 'PAYMENT_PENDING', 'STEP8_PAYMENT', 'STEP9_DONE', 'CHECKOUT'];
+    const bumpOnboarding =
+      status === 'ACTIVE' && before && PRE_ACTIVE.includes(before.onboardingState || '') ? { onboardingState: 'ACTIVE_MEMBER' } : {};
+    const user = await prisma.user.update({ where: { id: req.params.id }, data: { status, ...bumpOnboarding } });
 
     // Activar a mano SIN una suscripción vigente = el cron lo vuelve a bajar a EXPIRED al día
     // siguiente. Al activar, garantizamos una suscripción activa (por defecto +12 meses).
