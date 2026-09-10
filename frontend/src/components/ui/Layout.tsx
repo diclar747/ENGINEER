@@ -151,8 +151,12 @@ export const AppShell: React.FC<{
   subtitle?: React.ReactNode;
   headerRight?: React.ReactNode;
   footer?: React.ReactNode;
+  /** Ícono para el botón flotante en móvil (ej: corazón). Si se pasa, en móvil
+   *  el menú se abre desde un FAB abajo a la derecha con un bottom-sheet, y se
+   *  oculta el botón hamburguesa del header. */
+  fab?: React.ReactNode;
   children: React.ReactNode;
-}> = ({ brand, nav, title, subtitle, headerRight, footer, children }) => {
+}> = ({ brand, nav, title, subtitle, headerRight, footer, fab, children }) => {
   const [open, setOpen] = React.useState(false);
   const [collapsed, setCollapsed] = React.useState(() => {
     try { return localStorage.getItem('biopass_sidebar_collapsed') === '1'; } catch { return false; }
@@ -213,23 +217,65 @@ export const AppShell: React.FC<{
 
   const w = collapsed ? 'w-[72px]' : 'w-[248px]';
   const pl = collapsed ? 'lg:pl-[72px]' : 'lg:pl-[248px]';
+
+  // Bottom-sheet móvil (cuando hay `fab`): lista de navegación grande y táctil.
+  const BottomSheet = (
+    <>
+      <div className="lg:hidden fixed inset-0 bg-black/45 z-40 animate-fade-in" onClick={() => setOpen(false)} />
+      <div className="lg:hidden fixed inset-x-0 bottom-0 z-50 bg-card rounded-t-3xl border-t border-line shadow-2xl animate-slide-up pb-[calc(0.5rem+var(--safe-bottom))]">
+        <div className="pt-3 pb-1 flex justify-center"><div className="w-10 h-1.5 rounded-full bg-line" /></div>
+        <div className="px-4 pb-2 pt-1 flex items-center gap-2 border-b border-line/70">
+          <span className="text-teal-600 dark:text-teal-400">{fab}</span>
+          <span className="font-black text-fg text-sm">Menú</span>
+          <button type="button" onClick={() => setOpen(false)} className="ml-auto p-1.5 rounded-lg text-fg-muted hover:bg-muted">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><path d="M6 6l12 12M18 6L6 18" /></svg>
+          </button>
+        </div>
+        <nav className="p-2 max-h-[60vh] overflow-y-auto">
+          {nav.map((n) => {
+            const cls = `w-full flex items-center gap-3.5 px-3.5 py-3.5 rounded-2xl text-[15px] font-bold transition-colors ${
+              n.active ? 'bg-teal-500/12 text-teal-700 dark:text-teal-300' : 'text-fg-soft hover:bg-muted active:bg-muted'
+            }`;
+            const inner = (<><span className={`shrink-0 ${n.active ? '' : 'text-fg-muted'}`}>{n.icon}</span><span className="flex-1 text-left truncate">{n.label}</span>{n.badge != null && <span className="text-[11px] font-black bg-teal-500/15 text-teal-600 dark:text-teal-300 rounded-full px-2 py-0.5">{n.badge}</span>}{n.active && <span className="w-1.5 h-1.5 rounded-full bg-teal-500" />}</>);
+            return n.href
+              ? <a key={n.id} href={n.href} onClick={() => setOpen(false)} className={cls}>{inner}</a>
+              : <button key={n.id} type="button" onClick={() => { n.onClick?.(); setOpen(false); }} className={cls}>{inner}</button>;
+          })}
+        </nav>
+        {footer && <div className="px-3 pb-2 pt-1 border-t border-line/70">{footer}</div>}
+      </div>
+    </>
+  );
+
   return (
     <div className="min-h-screen bg-app text-fg">
       {/* Sidebar desktop */}
       <aside className={`hidden lg:block fixed inset-y-0 left-0 z-30 transition-[width] duration-200 ${w}`}>{Aside(collapsed)}</aside>
-      {/* Drawer móvil (siempre completo) */}
-      {open && (
-        <>
-          <div className="lg:hidden fixed inset-0 bg-black/40 z-40" onClick={() => setOpen(false)} />
-          <aside className="lg:hidden fixed inset-y-0 left-0 w-[248px] z-50 shadow-2xl animate-slide-up">{Aside(false)}</aside>
-        </>
+      {/* Móvil: bottom-sheet (si hay fab) o drawer lateral */}
+      {open && (fab
+        ? BottomSheet
+        : (
+          <>
+            <div className="lg:hidden fixed inset-0 bg-black/40 z-40" onClick={() => setOpen(false)} />
+            <aside className="lg:hidden fixed inset-y-0 left-0 w-[248px] z-50 shadow-2xl animate-slide-up">{Aside(false)}</aside>
+          </>
+        ))}
+      {/* FAB móvil */}
+      {fab && !open && (
+        <button type="button" onClick={() => setOpen(true)} aria-label="Abrir menú"
+          className="lg:hidden fixed right-4 bottom-[calc(1rem+var(--safe-bottom))] z-40 w-14 h-14 rounded-full bg-gradient-to-br from-teal-500 to-emerald-600 text-white shadow-xl shadow-emerald-600/35 flex items-center justify-center active:scale-90 transition-transform">
+          <span className="absolute inset-0 rounded-full bg-emerald-400/40 animate-ping [animation-duration:2.6s]" />
+          <span className="relative">{fab}</span>
+        </button>
       )}
       <div className={`transition-[padding] duration-200 ${pl}`}>
         <header className="sticky top-0 z-20 bg-app/85 backdrop-blur-md border-b border-line">
           <div className="px-3 sm:px-6 py-2.5 flex items-center gap-3">
-            <button type="button" onClick={() => setOpen(true)} className="lg:hidden p-2 -ml-1 rounded-lg hover:bg-muted text-fg-soft">
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><path d="M4 6h16M4 12h16M4 18h16" /></svg>
-            </button>
+            {!fab && (
+              <button type="button" onClick={() => setOpen(true)} className="lg:hidden p-2 -ml-1 rounded-lg hover:bg-muted text-fg-soft">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><path d="M4 6h16M4 12h16M4 18h16" /></svg>
+              </button>
+            )}
             <div className="min-w-0 flex-1">
               {title && <h1 className="text-base sm:text-lg font-black text-fg truncate leading-tight">{title}</h1>}
               {subtitle && <p className="text-[11px] text-fg-muted truncate">{subtitle}</p>}
@@ -237,7 +283,7 @@ export const AppShell: React.FC<{
             {headerRight && <div className="flex items-center gap-1.5 sm:gap-3 shrink-0">{headerRight}</div>}
           </div>
         </header>
-        <main className="p-3 sm:p-6 max-w-[1440px] mx-auto">{children}</main>
+        <main className="p-3 sm:p-6 max-w-[1440px] mx-auto pb-24 lg:pb-6">{children}</main>
       </div>
     </div>
   );

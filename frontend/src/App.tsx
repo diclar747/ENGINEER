@@ -67,6 +67,7 @@ const UserShell: React.FC = () => {
     <AppShell
       brand={<><HeartPulse className="w-6 h-6 text-white shrink-0" /><span className="font-black text-white text-base">Bio-Pass</span></>}
       nav={USER_NAV.map((n) => ({ id: n.id, label: n.label, icon: n.icon, active: active?.id === n.id, onClick: () => navigate(n.path) }))}
+      fab={<HeartPulse className="w-6 h-6" />}
       title={active?.label || 'Mi Pasaporte'}
       subtitle="Pasaporte médico inteligente"
       headerRight={
