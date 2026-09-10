@@ -395,20 +395,14 @@ export class BaileysClient {
       });
 
       // Handle inbound messages — 1:1 DMs only.
-      // SOLO `notify` = mensaje nuevo en vivo. `append` = mensajes que WhatsApp agrega
-      // al chat = SIEMPRE historial/sincronización. Se ignora entero: al re-vincular,
-      // WhatsApp reproduce toda la conversación vieja como `append` (con timestamp
-      // "ahora"), y el bot procesaba cada mensaje viejo ("1", "ACEPTO", la foto…) y
-      // se comía los pasos del registro. Perder el primer mensaje post-QR (raro) es
-      // mucho mejor que reproducir 40 mensajes de historial.
+      // `notify` = mensaje en vivo. `append` = mensajes que WhatsApp agrega al chat:
+      // normalmente historial, PERO esta sesión @lid entrega MUCHOS mensajes reales
+      // como `append` (los del registro de Juan se perdían). Se procesan también los
+      // `append` RECIENTES (ts < 90 s); el historial viejo lo filtra el chequeo de
+      // timestamp + el dedup por contenido + el cortafuegos anti-ráfaga.
       this.sock.ev.on('messages.upsert', async (m) => {
         if (this.socketGen !== myGen) return; // listener de un socket viejo → ignorar
-        if (m.type !== 'notify') {
-          if (m.type === 'append') {
-            console.log(`[WHATSAPP BOT] Ignoro batch 'append' (${m.messages?.length ?? 0} msgs) — historial/sincronización, no en vivo.`);
-          }
-          return;
-        }
+        if (m.type !== 'notify' && m.type !== 'append') return;
         const nowSec = Math.floor(Date.now() / 1000);
         // Ventana de gracia SOLO tras un pareo FRESCO (QR escaneado): ahí WhatsApp
         // vuelca el historial como `notify`. En una RECONEXIÓN normal NO hay ráfaga
