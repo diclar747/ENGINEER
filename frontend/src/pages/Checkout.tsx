@@ -105,11 +105,11 @@ export const Checkout: React.FC = () => {
   }, [order?.status, navigate]);
 
   // Bancard: el process_id vence a los pocos minutos, así que al abrir esta página pedimos una
-  // sesión FRESCA (POST /payments/:ref/bancard-session) y mostramos su QR + link. El pago se
-  // completa en la pantalla de Bancard (escaneando el QR con el teléfono o abriendo el link);
-  // al terminar, Bancard vuelve al return_url y el webhook activa la cuenta — el polling de
-  // esta página refleja el PAID.
-  const [bancard, setBancard] = useState<{ processId: string; redirectUrl: string; qr: string | null; baseUrl: string } | null>(null);
+  // sesión FRESCA (POST /payments/:ref/bancard-session) y montamos su formulario con el SDK
+  // `bancard-checkout-4.0.0.js` (tarjeta + QR real de Bancard adentro). NO hay página propia
+  // navegable ni QR de link: `/checkout/new/<id>` da 404. Al terminar, Bancard vuelve al
+  // return_url y el webhook activa la cuenta — el polling de esta página refleja el PAID.
+  const [bancard, setBancard] = useState<{ processId: string; baseUrl: string } | null>(null);
   const [bancardErr, setBancardErr] = useState(false);
   const bancardAsked = useRef(false);
   const iframeMounted = useRef(false);
@@ -122,7 +122,7 @@ export const Checkout: React.FC = () => {
       .post(`/payments/${encodeURIComponent(ref)}/bancard-session`)
       .then((r) => {
         if (r.data?.status === 'PAID') { fetchOrder(); return; }
-        setBancard({ processId: r.data.processId, redirectUrl: r.data.redirectUrl, qr: r.data.qr || null, baseUrl: r.data.bancardBaseUrl });
+        setBancard({ processId: r.data.processId, baseUrl: r.data.bancardBaseUrl });
       })
       .catch(() => setBancardErr(true));
   }, [order?.gateway, order?.status, ref, fetchOrder]);
@@ -241,8 +241,8 @@ export const Checkout: React.FC = () => {
         </div>
       ) : (
         <>
-          {/* Bancard — QR + link a la pantalla de pago (tarjeta / QR). El iframe embebido no está
-              habilitado para este comercio; el QR abre la pantalla de Bancard en el teléfono. */}
+          {/* Bancard — formulario embebido con el SDK (tarjeta + QR real de Bancard adentro).
+              No hay página propia navegable: `/checkout/new/<id>` da 404. */}
           {order.gateway === 'BANCARD' && (
             <div className="rounded-3xl border border-line bg-card p-5 space-y-3 shadow-xl">
               <h3 className="text-sm font-bold text-fg flex items-center gap-2">
@@ -259,14 +259,10 @@ export const Checkout: React.FC = () => {
                 <>
                   {/* Bancard dibuja acá su propio formulario de tarjeta + su QR real de pago */}
                   <div id="bancard-container" className="min-h-[420px] w-full rounded-xl overflow-hidden bg-white" />
-                  <details className="text-xs text-fg-muted">
-                    <summary className="cursor-pointer font-semibold">¿No cargó el formulario? Abrilo en tu teléfono</summary>
-                    <div className="mt-2 flex flex-col items-center gap-2">
-                      {bancard.qr && <img src={bancard.qr} alt="Abrir pago en el teléfono" className="w-40 h-40 bg-white p-2 rounded-xl" />}
-                      <a href={bancard.redirectUrl} target="_blank" rel="noreferrer" className="px-4 py-2 rounded-xl bg-muted text-fg-soft font-bold">Abrir pantalla de pago ↗</a>
-                    </div>
-                  </details>
-                  <p className="text-[11px] text-fg-muted">Al terminar el pago, esta página se actualiza sola.</p>
+                  <p className="text-[11px] text-fg-muted">
+                    Pagá con tarjeta o escaneá el QR que aparece en el formulario de arriba con la app de tu banco.
+                    Al terminar, esta página se actualiza sola. ¿No cargó? Usá la transferencia SIPAP de abajo.
+                  </p>
                 </>
               )}
             </div>

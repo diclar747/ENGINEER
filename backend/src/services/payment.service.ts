@@ -6,7 +6,6 @@ import { PushService } from './push.service';
 import { EmailService } from './email.service';
 import { PixService } from './pix.service';
 import { BancardService } from './bancard.service';
-import QRCode from 'qrcode';
 
 export interface CreateOrderParams {
   userId: string;
@@ -168,12 +167,11 @@ export class PaymentService {
         // propio de Bancard no se necesita del lado servidor (vive en externalRedirect).
         gatewayRef = shopProcessId;
         externalRedirect = checkout.redirectUrl;
-        // QR escaneable del checkout de Bancard, para mandarlo directo en el chat de WhatsApp.
-        try {
-          pixQrImage = await QRCode.toDataURL(checkout.redirectUrl, { errorCorrectionLevel: 'M', margin: 1, width: 320 });
-        } catch (err: any) {
-          console.warn('[payment] Bancard QR render failed:', err?.message);
-        }
+        // OJO: el `process_id` de Bancard NO tiene página propia navegable
+        // (`/checkout/new/<id>` responde 404) y además vence a los pocos minutos.
+        // Sólo sirve para montar el form con el SDK `bancard-checkout-4.0.0.js`
+        // dentro de nuestra página /checkout. Por eso NO se genera un QR de ese
+        // link (daba un QR que llevaba a "No encontrado" de Bancard).
       } else {
         console.warn(
           '[payment] BANCARD_PUBLIC_KEY / BANCARD_PRIVATE_KEY sin configurar — la orden PY sale solo con instrucciones de transferencia manual.'

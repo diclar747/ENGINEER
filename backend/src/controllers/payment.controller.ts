@@ -258,8 +258,9 @@ export class PaymentController {
         returnUrl: `${config.baseUrl}/api/payments/bancard/return?ref=${encodeURIComponent(ref)}`,
         cancelUrl: `${config.frontendUrl}/checkout?ref=${encodeURIComponent(ref)}&status=cancel`,
       });
-      const QRCode = (await import('qrcode')).default;
-      const qr = await QRCode.toDataURL(checkout.redirectUrl, { errorCorrectionLevel: 'M', margin: 1, width: 320 }).catch(() => null);
+      // Nada de QR / link directo: `checkout.redirectUrl` (`/checkout/new/<id>`)
+      // da 404 en Bancard. El `process_id` sólo sirve para montar el form con el
+      // SDK `bancard-checkout-4.0.0.js` dentro de esta misma página /checkout.
       // Se AGREGA el nuevo shop_process_id a la lista (no se pisan los anteriores) para poder
       // consultar la confirmación de todos.
       const ids = [...new Set([...prevIds, shopProcessId])].slice(-8);
@@ -269,13 +270,11 @@ export class PaymentController {
           gatewayRef: shopProcessId,
           bancardProcessIds: JSON.stringify(ids),
           paymentLink: checkout.redirectUrl,
-          pixQrImage: qr,
+          pixQrImage: null,
         },
       });
       res.json({
         processId: checkout.processId,
-        redirectUrl: checkout.redirectUrl,
-        qr,
         bancardBaseUrl: config.bancard.baseUrl,
       });
     } catch (e: any) {

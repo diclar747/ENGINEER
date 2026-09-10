@@ -1338,23 +1338,20 @@ export class BotStateMachine {
       await updateState('AWAITING_PAYMENT_CONFIRMATION', { orderId: order.orderId });
 
       if (country === 'PARAGUAY') {
-        const hasQr = !!order.pixQrImage;
-        // Link directo al checkout alojado de Bancard (el mismo destino que codifica el QR),
-        // sólo como respaldo para quien no puede escanear.
-        const bancardLink = order.externalRedirect || order.paymentLink;
+        // El process_id de Bancard NO tiene página propia compartible
+        // (`/checkout/new/<id>` da 404) y vence a los minutos → nada de QR ni de
+        // link directo a vpos. El único punto de entrada válido es nuestra página
+        // /checkout, que abre una sesión FRESCA de Bancard (tarjeta + QR real de
+        // Bancard adentro) y además muestra la transferencia SIPAP.
         return {
-          mediaFirst: true,
           replyText: `💳 *ORDEN DE PAGO GENERADA (PARAGUAY)*\n\n` +
             `💰 *Monto:* ${order.formattedAmount} (${plan === 'ANNUAL' ? 'Plan Anual' : 'Plan Mensual'})\n` +
             `🔢 *Referencia:* \`${order.referenceCode}\`\n\n` +
-            (hasQr
-              ? `📷 *Escaneá el QR de arriba* con la cámara del teléfono o tu app del banco: abre directo el pago de *Bancard* (tarjeta de débito/crédito o QR).\n\n` +
-                `_¿No podés escanear? Abrí este enlace:_\n${bancardLink}\n\n`
-              : `🌐 *Pagar con Tarjeta / Bancard / QR:*\n${bancardLink}\n\n`) +
+            `🌐 *Pagar con Tarjeta / Bancard / QR:*\n${order.paymentLink}\n` +
+            `_Abrí ese enlace: podés pagar con tarjeta o escanear ahí el QR de Bancard con la app de tu banco._\n\n` +
             `🏦 *Alternativa — Transferencia SIPAP / Tigo Money:*\n` +
             `${order.aliasInfo}\n\n` +
             `_Apenas se acredite el pago, tu QR y Kit de Stickers (3x3 cm) se envían acá automáticamente._`,
-          mediaAttachment: qrAttachment(order.pixQrImage, `Bio-Pass — ${order.formattedAmount} · Pago Bancard`),
         };
       } else {
         return {
@@ -2778,23 +2775,17 @@ export class BotStateMachine {
         isFine,
       });
 
-      const hasQr = !!order.pixQrImage;
-      const bancardLink = order.externalRedirect || order.paymentLink;
       return {
-        mediaFirst: true,
         replyText: `⚠️ *TU SERVICIO BIO-PASS SE ENCUENTRA ${user.status}*\n\n` +
           (isFine
             ? `Para reactivar tu cuenta y evitar el purgado permanente de tus estudios médicos (GDPR), aboná la cuota con multa:\n\n`
             : `Renová tu suscripción para reactivar tu QR:\n\n`) +
           `💰 *Monto a pagar:* ${order.formattedAmount}\n` +
           `🔢 *Referencia:* \`${order.referenceCode}\`\n\n` +
-          (hasQr
-            ? `📷 *Escaneá el QR de arriba* para pagar con *Bancard* (tarjeta o QR).\n` +
-              `_¿No podés escanear? Abrí este enlace:_\n${bancardLink}\n\n`
-            : `🔗 *Enlace de Pago:*\n${bancardLink}\n\n`) +
+          `🌐 *Pagar con Tarjeta / Bancard / QR:*\n${order.paymentLink}\n` +
+          `_Abrí ese enlace: podés pagar con tarjeta o escanear ahí el QR de Bancard._\n\n` +
           `🏦 *Alternativa — Transferencia SIPAP / Tigo Money:*\n${order.aliasInfo}\n\n` +
           `_Escribí 'PAGAR' cuando hayas abonado para confirmar tu reactivación._`,
-        mediaAttachment: qrAttachment(order.pixQrImage, `Bio-Pass — ${order.formattedAmount} · Reactivación`),
       };
     }
 
