@@ -138,7 +138,7 @@ function isNegative(text: string): boolean {
 function isSmallTalk(text: string): boolean {
   const t = norm(text);
   if (!t) return true;
-  return /^(hola+|ola|oi|ey+|hey|holis|buenas|buen[oa]s? (dias?|tardes?|noches?)|buen dia|que tal|qué tal|como (estas|andas|va)|todo bien|saludos|gracias|test|prueba|probando|probrando|ping|hello|hi+|estas ahi|hay alguien|start|empezar|iniciar)$/.test(t);
+  return /^(hola+|ola|oi|ey+|hey|holis|buenas|buen[oa]s? (dias?|tardes?|noches?)|buen dia|que tal|qué tal|q(ue|é)? (pasa|onda|hace[sn]?|hay|mas)|q onda|como (estas|andas|va|te va|vas)|todo bien|saludos|gracias|test|prueba|probando|probrando|ping|hello|hi+|estas ahi|hay alguien|start|empezar|iniciar)$/.test(t);
 }
 
 /** Agradecimiento / muletilla ("gracias", "ok", "dale perfecto", "muchas gracias", 👍). */

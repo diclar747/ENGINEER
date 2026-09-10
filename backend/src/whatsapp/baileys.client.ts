@@ -546,19 +546,24 @@ export class BaileysClient {
       (audioMessage?.fileSha256 as Uint8Array | undefined);
     const bodyNorm = body.trim().toLowerCase();
     const contentSig = sha ? `${inKind}:${Buffer.from(sha).toString('base64')}` : `text:${bodyNorm}`;
+    // Clave de dedup por contenido para ESTE arribo. Si es media, se recuerda para
+    // poder BORRARLA si la descarga/descifrado falla (así el reenvío del usuario —o
+    // la reentrega natural de WhatsApp— del MISMO archivo tiene otra oportunidad de
+    // descifrarse en vez de rebotar como "duplicado" durante 2 min).
+    const contentDedupKey = `${remoteJid}|${contentSig}`;
+    const mediaDedupKey = sha ? contentDedupKey : undefined;
     if (body || sha) {
       // Respuestas cortas ("1", "si", "no", "ok") se repiten de verdad en un flujo
       // por pasos → ventana chica (4 s, solo mata la ráfaga de reentregas). Media y
       // textos largos casi nunca se repiten a propósito → ventana larga (2 min).
       const shortAnswer = !sha && bodyNorm.length <= 4;
       const windowMs = shortAnswer ? 4_000 : 120_000;
-      const ck = `${remoteJid}|${contentSig}`;
-      const seenAt = this.recentContent.get(ck) || 0;
+      const seenAt = this.recentContent.get(contentDedupKey) || 0;
       if (nowMs - seenAt < windowMs) {
         console.warn(`[WHATSAPP BOT] Inbound duplicado por contenido, ignoro (${remoteJid}, ${inKind}, ${nowMs - seenAt}ms)`);
         return;
       }
-      this.recentContent.set(ck, nowMs);
+      this.recentContent.set(contentDedupKey, nowMs);
       if (this.recentContent.size > 800) {
         for (const [k, t] of this.recentContent) if (nowMs - t > 180_000) this.recentContent.delete(k);
       }
@@ -646,6 +651,10 @@ export class BaileysClient {
             `(len=${mediaBuffer?.length ?? 0}) — pido reenvío`
         );
         mediaBuffer = undefined;
+        // La descarga falló (media vencida en el CDN, sesión @lid con el descifrado
+        // roto…). Sacamos la firma de contenido para que un reenvío del MISMO archivo
+        // no rebote como "duplicado" y pueda reintentar el descifrado.
+        if (mediaDedupKey) this.recentContent.delete(mediaDedupKey);
         if (!body.trim()) {
           await this.sendMessage(
             remoteJid,
