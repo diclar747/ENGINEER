@@ -13,20 +13,21 @@
   --safe-bottom: env(safe-area-inset-bottom, 0px);
   --safe-top: env(safe-area-inset-top, 0px);
 
-  --c-app: 247 249 252;      /* page background            */
+  /* Paleta "Winsap": base menta-blanco, verde esmeralda de acento. */
+  --c-app: 238 245 243;      /* page background — menta muy claro */
   --c-card: 255 255 255;     /* cards / raised surfaces     */
-  --c-panel: 241 245 249;    /* inset panels (slate-100)    */
-  --c-muted: 241 245 249;    /* muted fills (slate-100)     */
-  --c-line: 226 232 240;     /* borders / dividers (slate-200) */
-  --c-fg: 15 23 42;          /* primary text (slate-900)    */
-  --c-fg-soft: 51 65 85;     /* secondary text (slate-700)  */
-  --c-fg-muted: 100 116 139; /* muted text (slate-500)      */
-  --c-fg-faint: 148 163 184; /* faint text (slate-400)      */
+  --c-panel: 245 250 249;    /* inset panels               */
+  --c-muted: 235 243 241;    /* muted fills                */
+  --c-line: 223 234 231;     /* borders / dividers          */
+  --c-fg: 16 33 29;          /* primary text — teal-slate profundo */
+  --c-fg-soft: 58 78 72;     /* secondary text             */
+  --c-fg-muted: 108 128 122; /* muted text                 */
+  --c-fg-faint: 156 176 170; /* faint text                 */
 
-  --glow-a: rgba(13, 148, 136, 0.10);
-  --glow-b: rgba(2, 132, 199, 0.07);
-  --scroll-track: #eef2f7;
-  --scroll-thumb: #cbd5e1;
+  --glow-a: rgba(16, 185, 129, 0.10);
+  --glow-b: rgba(20, 184, 166, 0.06);
+  --scroll-track: #e6efec;
+  --scroll-thumb: #b9d0c9;
 }
 
 .dark {

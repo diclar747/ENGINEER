@@ -4,7 +4,7 @@ import { adminApi } from '../utils/adminApi';
 import { ThemeToggle } from '../components/ThemeToggle';
 import { useConfirm, useToast } from '../components/ui/Feedback';
 import { AreaLine, Bars, Donut, HBars, CH } from '../components/ui/Charts';
-import { Section, SectionHead, PageTitle, Toolbar, TableWrap, EmptyState, Stat, Segmented, inputCls as sharedInputCls } from '../components/ui/Layout';
+import { Section, SectionHead, PageTitle, Toolbar, TableWrap, EmptyState, Stat, Segmented, AppShell, HeaderStat, Btn, inputCls as sharedInputCls } from '../components/ui/Layout';
 import {
   ShieldCheck, LogOut, Users, CreditCard, ListChecks, LayoutDashboard, CalendarClock,
   Loader2, Search, Check, X, RefreshCw, Plus, Trash2, Save, Smartphone, Download, Printer,
@@ -72,45 +72,34 @@ export const AdminPanel: React.FC = () => {
   ];
   const current = TABS.find((t) => t.id === tab);
   return (
-    <div className="min-h-screen bg-app text-fg">
-      <header className="sticky top-0 z-30 bg-card/90 backdrop-blur-md border-b border-line print:hidden">
-        <div className="max-w-6xl mx-auto px-3 sm:px-4 py-2.5 flex items-center justify-between gap-2">
-          <div className="flex items-center gap-2 min-w-0">
-            <ShieldCheck className="w-5 h-5 text-teal-600 dark:text-teal-400 shrink-0" />
-            <span className="font-black text-fg text-sm sm:text-base">Bio-Pass</span>
-            <span className="text-fg-muted hidden sm:inline">·</span>
-            <span className="text-fg-muted text-sm font-bold hidden sm:inline">Admin</span>
-            {current && <span className="text-fg-soft text-xs font-bold ml-0.5 truncate sm:hidden">/ {current.label}</span>}
-          </div>
-          <div className="flex items-center gap-1.5 shrink-0">
-            <ThemeToggle />
-            <button onClick={logout} title="Cerrar sesión" className="flex items-center gap-1.5 text-xs font-bold text-fg-muted hover:text-fg px-2 py-1.5 rounded-lg hover:bg-muted">
-              <LogOut className="w-4 h-4" /><span className="hidden sm:inline">Salir</span>
-            </button>
-          </div>
-        </div>
-        <div className="max-w-6xl mx-auto px-2 sm:px-4">
-          <nav className="flex gap-1 overflow-x-auto pb-2 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden [-webkit-overflow-scrolling:touch]">
-            {TABS.map((t) => (
-              <button key={t.id} onClick={() => setTab(t.id)}
-                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold shrink-0 transition-colors ${tab === t.id ? 'bg-teal-500 text-slate-950 shadow-sm' : 'text-fg-soft hover:bg-muted'}`}>
-                {t.icon}{t.label}
-              </button>
-            ))}
-          </nav>
-        </div>
-      </header>
-      <main className="p-3 sm:p-5 max-w-6xl mx-auto">
-        {tab === 'resumen' && <Resumen />}
-        {tab === 'clientes' && <Clientes />}
-        {tab === 'suscripciones' && <Suscripciones />}
-        {tab === 'pagos' && <Pagos />}
-        {tab === 'contenido' && <Contenido />}
-        {tab === 'ia' && <IA />}
-        {tab === 'whatsapp' && <BotPanel />}
-        {tab === 'historial' && <BotHistory />}
-      </main>
-    </div>
+    <AppShell
+      brand={<><ShieldCheck className="w-6 h-6 text-white shrink-0" /><span className="font-black text-white text-base">Bio-Pass</span><span className="text-white/60 text-xs font-bold">Admin</span></>}
+      nav={TABS.map((t) => ({ id: t.id, label: t.label, icon: t.icon, active: tab === t.id, onClick: () => setTab(t.id) }))}
+      title={current?.label}
+      subtitle="Panel de administración"
+      headerRight={
+        <>
+          <ThemeToggle />
+          <button onClick={logout} title="Cerrar sesión" className="flex items-center gap-1.5 text-xs font-bold text-fg-muted hover:text-fg px-2.5 py-1.5 rounded-lg hover:bg-muted">
+            <LogOut className="w-4 h-4" /><span className="hidden sm:inline">Salir</span>
+          </button>
+        </>
+      }
+      footer={
+        <button onClick={logout} className="w-full flex items-center gap-2 px-3 py-2 rounded-xl text-sm font-bold text-white/80 hover:bg-white/10 hover:text-white transition-colors">
+          <LogOut className="w-4 h-4" /> Cerrar sesión
+        </button>
+      }
+    >
+      {tab === 'resumen' && <Resumen />}
+      {tab === 'clientes' && <Clientes />}
+      {tab === 'suscripciones' && <Suscripciones />}
+      {tab === 'pagos' && <Pagos />}
+      {tab === 'contenido' && <Contenido />}
+      {tab === 'ia' && <IA />}
+      {tab === 'whatsapp' && <BotPanel />}
+      {tab === 'historial' && <BotHistory />}
+    </AppShell>
   );
 };
 
@@ -165,12 +154,12 @@ const Resumen: React.FC = () => {
         <button onClick={load} className="px-3 py-2 bg-muted rounded-xl text-fg-soft"><RefreshCw className="w-4 h-4" /></button>
       </div>
 
-      {/* KPIs */}
+      {/* KPIs — fila destacada en bloques de color (estilo Winsap) + resto en tarjetas claras */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-        <Kpi label="Ingresos (rango)" value={`Gs. ${money(k.revenueInRange)}`} hint={`${k.paidInRange} pagos acreditados`} icon={<DollarSign className="w-4 h-4" />} />
-        <Kpi label="Altas (rango)" value={k.newUsersInRange} hint={`${k.paymentsInRange} órdenes generadas`} icon={<UserPlus className="w-4 h-4" />} tone="text-sky-500" />
-        <Kpi label="Clientes activos" value={k.active} hint={`${k.totalUsers} en total`} icon={<Activity className="w-4 h-4" />} tone="text-emerald-500" />
-        <Kpi label="Pendientes de pago" value={k.pending} hint={`${k.pendingCount} órdenes pendientes`} icon={<CreditCard className="w-4 h-4" />} tone="text-amber-500" />
+        <Stat tone="emerald" label="Ingresos (rango)" value={`Gs. ${money(k.revenueInRange)}`} hint={`${k.paidInRange} pagos acreditados`} icon={<DollarSign className="w-4 h-4" />} />
+        <Stat tone="blue" label="Altas (rango)" value={k.newUsersInRange} hint={`${k.paymentsInRange} órdenes generadas`} icon={<UserPlus className="w-4 h-4" />} />
+        <Stat tone="indigo" label="Clientes activos" value={k.active} hint={`${k.totalUsers} en total`} icon={<Activity className="w-4 h-4" />} />
+        <Stat tone="amber" label="Pendientes de pago" value={k.pending} hint={`${k.pendingCount} órdenes pendientes`} icon={<CreditCard className="w-4 h-4" />} />
         <Kpi label="Ingresos totales" value={`Gs. ${money(k.revenuePYG)}`} hint={k.revenueBRL ? `+ R$ ${money(k.revenueBRL)}` : undefined} icon={<TrendingUp className="w-4 h-4" />} />
         <Kpi label="Pagos acreditados" value={k.paidCount} icon={<Check className="w-4 h-4" />} tone="text-emerald-500" />
         <Kpi label="Vencidos / cancelados" value={k.expired + k.cancelled} icon={<X className="w-4 h-4" />} tone="text-rose-500" />

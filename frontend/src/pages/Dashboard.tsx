@@ -155,10 +155,10 @@ export const Dashboard: React.FC = () => {
   }
 
   return (
-    <div className="max-w-7xl mx-auto px-3.5 sm:px-6 lg:px-8 py-6 sm:py-8 space-y-6 sm:space-y-8 pb-20">
-      
+    <div className="space-y-5 sm:space-y-6">
+
       {/* Patient Hero Banner */}
-      <div className="bg-gradient-to-br from-card via-app to-panel border border-line/90 rounded-3xl p-5 sm:p-8 flex flex-col lg:flex-row items-start lg:items-center justify-between gap-6 shadow-2xl relative overflow-hidden">
+      <div className="bg-card border border-line rounded-2xl p-4 sm:p-6 flex flex-col lg:flex-row items-start lg:items-center justify-between gap-5 shadow-sm relative overflow-hidden">
         <div className="flex items-center space-x-4 min-w-0">
           <div className="w-16 h-16 sm:w-20 sm:h-20 rounded-2xl bg-gradient-to-tr from-teal-500 to-cyan-400 p-0.5 shrink-0 shadow-lg shadow-teal-500/20">
             <div className="w-full h-full bg-panel rounded-[14px] flex items-center justify-center">

@@ -1,8 +1,10 @@
 import React from 'react';
-import { Routes, Route, Navigate, Outlet, useLocation } from 'react-router-dom';
+import { Routes, Route, Navigate, Outlet, useLocation, useNavigate } from 'react-router-dom';
+import { HeartPulse, QrCode, Download, CreditCard, Lock, Bot, LogOut, ShieldCheck } from 'lucide-react';
 import { Navbar } from './components/Navbar';
-import { MobileBottomNav } from './components/MobileBottomNav';
 import { PwaInstallPrompt } from './components/PwaInstallPrompt';
+import { ThemeToggle } from './components/ThemeToggle';
+import { AppShell } from './components/ui/Layout';
 import { Login } from './pages/Login';
 import { Register } from './pages/Register';
 import { Dashboard } from './pages/Dashboard';
@@ -29,20 +31,63 @@ const RequireAuth: React.FC = () => {
   return <Outlet />;
 };
 
-/** Shell with top navigation, mobile bottom navigation and global PWA prompt. */
+/** Shell mínimo (top-nav) para páginas públicas: /login, /checkout. */
 const AppLayout: React.FC = () => (
   <div className="min-h-screen flex flex-col bg-app">
     <Navbar />
     <main className="flex-1">
       <Outlet />
     </main>
-    <MobileBottomNav />
     <PwaInstallPrompt />
-    <footer className="border-t border-line/80 py-6 mb-16 lg:mb-0 text-center text-[11px] text-fg-muted">
+    <footer className="border-t border-line/80 py-6 text-center text-[11px] text-fg-muted">
       Doorway Cortex Bio-Pass · Zero-Knowledge Health Passport · AES-256-GCM
     </footer>
   </div>
 );
+
+const USER_NAV = [
+  { id: 'dashboard', label: 'Mi Pasaporte', icon: <HeartPulse className="w-[18px] h-[18px]" />, path: '/dashboard' },
+  { id: 'stickers', label: 'Kit & QR', icon: <QrCode className="w-[18px] h-[18px]" />, path: '/stickers' },
+  { id: 'export', label: 'Exportar historial', icon: <Download className="w-[18px] h-[18px]" />, path: '/export' },
+  { id: 'payments', label: 'Pagos', icon: <CreditCard className="w-[18px] h-[18px]" />, path: '/payments' },
+  { id: 'audit-logs', label: 'Auditoría', icon: <Lock className="w-[18px] h-[18px]" />, path: '/audit-logs' },
+];
+
+/** Shell con barra lateral para el área autenticada del titular. */
+const UserShell: React.FC = () => {
+  const location = useLocation();
+  const navigate = useNavigate();
+  const logout = () => {
+    localStorage.removeItem('biopass_token');
+    localStorage.removeItem('biopass_user');
+    navigate('/login');
+  };
+  const active = USER_NAV.find((n) => location.pathname.startsWith(n.path));
+  return (
+    <AppShell
+      brand={<><HeartPulse className="w-6 h-6 text-white shrink-0" /><span className="font-black text-white text-base">Bio-Pass</span></>}
+      nav={USER_NAV.map((n) => ({ id: n.id, label: n.label, icon: n.icon, active: active?.id === n.id, onClick: () => navigate(n.path) }))}
+      title={active?.label || 'Mi Pasaporte'}
+      subtitle="Pasaporte médico inteligente"
+      headerRight={
+        <>
+          <ThemeToggle />
+          <button onClick={logout} className="flex items-center gap-1.5 text-xs font-bold text-fg-muted hover:text-fg px-2.5 py-1.5 rounded-lg hover:bg-muted">
+            <LogOut className="w-4 h-4" /><span className="hidden sm:inline">Salir</span>
+          </button>
+        </>
+      }
+      footer={
+        <button onClick={logout} className="w-full flex items-center gap-2 px-3 py-2 rounded-xl text-sm font-bold text-white/80 hover:bg-white/10 hover:text-white transition-colors">
+          <LogOut className="w-4 h-4" /> Cerrar sesión
+        </button>
+      }
+    >
+      <Outlet />
+      <PwaInstallPrompt />
+    </AppShell>
+  );
+};
 
 const App: React.FC = () => {
   return (
@@ -64,23 +109,25 @@ const App: React.FC = () => {
         <Route path="/bot-simulator" element={<BotSimulator />} />
         <Route path="/registro" element={<Register />} />
 
-        {/* Everything else shares the layout shell */}
+        {/* Páginas públicas con top-nav */}
         <Route element={<AppLayout />}>
           <Route path="/login" element={<Login />} />
           <Route path="/checkout" element={<Checkout />} />
+        </Route>
 
-          {/* Authenticated user panel */}
-          <Route element={<RequireAuth />}>
+        {/* Área autenticada del titular — shell con barra lateral */}
+        <Route element={<RequireAuth />}>
+          <Route element={<UserShell />}>
             <Route path="/dashboard" element={<Dashboard />} />
             <Route path="/stickers" element={<QrStickerStudio />} />
             <Route path="/export" element={<HistoryExport />} />
             <Route path="/payments" element={<Payments />} />
             <Route path="/audit-logs" element={<AuditLogs />} />
           </Route>
-
-          <Route path="/" element={<Navigate to="/dashboard" replace />} />
-          <Route path="*" element={<Navigate to="/" replace />} />
         </Route>
+
+        <Route path="/" element={<Navigate to="/dashboard" replace />} />
+        <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </FeedbackProvider>
   );
