@@ -234,6 +234,26 @@ function isResetCmd(text: string): boolean {
   return /^(reiniciar|reinicio|reiniciar todo|empezar de nuevo|empezar de cero|empezar de vuelta|volver a empezar|comenzar de nuevo|arrancar de nuevo|de nuevo|otra vez|start over|restart|reset|cancelar|salir|menu|menu principal|inicio|volver al inicio)$/.test(t);
 }
 
+/**
+ * "borra los recordatorios y turnos" / "eliminá todos mis turnos" / "borrá todo".
+ * Baja MASIVA de recordatorios. Devuelve el alcance o null si no aplica.
+ * NO matchea "borrar 2" (baja individual del submenú) salvo que diga "todos".
+ */
+function bulkReminderDeleteScope(text: string, inReminderCtx: boolean): 'ALL' | 'MED' | 'APPT' | null {
+  const t = norm(text);
+  if (!/\b(borra\w*|elimina\w*|quita\w*|saca\w*|cancela\w*|limpia\w*)\b/.test(t)) return null;
+  if (/\d/.test(t) && !/\b(todos?|todas?)\b/.test(t)) return null; // "borrar 2" → baja individual
+  const all = /\b(todos?|todas?)\b/.test(t);
+  const med = /\brecordatorios\b/.test(t) || /\balarmas\b/.test(t) || (all && /\brecordatorio\b/.test(t));
+  const appt = /\bturnos\b/.test(t) || /\bcitas\b/.test(t) || /\bagenda\b/.test(t) || (all && /\b(turno|cita)\b/.test(t));
+  if (med && appt) return 'ALL';
+  if (med) return 'MED';
+  if (appt) return 'APPT';
+  if (all && inReminderCtx) return 'ALL';
+  if (all && /\b(recordatorio|alarma|turno|cita|horario|agenda)\b/.test(t)) return 'ALL';
+  return null;
+}
+
 /** Disparador global de recuperación de PIN. */
 function isRecoverPinCmd(text: string): boolean {
   const t = norm(text);
@@ -1737,6 +1757,39 @@ export class BotStateMachine {
             ? tr('Escribí *MENU* o *INICIO* cuando quieras.', 'Ehai *MENU* rejaposévo ambue mba\'e.')
             : tr('Seguí cuando quieras, o escribí *LISTO* para volver al menú.', 'Ehai *LISTO* rejevy hag̃ua meñúpe.');
         return { replyText: `${head}\n_${tail}_` };
+      }
+
+      // Baja MASIVA de recordatorios / turnos ("borra los recordatorios y turnos",
+      // "eliminá todos mis turnos", "borrá todo"). Funciona desde el menú, el submenú
+      // y también CORTA el diálogo guiado (Juan quedó atascado en "¿cada cuántas horas?"
+      // pidiendo esto y el bot tiraba "no entendí").
+      if (!msg.mediaBuffer) {
+        const inRemCtx = subMode === 'ACTIVE_REMINDER' || subMode.startsWith('ACTIVE_REMIND_');
+        const delScope = bulkReminderDeleteScope(cleanText, inRemCtx);
+        if (delScope) {
+          const where: { userId: string; kind?: string } = { userId: user.id };
+          if (delScope === 'MED') where.kind = 'MED';
+          else if (delScope === 'APPT') where.kind = 'APPOINTMENT';
+          const { count } = await prisma.medicationReminder.deleteMany({ where });
+          await updateState('ACTIVE_MEMBER', { rdraft: null });
+          const label =
+            delScope === 'MED'
+              ? tr(count === 1 ? 'recordatorio de medicación' : 'recordatorios de medicación', "pohã momandu'a")
+              : delScope === 'APPT'
+                ? tr(count === 1 ? 'turno' : 'turnos', 'turno')
+                : tr('recordatorios y turnos', "momandu'a ha turno");
+          return {
+            replyText: count
+              ? tr(
+                  `🗑️ Listo, borré *${count}* ${label}.\n\n_Escribí *MENU* para ver las opciones._`,
+                  `🗑️ Oĩma, aipe'a *${count}* ${label}.\n\n_Ehai *MENU*._`
+                )
+              : tr(
+                  `No tenías ${label} para borrar.\n\n_Escribí *MENU* para ver las opciones._`,
+                  `Ndaipóri ${label} aipe'a hag̃ua.\n\n_Ehai *MENU*._`
+                ),
+          };
+        }
       }
 
       // Consultas en lenguaje natural sobre medicación / turnos ("¿a qué hora tomo X?",
