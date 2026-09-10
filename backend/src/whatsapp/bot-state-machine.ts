@@ -1038,7 +1038,22 @@ export class BotStateMachine {
 
       // Extract allergy text (lo que no son números / separadores de la selección)
       let allergies = cleanText.replace(/[0-9,;\-]/g, ' ').replace(/\s+/g, ' ').trim();
-      if (!allergies) allergies = 'Ninguna declarada';
+
+      // Hace falta una respuesta EXPLÍCITA: un número válido, o "ninguna". Sin eso NO
+      // se avanza (antes cualquier texto — o una reentrega de WhatsApp — saltaba el paso).
+      const saidNone = picked.includes(noneIdx) || /\b(ningun[ao]|nada|no\s+tengo|sin\s+condicion|no)\b/i.test(norm(cleanText));
+      const pickedValid = selectedConditions.length > 0;
+      if (!pickedValid && !saidNone) {
+        return {
+          replyText: tr(
+            `🩺 Respondé con los *números* de tus condiciones separados por coma (ej: *1, 3*), o *${noneIdx}* si no tenés ninguna.\n_Podés agregar tus alergias después de los números._`,
+            `🩺 Embohovái umi *papapy* nde mba'asýgui, coma rupive (techapyrã: *1, 3*), térã *${noneIdx}* ndaipóri ramo.`,
+            `🩺 Responda com os *números* das suas condições separados por vírgula (ex: *1, 3*), ou *${noneIdx}* se nenhuma.`,
+            `🩺 Reply with the *numbers* of your conditions separated by commas (e.g. *1, 3*), or *${noneIdx}* if none.`
+          ),
+        };
+      }
+      if (!allergies || saidNone && !pickedValid) allergies = 'Ninguna declarada';
 
       await updateState('STEP6B_BLOOD', { selectedConditions, allergies }, {
         emergencyConditions: JSON.stringify(selectedConditions),
