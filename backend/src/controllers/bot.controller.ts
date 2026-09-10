@@ -102,6 +102,7 @@ export class BotController {
         success: true,
         sentBy: from,
         reply: response.replyText,
+        mediaFirst: !!response.mediaFirst,
         mediaAttachment: response.mediaAttachment ? {
           filename: response.mediaAttachment.filename,
           mimetype: response.mediaAttachment.mimetype,

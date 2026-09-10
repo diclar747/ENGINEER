@@ -42,6 +42,9 @@ export interface BotResponse {
     /** 'image' sends as an inline photo (e.g. payment QR); default 'document'. */
     kind?: 'image' | 'document';
   };
+  /** Cuando es true el adjunto se manda ANTES del texto (p. ej. el QR de pago, para que
+   *  "escaneá el QR de arriba" sea literal en el chat). Default: texto y después adjunto. */
+  mediaFirst?: boolean;
 }
 
 
@@ -1336,21 +1339,26 @@ export class BotStateMachine {
 
       if (country === 'PARAGUAY') {
         const hasQr = !!order.pixQrImage;
+        // Link directo al checkout alojado de Bancard (el mismo destino que codifica el QR),
+        // sólo como respaldo para quien no puede escanear.
+        const bancardLink = order.externalRedirect || order.paymentLink;
         return {
+          mediaFirst: true,
           replyText: `💳 *ORDEN DE PAGO GENERADA (PARAGUAY)*\n\n` +
             `💰 *Monto:* ${order.formattedAmount} (${plan === 'ANNUAL' ? 'Plan Anual' : 'Plan Mensual'})\n` +
             `🔢 *Referencia:* \`${order.referenceCode}\`\n\n` +
             (hasQr
-              ? `📷 *Escaneá el QR de arriba* con la cámara o tu app del banco para abrir el pago de Bancard (tarjeta o QR).\n\n`
-              : '') +
-            `🌐 *Pagar con Tarjeta / Bancard / QR:*\n${order.paymentLink}\n\n` +
+              ? `📷 *Escaneá el QR de arriba* con la cámara del teléfono o tu app del banco: abre directo el pago de *Bancard* (tarjeta de débito/crédito o QR).\n\n` +
+                `_¿No podés escanear? Abrí este enlace:_\n${bancardLink}\n\n`
+              : `🌐 *Pagar con Tarjeta / Bancard / QR:*\n${bancardLink}\n\n`) +
             `🏦 *Alternativa — Transferencia SIPAP / Tigo Money:*\n` +
             `${order.aliasInfo}\n\n` +
-            `_Una vez realizado el pago, tu QR y Kit de Stickers (3x3 cm) se enviarán inmediatamente por este chat._`,
-          mediaAttachment: qrAttachment(order.pixQrImage, `Bio-Pass — ${order.formattedAmount} (${order.referenceCode})`),
+            `_Apenas se acredite el pago, tu QR y Kit de Stickers (3x3 cm) se envían acá automáticamente._`,
+          mediaAttachment: qrAttachment(order.pixQrImage, `Bio-Pass — ${order.formattedAmount} · Pago Bancard`),
         };
       } else {
         return {
+          mediaFirst: true,
           replyText: `💳 *ORDEM DE PAGAMENTO PIX (BRASIL)*\n\n` +
             `💰 *Valor:* ${order.formattedAmount}\n` +
             `🔑 *Chave PIX:* \`${order.pixKey}\`\n\n` +
@@ -2770,12 +2778,23 @@ export class BotStateMachine {
         isFine,
       });
 
+      const hasQr = !!order.pixQrImage;
+      const bancardLink = order.externalRedirect || order.paymentLink;
       return {
+        mediaFirst: true,
         replyText: `⚠️ *TU SERVICIO BIO-PASS SE ENCUENTRA ${user.status}*\n\n` +
-          (isFine ? `Para reactivar tu cuenta y evitar el purgado permanente de tus estudios médicos (GDPR), abona la cuota con multa:\n` : `Renueva tu suscripción para reactivar tu QR:\n\n`) +
+          (isFine
+            ? `Para reactivar tu cuenta y evitar el purgado permanente de tus estudios médicos (GDPR), aboná la cuota con multa:\n\n`
+            : `Renová tu suscripción para reactivar tu QR:\n\n`) +
           `💰 *Monto a pagar:* ${order.formattedAmount}\n` +
-          `🔗 *Enlace de Pago:* ${order.paymentLink}\n\n` +
-          `_Escribe 'PAGAR' para confirmar tu reactivación._`,
+          `🔢 *Referencia:* \`${order.referenceCode}\`\n\n` +
+          (hasQr
+            ? `📷 *Escaneá el QR de arriba* para pagar con *Bancard* (tarjeta o QR).\n` +
+              `_¿No podés escanear? Abrí este enlace:_\n${bancardLink}\n\n`
+            : `🔗 *Enlace de Pago:*\n${bancardLink}\n\n`) +
+          `🏦 *Alternativa — Transferencia SIPAP / Tigo Money:*\n${order.aliasInfo}\n\n` +
+          `_Escribí 'PAGAR' cuando hayas abonado para confirmar tu reactivación._`,
+        mediaAttachment: qrAttachment(order.pixQrImage, `Bio-Pass — ${order.formattedAmount} · Reactivación`),
       };
     }
 

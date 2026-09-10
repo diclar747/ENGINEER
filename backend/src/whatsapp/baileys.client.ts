@@ -674,9 +674,9 @@ export class BaileysClient {
 
       // Reply to the exact JID the message arrived on (correct for both @s.whatsapp.net
       // and @lid) rather than reconstructing one from the bare phone/lid digits.
-      await this.sendMessage(remoteJid, response.replyText);
-
-      if (response.mediaAttachment) {
+      const sendReplyText = () => this.sendMessage(remoteJid, response.replyText);
+      const sendAttachment = async () => {
+        if (!response.mediaAttachment) return;
         if (response.mediaAttachment.kind === 'image') {
           await this.sendImage(
             remoteJid,
@@ -693,6 +693,16 @@ export class BaileysClient {
             response.mediaAttachment.caption
           );
         }
+      };
+
+      // mediaFirst: el adjunto (p. ej. el QR de pago de Bancard) va ANTES del texto,
+      // así "escaneá el QR de arriba" queda literal en el chat.
+      if (response.mediaFirst && response.mediaAttachment) {
+        await sendAttachment();
+        await sendReplyText();
+      } else {
+        await sendReplyText();
+        await sendAttachment();
       }
 
       // Best-effort: remember the exact JID so later async messages (payment
