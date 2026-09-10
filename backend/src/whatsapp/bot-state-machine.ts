@@ -326,7 +326,7 @@ export class BotStateMachine {
               `👋 *¡Hola! Bienvenido a Doorway Cortex Bio-Pass* — tu pasaporte médico de emergencia.\n\n` +
               `${ai}\n\n` +
               `_Cuando quieras registrarte (dura menos de 3 minutos), elegí tu idioma:_\n` +
-              `*[1]* Español 🇪🇸  *[2]* Guaraní 🇵🇾  *[3]* Português 🇧🇷  *[4]* English 🇬🇧`,
+              `*[1]* Español 🇪🇸\n*[2]* Guaraní 🇵🇾\n*[3]* Português 🇧🇷\n*[4]* English 🇬🇧`,
           };
         }
       }
@@ -403,7 +403,7 @@ export class BotStateMachine {
         return {
           replyText:
             `🔄 *Empezamos de nuevo · Ñepyrũ jey · Recomeçar · Start over.*\n\n` +
-            `*[1]* Español 🇪🇸  *[2]* Guaraní 🇵🇾  *[3]* Português 🇧🇷  *[4]* English 🇬🇧\n\n` +
+            `*[1]* Español 🇪🇸\n*[2]* Guaraní 🇵🇾\n*[3]* Português 🇧🇷\n*[4]* English 🇬🇧\n\n` +
             `_Escribí *REINICIAR* en cualquier momento para volver acá._`,
         };
       }
@@ -630,7 +630,7 @@ export class BotStateMachine {
           return {
             replyText:
               `${ai}\n\n_Cuando quieras registrarte, elegí tu idioma:_\n` +
-              `*[1]* Español 🇪🇸  *[2]* Guaraní 🇵🇾  *[3]* Português 🇧🇷  *[4]* English 🇬🇧`,
+              `*[1]* Español 🇪🇸\n*[2]* Guaraní 🇵🇾\n*[3]* Português 🇧🇷\n*[4]* English 🇬🇧`,
           };
         }
       }
@@ -812,6 +812,36 @@ export class BotStateMachine {
     // STEP 2 CONFIRMATION
     if (state === 'STEP2_CONFIRM_CI') {
       const tempData = getTempData();
+
+      // Llegó OTRA foto/archivo estando en la confirmación (el usuario manda una
+      // cédula más nítida, o WhatsApp reentrega la anterior): se procesa como una
+      // cédula nueva — NO se responde "no entendí". Volvemos a STEP2_DOCUMENT y que
+      // el mismo mensaje lo maneje ese estado.
+      if (msg.mediaBuffer) {
+        await updateState('STEP2_DOCUMENT', {
+          extractedName: '', extractedCi: '', extractedDob: '', extractedBirthPlace: '', extractedSex: '',
+        });
+        return BotStateMachine.handleMessage(msg);
+      }
+
+      // Mensaje vacío / sin texto útil (típico de una reentrega) → NO mostramos la
+      // versión reducida "Confirmá tus datos", re-mostramos la MISMA tarjeta de
+      // "Datos detectados automáticamente" y listo.
+      if (!cleanText.trim()) {
+        const extra = [
+          tempData.extractedDob && `🎂 *Fecha de nacimiento:* ${tempData.extractedDob}`,
+          tempData.extractedBirthPlace && `📍 *Lugar de nacimiento:* ${tempData.extractedBirthPlace}`,
+          tempData.extractedSex && `⚧ *Sexo:* ${tempData.extractedSex}`,
+        ].filter(Boolean).join('\n');
+        return {
+          replyText:
+            `🔍 *Datos detectados automáticamente:*\n\n` +
+            `👤 *Nombre:* ${tempData.extractedName || '—'}\n` +
+            `🆔 *Cédula:* ${tempData.extractedCi || '—'}\n` +
+            (extra ? `${extra}\n` : '') +
+            `\n¿Son correctos?\n*[1]* Sí, continuar ✅\n*[2]* No — mandar otra foto de la cédula 📸`,
+        };
+      }
 
       // "No / corregir" → se limpia el buffer y se pide OTRA FOTO de la cédula.
       // La foto trae todos los datos (nombre, Nº, fecha, lugar, sexo), así que no
