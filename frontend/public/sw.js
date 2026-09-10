@@ -2,7 +2,8 @@
 
 // Bump on every deploy that must invalidate old caches. The `activate` handler
 // deletes any cache whose name is not this one.
-const CACHE_NAME = 'biopass-cache-v5';
+// v6: nueva marca del ícono/splash (corazón heart-pulse sobre degradado).
+const CACHE_NAME = 'biopass-cache-v6';
 
 // Only truly static, rarely-changing assets are pre-cached. The app shell
 // (index.html) and hashed JS/CSS are handled network-first so a new deploy
@@ -13,6 +14,7 @@ const PRECACHE_ASSETS = [
   '/icon.svg',
   '/icon-192.png',
   '/icon-512.png',
+  '/icon-maskable.png',
   '/apple-touch-icon.png',
 ];
 

@@ -20,18 +20,16 @@
     <meta name="application-name" content="Bio-Pass" />
     <meta name="apple-mobile-web-app-title" content="Bio-Pass" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
-    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
     <meta name="mobile-web-app-capable" content="yes" />
-    <meta name="theme-color" content="#0d9488" media="(prefers-color-scheme: dark)" />
     <meta name="theme-color" content="#0d9488" />
-    <meta name="description" content="Pasaporte médico inteligente con cifrado Zero-Knowledge, QR de rescate para emergencias y expediente clínico portátil." />
-    
-    <!-- Icons & Favicon -->
+    <meta name="description" content="Bio-Pass — tu pasaporte de salud en línea: ficha médica de emergencia por QR y expediente clínico portátil, con cifrado Zero-Knowledge." />
+
+    <!-- Icons & Favicon (marca única: corazón heart-pulse sobre degradado teal→emerald) -->
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
-    <link rel="alternate icon" href="/icon-192.png" type="image/png" />
-    <link rel="apple-touch-icon" sizes="192x192" href="/apple-touch-icon.png" />
-    <link rel="apple-touch-icon" sizes="512x512" href="/icon-512.png" />
-    <link rel="mask-icon" href="/icon.svg" color="#0d9488" />
+    <link rel="alternate icon" href="/icon-192.png" type="image/png" sizes="192x192" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <link rel="mask-icon" href="/favicon.svg" color="#0d9488" />
     
     <!-- Manifest -->
     <link rel="manifest" href="/manifest.webmanifest" />
@@ -42,7 +40,29 @@
     <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:ital,wght@0,300;0,400;0,500;0,600;0,700;0,800;1,400&family=Inter:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet" />
   </head>
   <body class="bg-app text-fg font-sans antialiased selection:bg-teal-500 selection:text-white min-h-screen overflow-x-hidden">
-    <div id="root"></div>
+    <div id="root">
+      <!-- Pantalla de apertura: la reemplaza React al montar. Marca uniforme
+           con el mismo corazón del ícono / botón flotante. -->
+      <div id="boot-splash" style="position:fixed;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:18px;background:#ffffff;z-index:9999;font-family:'Plus Jakarta Sans','Inter',system-ui,sans-serif">
+        <div style="width:96px;height:96px;border-radius:28px;background:linear-gradient(135deg,#14b8a6,#059669);box-shadow:0 18px 40px -12px rgba(5,150,105,.45);display:flex;align-items:center;justify-content:center;animation:bp-pop .5s cubic-bezier(.16,1,.3,1)">
+          <svg width="52" height="52" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M2 9.5a5.5 5.5 0 0 1 9.591-3.676.56.56 0 0 0 .818 0A5.49 5.49 0 0 1 22 9.5c0 2.29-1.5 4-3 5.5l-5.492 5.313a2 2 0 0 1-3 .019L5 15c-1.5-1.5-3-3.2-3-5.5"/>
+            <path d="M3.22 13H9.5l.5-1 2 4.5 2-7 1.5 3.5h5.27"/>
+          </svg>
+        </div>
+        <div style="text-align:center;line-height:1.35">
+          <div style="font-weight:800;font-size:19px;color:#10211d;letter-spacing:-.01em">Bio-Pass</div>
+          <div style="font-size:12.5px;color:#6c807a;margin-top:2px">Tu pasaporte de salud en línea</div>
+        </div>
+        <div style="width:26px;height:26px;border:3px solid #d7ebe5;border-top-color:#14b8a6;border-radius:50%;animation:bp-spin .8s linear infinite;margin-top:2px"></div>
+      </div>
+      <style>
+        @keyframes bp-pop{0%{transform:scale(.8);opacity:0}100%{transform:scale(1);opacity:1}}
+        @keyframes bp-spin{to{transform:rotate(360deg)}}
+        html.dark #boot-splash{background:#080e1a}
+        html.dark #boot-splash div[style*="color:#10211d"]{color:#f1f5f9!important}
+      </style>
+    </div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

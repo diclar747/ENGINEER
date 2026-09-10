@@ -1,70 +1,23 @@
 {
-  "name": "Bio-Pass — Pasaporte Médico Inteligente",
+  "name": "Bio-Pass — Tu pasaporte de salud en línea",
   "short_name": "Bio-Pass",
-  "description": "Tu pasaporte médico y ficha de emergencia con cifrado Zero-Knowledge",
-  "start_url": "/",
-  "id": "/",
-  "display": "standalone",
-  "display_override": ["window-controls-overlay", "standalone", "minimal-ui"],
-  "orientation": "portrait-primary",
-  "background_color": "#081325",
-  "theme_color": "#0d9488",
-  "categories": ["health", "medical", "lifestyle"],
+  "description": "Tu pasaporte médico y ficha de emergencia por QR, siempre con vos. Cifrado Zero-Knowledge.",
   "lang": "es",
   "dir": "ltr",
+  "start_url": "/",
+  "id": "/",
+  "scope": "/",
+  "display": "standalone",
+  "display_override": ["standalone", "minimal-ui"],
+  "orientation": "portrait-primary",
+  "background_color": "#ffffff",
+  "theme_color": "#0d9488",
+  "categories": ["health", "medical", "productivity"],
   "icons": [
-    {
-      "src": "/favicon.svg",
-      "sizes": "any",
-      "type": "image/svg+xml",
-      "purpose": "any"
-    },
-    {
-      "src": "/icon.svg",
-      "sizes": "512x512",
-      "type": "image/svg+xml",
-      "purpose": "any maskable"
-    },
-    {
-      "src": "/icon-192.png",
-      "sizes": "192x192",
-      "type": "image/png",
-      "purpose": "any"
-    },
-    {
-      "src": "/icon-512.png",
-      "sizes": "512x512",
-      "type": "image/png",
-      "purpose": "any"
-    },
-    {
-      "src": "/icon-maskable.png",
-      "sizes": "512x512",
-      "type": "image/png",
-      "purpose": "maskable"
-    }
-  ],
-  "shortcuts": [
-    {
-      "name": "Mi Pasaporte",
-      "short_name": "Pasaporte",
-      "description": "Ver mi pasaporte médico y código QR",
-      "url": "/dashboard",
-      "icons": [{ "src": "/icon-192.png", "sizes": "192x192" }]
-    },
-    {
-      "name": "Sticker & Kit QR",
-      "short_name": "Kit QR",
-      "description": "Descargar kit de stickers para imprimir",
-      "url": "/stickers",
-      "icons": [{ "src": "/icon-192.png", "sizes": "192x192" }]
-    },
-    {
-      "name": "Asistente Bot",
-      "short_name": "Bot",
-      "description": "Simulador de Bot WhatsApp",
-      "url": "/bot-simulator",
-      "icons": [{ "src": "/icon-192.png", "sizes": "192x192" }]
-    }
+    { "src": "/favicon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" },
+    { "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" },
+    { "src": "/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/icon-maskable.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
   ]
 }
