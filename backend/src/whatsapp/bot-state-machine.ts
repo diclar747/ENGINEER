@@ -2092,6 +2092,18 @@ export class BotStateMachine {
       if (subMode.startsWith('ACTIVE_REMIND_')) {
         const draft: Partial<ReminderDraft> = { ...(getTempData().rdraft || {}) };
 
+        // "gracias" / "ok" / "dale" en medio del diálogo guiado: no es una
+        // respuesta al paso → se acusa amable y se mantiene el estado (sin
+        // volcar listas ni tirar "no entendí").
+        if (state !== 'ACTIVE_REMIND_CONFIRM' && (isAck(cleanText) || /^[\u{1F44D}\u{1F64F}\u{1F44C}✅😊🙂]+$/u.test(cleanText.trim()))) {
+          const isThanks = /graci|aguyj|aguij/i.test(norm(cleanText));
+          return {
+            replyText:
+              (isThanks ? '¡De nada! 🙂' : '👍') +
+              '\n_Seguí cuando quieras, o escribí *LISTO* para volver al menú._',
+          };
+        }
+
         if (state === 'ACTIVE_REMIND_NAME') {
           const name = cleanText.replace(/^(se llama|es|el|la|un[ao]?|para)\s+/i, '').trim();
           if (name.length < 2) return { replyText: remindQuestion('name', draft) };

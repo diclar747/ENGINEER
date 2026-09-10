@@ -203,6 +203,26 @@ describe('parseAppointment — limpieza de la nota', () => {
     const hhmm = new Date(d.whenAt!).toLocaleTimeString('en-GB', { timeZone: 'America/Asuncion', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
     expect(hhmm).toBe('09:15');
   });
+
+  it('"mañana a las 4 de la tarde" NO se lee como "día 4"', () => {
+    const r = MedicationReminderService.parseAppointment('cita médica mañana a las 4 de la tarde con el doctor Córdova');
+    expect(r).toBeTruthy();
+    const d = r!.whenAt;
+    const hhmm = d.toLocaleTimeString('en-GB', { timeZone: 'America/Asuncion', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
+    expect(hhmm).toBe('16:00');
+    // debe ser mañana, no un día 4 en el pasado
+    expect(d.getTime()).toBeGreaterThan(Date.now());
+  });
+
+  it('parseReminderRequest (audio real): "cita médica mañana a las 4 de la tarde con el doctor Córdova, recordar una hora antes"', async () => {
+    const d = await MedicationReminderService.parseReminderRequest(
+      'Quiero registrar una cita médica que voy a tener mañana a las 4 de la tarde con el doctor Córdova y hacerme recordar una hora antes.'
+    );
+    expect(d.kind).toBe('APPOINTMENT');
+    expect(d.whenAt).toBeTruthy();
+    const hhmm = new Date(d.whenAt!).toLocaleTimeString('en-GB', { timeZone: 'America/Asuncion', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
+    expect(hhmm).toBe('16:00');
+  });
 });
 
 describe('answerQuery — consulta de turnos/medicación (no debe caer en "cargar medicamento")', () => {

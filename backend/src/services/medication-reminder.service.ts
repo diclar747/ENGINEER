@@ -293,11 +293,13 @@ export class MedicationReminderService {
   static parseAppointment(text: string): { note: string; whenAt: Date } | null {
     if (!text) return null;
     const t = text.toLowerCase();
-    if (!/\b(turno|cita|consulta|hora m[eé]dica|control m[eé]dico|cita m[eé]dica|appointment)\b/.test(t)) return null;
+    if (!/\b(turno|cita|consulta|agenda|hora m[eé]dica|control m[eé]dico|cita m[eé]dica|appointment|doctor|m[eé]dico|dentista|especialista)\b/.test(t)) return null;
 
-    const times = extractTimes(text);
-    if (!times.length) return null;
-    const [hh, mm] = times[0].split(':').map(Number);
+    // `extractClock` respeta "de la tarde/noche" (4 de la tarde → 16:00);
+    // `extractTimes` es el respaldo por si viene "08:00 y 20:00" al estilo receta.
+    const clock = this.extractClock(text, false) || extractTimes(text)[0];
+    if (!clock) return null;
+    const [hh, mm] = clock.split(':').map(Number);
 
     const tz = config.timezone || 'America/Asuncion';
     const nowParts = new Date().toLocaleDateString('en-CA', { timeZone: tz }).split('-').map(Number);
@@ -307,7 +309,9 @@ export class MedicationReminderService {
 
     const dm = t.match(/\b([0-3]?\d)[\/.\-]([01]?\d)(?:[\/.\-](\d{2,4}))?\b/);
     const months = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto', 'septiembre', 'setiembre', 'octubre', 'noviembre', 'diciembre'];
-    const dName = t.match(/\b(\d{1,2})\s+de\s+([a-záéíóú]+)/);
+    // "15 de octubre" sí; "4 de la tarde" NO (eso es una hora, no una fecha).
+    const dNameM = t.match(/\b(\d{1,2})\s+de\s+([a-záéíóú]+)/);
+    const dName = dNameM && months.some((m) => dNameM[2].startsWith(m.slice(0, 4))) ? dNameM : null;
     const weekdays = ['domingo', 'lunes', 'martes', 'mi[eé]rcoles', 'jueves', 'viernes', 's[aá]bado'];
 
     if (dm) {
@@ -350,20 +354,27 @@ export class MedicationReminderService {
     const whenAt = new Date(iso);
     if (isNaN(whenAt.getTime()) || whenAt.getTime() < Date.now() - 3600_000) return null;
 
-    let note = text
-      .replace(
-        /^\s*(?:hola[,\s]+)?(?:tengo|ten[eé]s|hay|me\s+dieron|saqu[eé]|reserv[eé]|agend[eé]|me\s+agendaron)\s+(?:un[ao]?\s+)?(?:cita|turno|consulta|hora\s+m[eé]dica)\s*(?:con\s+(?:el|la|mi|un[ao]?)?\s*)?/i,
-        ''
-      )
-      .replace(/\b(recorda(?:r|torio|me)?|recu[eé]rdame|el|la|los|las|a\s+las?|de|para|mi|un[a]?)\b/gi, ' ')
-      .replace(/\b[0-3]?\d[\/.\-][01]?\d(?:[\/.\-]\d{2,4})?\b/g, ' ')
-      .replace(/\b\d{1,2}(?::[0-5]\d)?\s*(a\.?m\.?|p\.?m\.?|h|hs|hrs|horas)?\b/gi, ' ')
-      .replace(/\b(mañana|pasado|hoy|lunes|martes|mi[eé]rcoles|jueves|viernes|s[aá]bado|domingo)\b/gi, ' ')
-      .replace(/\b(avisame|avis[aá]|avisar|antes|una|hora|horas|minutos?|d[ií]a\s+antes)\b/gi, ' ')
-      .replace(/\s+/g, ' ')
-      .trim();
-    if (note.length < 3) note = 'Consulta médica';
-    note = note.charAt(0).toUpperCase() + note.slice(1);
+    // Nota: se EXTRAE la entidad (a quién/qué), no se resta el ruido —
+    // los audios traen mucho relleno y restar deja fragmentos.
+    const SPEC = 'cardi[oó]log\\w*|traumat[oó]log\\w*|dermat[oó]log\\w*|pediatr\\w*|ginec[oó]log\\w*|neur[oó]log\\w*|ur[oó]log\\w*|oftalm[oó]log\\w*|odont[oó]log\\w*|kinesi[oó]log\\w*|nutricionist\\w*|psic[oó]log\\w*|psiquiatr\\w*|end[oó]crin[oó]log\\w*|otorrino\\w*|dentista|especialista';
+    const STOP = '(?=\\s*(?:\\b(?:y|a|el|la|los|las|para|mañana|manana|hoy|pasado|el\\s+d[ií]a|a\\s+las?|el\\s+lunes|el\\s+martes|el\\s+mi[eé]rcoles|el\\s+jueves|el\\s+viernes|el\\s+s[aá]bado|el\\s+domingo)\\b|[,.;]|$))';
+    let note = '';
+    let mm2 =
+      t.match(new RegExp(`\\bcon\\s+(?:el|la|mi|un[ao]?|dr\\.?|dra\\.?)?\\s*(doctor|doctora|dr|dra|m[eé]dico|${SPEC})\\.?\\s+([a-záéíóúñ][a-záéíóúñ .'-]{1,40}?)${STOP}`, 'i')) ||
+      t.match(new RegExp(`\\b(doctor|doctora|dr|dra)\\.?\\s+([a-záéíóúñ][a-záéíóúñ .'-]{1,40}?)${STOP}`, 'i'));
+    if (mm2) {
+      const who = mm2[2].trim().replace(/\s+(y|a|para|el|la)$/i, '');
+      note = `Consulta con el Dr. ${who.charAt(0).toLocaleUpperCase('es')}${who.slice(1)}`;
+    }
+    if (!note) {
+      const mm3 = t.match(new RegExp(`\\b(?:turno|cita|consulta|control|hora\\s+m[eé]dica)\\s+(?:m[eé]dic[ao]\\s+)?(?:con|de|para|del?)\\s+(?:el|la|mi|un[ao]?)?\\s*([a-záéíóúñ][a-záéíóúñ .'-]{2,40}?)${STOP}`, 'i'));
+      if (mm3) { const w = mm3[1].trim(); note = w.charAt(0).toLocaleUpperCase('es') + w.slice(1); }
+    }
+    if (!note) {
+      const mm4 = t.match(new RegExp(`\\b(${SPEC})\\b`, 'i'));
+      if (mm4) note = mm4[1].charAt(0).toLocaleUpperCase('es') + mm4[1].slice(1);
+    }
+    if (!note || note.replace(/[^\p{L}]/gu, '').length < 3) note = 'Consulta médica';
 
     return { note: note.slice(0, 120), whenAt };
   }
@@ -625,6 +636,11 @@ export class MedicationReminderService {
         const hasExplicitClock = /\b([01]?\d|2[0-3])[:.][0-5]\d\b/.test((original || '').toLowerCase().replace(LEAD_PHRASE_RE, ' '));
         if (!draft.whenAt || hasExplicitClock) draft.whenAt = appt.whenAt.toISOString();
         draft.medication = draft.medication || appt.note;
+      } else if (draft.kind === 'APPOINTMENT' && !draft.whenAt) {
+        // parseAppointment falló (p.ej. "4 de la tarde" lo tomaba como día 4) →
+        // reintento con el parser tolerante de fecha/hora.
+        const w = this.resolveWhen(original);
+        if (w.whenAt) draft.whenAt = w.whenAt.toISOString();
       }
     }
     if ((!draft.medication || !draft.scheduleKind) && draft.kind !== 'APPOINTMENT') {
@@ -662,6 +678,22 @@ export class MedicationReminderService {
       !!draft.scheduleKind &&
       (draft.scheduleKind === 'CLOCK' ? !!(draft.times && draft.times.length) : !!(draft.intervalHours && draft.anchorAt));
     if (richMed && draft.dose === undefined) draft.dose = null;
+
+    // "avisame una hora antes" / "media hora antes" / "el día antes" → leadMinutes.
+    if (draft.leadMinutes === undefined) {
+      const lo = original.toLowerCase();
+      if (/\b(el\s+d[ií]a|un\s+d[ií]a)\s+antes\b/.test(lo)) draft.leadMinutes = 1440;
+      else {
+        const lm = lo.match(/\b(?:avisa\w*\s+(?:me\s+)?)?(un[ao]?|media|\d+(?:[.,]\d+)?)\s*(hora|horas|hs?|min|minutos?|d[ií]as?)\s+antes\b/);
+        if (lm) {
+          const n = lm[1] === 'media' ? 0.5 : /^un/.test(lm[1]) ? 1 : parseFloat(lm[1].replace(',', '.'));
+          if (!isNaN(n)) {
+            const mins = /^min/.test(lm[2]) ? Math.round(n) : /^d/.test(lm[2]) ? Math.round(n * 1440) : Math.round(n * 60);
+            if (mins >= 5 && mins <= 10080) draft.leadMinutes = mins;
+          }
+        }
+      }
+    }
 
     // Nunca devuelve null: si no hay datos concretos, arranca un borrador vacío del
     // tipo detectado para que el diálogo guiado pregunte lo que falte.
