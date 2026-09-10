@@ -22,4 +22,7 @@ COPY --from=build /app/node_modules/.prisma ./node_modules/.prisma
 COPY --from=build /app/dist ./dist
 COPY prisma ./prisma
 EXPOSE 4000
-CMD ["sh", "-c", "npx prisma migrate deploy && node dist/server.js"]
+# `exec` reemplaza el shell por node → node queda como PID 1 y RECIBE el SIGTERM
+# del redeploy (así cierra ya la sesión de WhatsApp y no se solapa con el nuevo
+# contenedor). Sin `exec`, sh no le pasa la señal y node muere por SIGKILL a los 10s.
+CMD ["sh", "-c", "npx prisma migrate deploy && exec node dist/server.js"]
