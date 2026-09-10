@@ -72,6 +72,11 @@ export class BaileysClient {
   private recentContent = new Map<string, number>();
   /** chat → epoch hasta el cual se ignora todo de ese chat (cortafuegos anti-ráfaga). */
   private burstCooldown = new Map<string, number>();
+  /** epoch del último QR mostrado — solo tras un pareo FRESCO hay ráfaga de historial. */
+  private lastQrAt = 0;
+  /** control del bucle de "restart required" (515). */
+  private last515At = 0;
+  private restart515Count = 0;
   /** Últimos envíos (jid|texto → timestamp) — evita mandar DOS VECES el mismo mensaje
    *  al mismo chat en pocos segundos (re-entrega de WhatsApp, replay tras reinicio,
    *  listener duplicado momentáneo). Es la última red de seguridad del doble mensaje. */
@@ -272,6 +277,7 @@ export class BaileysClient {
         if (qr) {
           const firstOfSession = !this.qrRaw;
           this.qrRaw = qr;
+          this.lastQrAt = Date.now();
           this.qrCodeDataUrl = await QRCode.toDataURL(qr);
           if (firstOfSession) {
             console.log('📲 [WHATSAPP BOT] Pairing QR ready — open /bot-connect in the web app or GET /api/bot/status. (auto-refreshes until scanned)');
@@ -320,11 +326,16 @@ export class BaileysClient {
             return;
           }
 
-          // 515 (restartRequired) fires right after a successful QR scan — it's expected,
-          // reconnect immediately and don't count it against the retry budget.
+          // 515 (restartRequired) fires una vez tras escanear el QR — es esperado.
+          // Si se REPITE seguido (sesión inestable), NO reconectar a 1 s en bucle
+          // (eso martilla a WhatsApp y deja el bot inservible): backoff progresivo.
           if (statusCode === DisconnectReason.restartRequired) {
-            console.log('🔄 [WHATSAPP BOT] Restart required after pairing — reconnecting…');
-            setTimeout(() => this.start(), 1_000);
+            const now = Date.now();
+            this.restart515Count = now - this.last515At < 180_000 ? this.restart515Count + 1 : 1;
+            this.last515At = now;
+            const delay = this.restart515Count <= 1 ? 1_000 : Math.min(60_000, 4_000 * this.restart515Count);
+            console.log(`🔄 [WHATSAPP BOT] Restart required (${this.restart515Count}x) — reconecto en ${Math.round(delay / 1000)}s…`);
+            setTimeout(() => this.start(), delay);
             return;
           }
 
@@ -399,11 +410,14 @@ export class BaileysClient {
           return;
         }
         const nowSec = Math.floor(Date.now() / 1000);
-        // Ventana de gracia tras (re)conectar: los primeros ~75 s llega la ráfaga de
-        // sincronización de historial (a veces como `notify`). Se descarta.
+        // Ventana de gracia SOLO tras un pareo FRESCO (QR escaneado): ahí WhatsApp
+        // vuelca el historial como `notify`. En una RECONEXIÓN normal NO hay ráfaga
+        // (markOnlineOnConnect + ack ya lo cortan) → aplicar gracia ahí dejaba al
+        // bot sin responder si el usuario escribía justo después de reconectar.
+        const freshPair = this.lastQrAt > 0 && Date.now() - this.lastQrAt < 90_000;
         const sinceConnect = this.sessionSince ? Date.now() - this.sessionSince : Number.MAX_SAFE_INTEGER;
-        if (sinceConnect < 75_000) {
-          console.log(`[WHATSAPP BOT] En ventana de gracia post-conexión (${Math.round(sinceConnect / 1000)}s) — ignoro ${m.messages?.length ?? 0} msg(s).`);
+        if (freshPair && sinceConnect < 20_000) {
+          console.log(`[WHATSAPP BOT] Gracia post-pareo (${Math.round(sinceConnect / 1000)}s) — ignoro ${m.messages?.length ?? 0} msg(s).`);
           return;
         }
 
