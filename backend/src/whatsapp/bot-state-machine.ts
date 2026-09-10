@@ -72,7 +72,9 @@ async function askNiro(
         'programar *recordatorios de toma de medicación* ("cada X horas" o a horas fijas) y *recordatorios de turnos / citas médicas*. ' +
         'NO reserva la cita con el consultorio: solo le avisa al titular antes. ' +
         'El titular puede preguntar "¿qué cita tengo?", "¿cuál es mi próxima toma?", "¿qué estoy tomando?" y el sistema le responde con sus datos reales.'
-      : '';
+      : ' DATO IMPORTANTE (no lo contradigas): además de la ficha médica de emergencia por QR y de guardar medicamentos/recetas/estudios, ' +
+        'Bio-Pass —una vez que la persona se registra— permite programar por WhatsApp *recordatorios de toma de medicación* y *recordatorios de turnos / citas médicas* ' +
+        '(no reserva la cita con el consultorio, solo avisa antes). Si preguntan por esto, confirmá que sí y sugerí registrarse (menos de 3 minutos).';
   return NiroService.chat([
     { role: 'system', content: system + caps + (opts.name ? ` El usuario se llama ${opts.name}.` : '') },
     { role: 'user', content: userText.trim() },
