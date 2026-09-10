@@ -1065,16 +1065,16 @@ export class BotStateMachine {
         replyText: tr(
           `✅ *Condiciones médicas y alergias registradas.*\n\n` +
             `🩸 *Paso 7/9 (Grupo Sanguíneo / RH):*\n` +
-            `Elegí tu grupo:\n*[1]* O+  *[2]* O−  *[3]* A+  *[4]* A−\n*[5]* B+  *[6]* B−  *[7]* AB+  *[8]* AB−\n*[9]* No lo sé`,
+            `Elegí tu grupo:\n*[1]* O+\n*[2]* O−\n*[3]* A+\n*[4]* A−\n*[5]* B+\n*[6]* B−\n*[7]* AB+\n*[8]* AB−\n*[9]* No lo sé`,
           `✅ *Nde mba'asy ha alergia oñeguarda.*\n\n` +
             `🩸 *Paso 7/9 (Nde ruguy grupo / RH):*\n` +
-            `Eiporavo:\n*[1]* O+  *[2]* O−  *[3]* A+  *[4]* A−\n*[5]* B+  *[6]* B−  *[7]* AB+  *[8]* AB−\n*[9]* Ndaikuaái`,
+            `Eiporavo:\n*[1]* O+\n*[2]* O−\n*[3]* A+\n*[4]* A−\n*[5]* B+\n*[6]* B−\n*[7]* AB+\n*[8]* AB−\n*[9]* Ndaikuaái`,
           `✅ *Condições e alergias registradas.*\n\n` +
             `🩸 *Passo 7/9 (Tipo Sanguíneo / RH):*\n` +
-            `Escolha:\n*[1]* O+  *[2]* O−  *[3]* A+  *[4]* A−\n*[5]* B+  *[6]* B−  *[7]* AB+  *[8]* AB−\n*[9]* Não sei`,
+            `Escolha:\n*[1]* O+\n*[2]* O−\n*[3]* A+\n*[4]* A−\n*[5]* B+\n*[6]* B−\n*[7]* AB+\n*[8]* AB−\n*[9]* Não sei`,
           `✅ *Conditions and allergies saved.*\n\n` +
             `🩸 *Step 7/9 (Blood Type / RH):*\n` +
-            `Choose:\n*[1]* O+  *[2]* O−  *[3]* A+  *[4]* A−\n*[5]* B+  *[6]* B−  *[7]* AB+  *[8]* AB−\n*[9]* I don't know`
+            `Choose:\n*[1]* O+\n*[2]* O−\n*[3]* A+\n*[4]* A−\n*[5]* B+\n*[6]* B−\n*[7]* AB+\n*[8]* AB−\n*[9]* I don't know`
         ),
       };
     }
