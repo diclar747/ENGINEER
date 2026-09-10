@@ -34,6 +34,7 @@ router.get('/auth/profile', authMiddleware, AuthController.getProfile);
 
 // Emergency & Rescuer Access (Public & Consultation Mode)
 router.get('/emergency/:token', emergencyLimiter, EmergencyController.getEmergencyCard);
+router.post('/emergency/:token/location', emergencyLimiter, EmergencyController.reportScanLocation);
 router.post('/emergency/:token/consultation', emergencyLimiter, EmergencyController.unlockConsultationMode);
 router.post('/emergency/:token/call-contact', emergencyLimiter, EmergencyController.callEmergencyContact);
 

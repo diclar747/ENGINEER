@@ -46,6 +46,7 @@ export const EmergencyView: React.FC = () => {
 
   useEffect(() => {
     fetchEmergencyData();
+    reportScanLocation();
   }, [token]);
 
   const fetchEmergencyData = async () => {
@@ -59,6 +60,28 @@ export const EmergencyView: React.FC = () => {
     } finally {
       setLoading(false);
     }
+  };
+
+  /**
+   * 2ª fase del escaneo: si el navegador de quien escaneó comparte su GPS,
+   * se lo mandamos al titular (coordenadas exactas + link a Maps). Silencioso:
+   * si lo deniega o no hay sensor, no pasa nada — la alerta por IP ya salió.
+   */
+  const reportScanLocation = () => {
+    if (!token || !('geolocation' in navigator)) return;
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        api
+          .post(`/emergency/${token}/location`, {
+            lat: pos.coords.latitude,
+            lng: pos.coords.longitude,
+            accuracy: pos.coords.accuracy,
+          })
+          .catch(() => {});
+      },
+      () => {},
+      { enableHighAccuracy: true, timeout: 10_000, maximumAge: 0 }
+    );
   };
 
   const handleEmergencyCall = async () => {

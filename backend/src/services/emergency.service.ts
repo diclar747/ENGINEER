@@ -112,10 +112,20 @@ export class EmergencyService {
       timeZone: config.timezone,
     });
 
+    // Coordenadas: primero las del navegador (llegan segundos después por
+    // POST /emergency/:token/location); mientras tanto, el centroide de geoip si lo hay.
+    const coordsLine =
+      lat != null && lng != null
+        ? `📌 *Coordenadas:* ${lat.toFixed(5)}, ${lng.toFixed(5)}\n` +
+          `🗺️ *Mapa:* https://maps.google.com/?q=${lat},${lng}\n`
+        : '';
+
     const alertMessage = `⚠️ *ALERTA DE SEGURIDAD BIO-PASS*\n\n` +
       `Tu código QR de emergencia fue escaneado hoy a las *${scanTime}*.\n` +
       `📍 *Ubicación aproximada:* ${city}, ${country}\n` +
+      coordsLine +
       `🌐 *IP:* ${cleanIp}\n\n` +
+      (coordsLine ? '' : '_Ubicación exacta en camino si el navegador del escaneo la comparte._\n\n') +
       `_Si no fuiste tú o no te encuentras en una situación médica, contacta a nuestro soporte inmediatamente._`;
 
     // Fan out the scan alert on every available channel, in the background.
@@ -193,6 +203,59 @@ export class EmergencyService {
         : null,
       encryptionSalt: user.encryptionSalt || undefined,
     };
+  }
+
+  /**
+   * Segunda fase del escaneo: el navegador de quien escaneó compartió su GPS
+   * (POST /emergency/:token/location). Se guarda en el último registro de auditoría
+   * del titular y se le manda un WhatsApp de seguimiento con las coordenadas exactas
+   * y un enlace a Google Maps. Silencioso si no hay escaneo reciente al que anclarlo.
+   */
+  public static async attachScanLocation(
+    emergencyToken: string,
+    lat: number,
+    lng: number,
+    accuracy?: number
+  ): Promise<{ ok: boolean }> {
+    if (!Number.isFinite(lat) || !Number.isFinite(lng) || Math.abs(lat) > 90 || Math.abs(lng) > 180) {
+      return { ok: false };
+    }
+
+    const user = await prisma.user.findUnique({
+      where: { emergencyToken },
+      select: { id: true, phoneNumber: true, whatsappJid: true },
+    });
+    if (!user) return { ok: false };
+
+    // Ancla: el escaneo más reciente de este titular en los últimos 20 min.
+    const recent = await prisma.scanAuditLog.findFirst({
+      where: { userId: user.id, scannedAt: { gte: new Date(Date.now() - 20 * 60_000) } },
+      orderBy: { scannedAt: 'desc' },
+    });
+    if (!recent) return { ok: false };
+    // Ya se ancló una ubicación GPS a este escaneo → no repetir el aviso.
+    if (recent.gpsFixed) return { ok: true };
+
+    const acc = Number.isFinite(accuracy) ? Math.round(accuracy as number) : undefined;
+    await prisma.scanAuditLog.update({
+      where: { id: recent.id },
+      data: { lat, lng, gpsFixed: true },
+    });
+
+    const scanTime = new Date(recent.scannedAt).toLocaleTimeString('es-PY', {
+      hour: '2-digit', minute: '2-digit', hour12: false, timeZone: config.timezone,
+    });
+    const msg =
+      `📌 *Ubicación exacta del escaneo* (${scanTime})\n\n` +
+      `*Coordenadas:* ${lat.toFixed(5)}, ${lng.toFixed(5)}` +
+      (acc ? ` _(±${acc} m)_` : '') + `\n` +
+      `🗺️ https://maps.google.com/?q=${lat},${lng}\n\n` +
+      `_Compartida por el navegador de quien escaneó tu QR de emergencia._`;
+    whatsappBot.sendMessage(user.whatsappJid || user.phoneNumber, msg).catch((err) => {
+      console.error(`Failed to dispatch WhatsApp scan-location to ${user.phoneNumber}:`, err?.message || err);
+    });
+
+    return { ok: true };
   }
 
   /**

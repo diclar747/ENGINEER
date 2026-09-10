@@ -275,6 +275,8 @@ model ScanAuditLog {
   country               String?
   lat                   Float?
   lng                   Float?
+  /** true cuando lat/lng vienen del GPS del navegador (2ª fase), no del centroide de geoip. */
+  gpsFixed              Boolean  @default(false)
   alertSentViaWhatsApp  Boolean  @default(false)
 }
 

@@ -95,6 +95,31 @@ export class EmergencyController {
   }
 
   /**
+   * 2ª fase del escaneo: el navegador de quien escaneó comparte su GPS.
+   * Público (mismo alcance que GET /emergency/:token), sin PIN. Best-effort:
+   * si no hay un escaneo reciente al que anclarlo, responde ok igual.
+   */
+  public static async reportScanLocation(req: Request, res: Response): Promise<void> {
+    const { token } = req.params;
+    const lat = Number(req.body?.lat);
+    const lng = Number(req.body?.lng);
+    const accuracy = req.body?.accuracy != null ? Number(req.body.accuracy) : undefined;
+
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+      res.status(400).json({ error: 'Coordenadas inválidas' });
+      return;
+    }
+
+    try {
+      const r = await EmergencyService.attachScanLocation(token, lat, lng, accuracy);
+      res.json({ ok: r.ok });
+    } catch (err: any) {
+      console.error('[emergency:location]', err?.message || err);
+      res.status(500).json({ error: 'No se pudo registrar la ubicación' });
+    }
+  }
+
+  /**
    * Triggers emergency call to relative / emergency contact
    */
   public static async callEmergencyContact(req: Request, res: Response): Promise<void> {
