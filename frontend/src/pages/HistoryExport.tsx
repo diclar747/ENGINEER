@@ -13,7 +13,7 @@ export const HistoryExport: React.FC = () => {
   };
 
   return (
-    <div className="max-w-4xl mx-auto px-3.5 sm:px-6 lg:px-8 py-6 sm:py-8 space-y-6 sm:space-y-8 pb-20">
+    <div className="max-w-3xl space-y-5 sm:space-y-6">
       <div>
         <h1 className="text-2xl sm:text-3xl font-black text-fg tracking-tight flex items-center gap-3">
           <Download className="w-7 h-7 sm:w-8 sm:h-8 text-teal-600 dark:text-teal-400" />

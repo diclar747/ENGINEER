@@ -79,7 +79,7 @@ export const QrStickerStudio: React.FC = () => {
   }
 
   return (
-    <div className="max-w-7xl mx-auto px-3.5 sm:px-6 lg:px-8 py-6 sm:py-8 space-y-6 sm:space-y-8 pb-20">
+    <div className="space-y-5 sm:space-y-6">
       {/* Title Header */}
       <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
         <div>
