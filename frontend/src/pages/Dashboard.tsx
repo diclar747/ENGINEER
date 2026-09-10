@@ -31,6 +31,7 @@ import { PinModal } from '../components/PinModal';
 import { PushOptIn } from '../components/PushOptIn';
 import { VaultInit } from '../components/VaultInit';
 import { RiskBadges } from '../components/RiskBadges';
+import { Section } from '../components/ui/Layout';
 import { stripAsterisks } from '../utils/textFormat';
 import type { Medication } from '../types';
 
@@ -275,23 +276,17 @@ export const Dashboard: React.FC = () => {
 
         {/* Clinical Overview & Rescue Badges */}
         <div className="lg:col-span-2 space-y-6">
-          <div className="bg-card border border-line rounded-3xl p-5 sm:p-6 shadow-xl space-y-4">
-            <div className="flex items-center justify-between border-b border-line/80 pb-3">
-              <h3 className="text-sm font-black uppercase tracking-wider text-fg-soft flex items-center gap-2">
-                <HeartPulse className="w-4 h-4 text-rose-600 dark:text-rose-400" />
-                <span>Condiciones de Rescate Declaradas</span>
-              </h3>
-              <span className="text-xs text-teal-600 dark:text-teal-400 font-semibold flex items-center gap-1">
-                <ShieldCheck className="w-3.5 h-3.5" /> Ficha Médica
-              </span>
-            </div>
-
+          <Section
+            title="Condiciones de Rescate Declaradas"
+            icon={<HeartPulse className="w-4 h-4" />}
+            right={<span className="text-teal-600 dark:text-teal-400 font-semibold flex items-center gap-1"><ShieldCheck className="w-3.5 h-3.5" /> Ficha Médica</span>}
+          >
             <RiskBadges
               conditions={user?.emergencyConditions}
               allergies={user?.severeAllergies}
               contraindicatedMeds={user?.contraindicatedMeds}
             />
-          </div>
+          </Section>
 
           {/* Medicación actual */}
           <MedicationsList medications={medications} onChange={saveMedications} />

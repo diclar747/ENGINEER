@@ -4,6 +4,7 @@ import { adminApi } from '../utils/adminApi';
 import { ThemeToggle } from '../components/ThemeToggle';
 import { useConfirm, useToast } from '../components/ui/Feedback';
 import { AreaLine, Bars, Donut, HBars, CH } from '../components/ui/Charts';
+import { Section, SectionHead, PageTitle, Toolbar, TableWrap, EmptyState, Stat, Segmented, inputCls as sharedInputCls } from '../components/ui/Layout';
 import {
   ShieldCheck, LogOut, Users, CreditCard, ListChecks, LayoutDashboard, CalendarClock,
   Loader2, Search, Check, X, RefreshCw, Plus, Trash2, Save, Smartphone, Download, Printer,
@@ -38,7 +39,7 @@ const STATUS: Record<string, string> = {
 };
 const GATEWAYS = ['BANCARD', 'PIX', 'MERCADOPAGO', 'BANK_TRANSFER', 'TIGO_MONEY', 'WINSAP'];
 const Loading: React.FC = () => (<div className="py-16 text-center"><Loader2 className="w-6 h-6 animate-spin inline text-teal-600 dark:text-teal-400" /></div>);
-const inputCls = 'bg-card border border-line rounded-xl text-sm text-fg px-3 py-2 outline-none focus:border-teal-500';
+const inputCls = sharedInputCls;
 
 const Pager: React.FC<{ page: number; total: number; onPage: (p: number) => void }> = ({ page, total, onPage }) => {
   const pages = Math.max(1, Math.ceil(total / 20));
@@ -69,25 +70,37 @@ export const AdminPanel: React.FC = () => {
     { id: 'whatsapp', label: 'WhatsApp', icon: <Smartphone className="w-4 h-4" /> },
     { id: 'historial', label: 'Historial', icon: <MessagesSquare className="w-4 h-4" /> },
   ];
+  const current = TABS.find((t) => t.id === tab);
   return (
     <div className="min-h-screen bg-app text-fg">
-      <header className="sticky top-0 z-20 bg-card/95 backdrop-blur border-b border-line px-4 py-3 flex items-center justify-between print:hidden">
-        <div className="flex items-center gap-2.5"><ShieldCheck className="w-5 h-5 text-teal-600 dark:text-teal-400" /><span className="font-black text-fg text-sm sm:text-base">Bio-Pass · Admin</span></div>
-        <div className="flex items-center gap-2.5">
-          <button onClick={() => setTab('whatsapp')} className="flex items-center gap-1.5 text-xs font-bold text-fg-muted hover:text-teal-500" title="Bot de WhatsApp"><Smartphone className="w-4 h-4" /><span className="hidden sm:inline">WhatsApp</span></button>
-          <ThemeToggle />
-          <button onClick={logout} className="flex items-center gap-1.5 text-xs font-bold text-fg-muted hover:text-fg"><LogOut className="w-4 h-4" />Salir</button>
+      <header className="sticky top-0 z-30 bg-card/90 backdrop-blur-md border-b border-line print:hidden">
+        <div className="max-w-6xl mx-auto px-3 sm:px-4 py-2.5 flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2 min-w-0">
+            <ShieldCheck className="w-5 h-5 text-teal-600 dark:text-teal-400 shrink-0" />
+            <span className="font-black text-fg text-sm sm:text-base">Bio-Pass</span>
+            <span className="text-fg-muted hidden sm:inline">·</span>
+            <span className="text-fg-muted text-sm font-bold hidden sm:inline">Admin</span>
+            {current && <span className="text-fg-soft text-xs font-bold ml-0.5 truncate sm:hidden">/ {current.label}</span>}
+          </div>
+          <div className="flex items-center gap-1.5 shrink-0">
+            <ThemeToggle />
+            <button onClick={logout} title="Cerrar sesión" className="flex items-center gap-1.5 text-xs font-bold text-fg-muted hover:text-fg px-2 py-1.5 rounded-lg hover:bg-muted">
+              <LogOut className="w-4 h-4" /><span className="hidden sm:inline">Salir</span>
+            </button>
+          </div>
+        </div>
+        <div className="max-w-6xl mx-auto px-2 sm:px-4">
+          <nav className="flex gap-1 overflow-x-auto pb-2 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden [-webkit-overflow-scrolling:touch]">
+            {TABS.map((t) => (
+              <button key={t.id} onClick={() => setTab(t.id)}
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold shrink-0 transition-colors ${tab === t.id ? 'bg-teal-500 text-slate-950 shadow-sm' : 'text-fg-soft hover:bg-muted'}`}>
+                {t.icon}{t.label}
+              </button>
+            ))}
+          </nav>
         </div>
       </header>
-      <nav className="px-3 sm:px-4 pt-3 flex gap-1.5 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden print:hidden">
-        {TABS.map((t) => (
-          <button key={t.id} onClick={() => setTab(t.id)}
-            className={`flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-bold shrink-0 transition-colors ${tab === t.id ? 'bg-teal-500 text-slate-950' : 'bg-muted/70 text-fg-soft hover:bg-muted'}`}>
-            {t.icon}{t.label}
-          </button>
-        ))}
-      </nav>
-      <main className="p-3 sm:p-4 max-w-6xl mx-auto">
+      <main className="p-3 sm:p-5 max-w-6xl mx-auto">
         {tab === 'resumen' && <Resumen />}
         {tab === 'clientes' && <Clientes />}
         {tab === 'suscripciones' && <Suscripciones />}
@@ -114,14 +127,9 @@ const Kpi: React.FC<{ label: string; value: React.ReactNode; hint?: string; icon
   </div>
 );
 
-const Card: React.FC<{ title: string; children: React.ReactNode; right?: React.ReactNode }> = ({ title, children, right }) => (
-  <div className="bg-card border border-line rounded-2xl p-4">
-    <div className="flex items-center justify-between mb-3">
-      <h3 className="text-xs font-black text-fg uppercase tracking-wide">{title}</h3>
-      {right}
-    </div>
-    {children}
-  </div>
+// Card del panel = Section compartida (misma base visual que el dashboard).
+const Card: React.FC<{ title?: string; children: React.ReactNode; right?: React.ReactNode }> = ({ title, children, right }) => (
+  <Section title={title} right={right}>{children}</Section>
 );
 
 const Resumen: React.FC = () => {
@@ -895,13 +903,7 @@ const ST_BADGE: Record<string, { cls: string; label: string }> = {
   skipped: { cls: 'bg-muted text-fg-muted', label: 'omitido' },
 };
 
-const Tile: React.FC<{ label: string; value: React.ReactNode; hint?: string; danger?: boolean }> = ({ label, value, hint, danger }) => (
-  <div className={`bg-card border rounded-2xl p-3.5 ${danger ? 'border-rose-500/40' : 'border-line'}`}>
-    <div className="text-[11px] font-bold uppercase tracking-wide text-fg-muted">{label}</div>
-    <div className={`text-2xl font-black mt-0.5 ${danger ? 'text-rose-600 dark:text-rose-400' : 'text-fg'}`}>{value}</div>
-    {hint && <div className="text-[11px] text-fg-muted mt-0.5">{hint}</div>}
-  </div>
-);
+const Tile: React.FC<{ label: string; value: React.ReactNode; hint?: string; danger?: boolean }> = (p) => <Stat {...p} />;
 
 const HIST_PAGE_SIZE = 15;
 
