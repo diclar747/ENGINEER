@@ -734,6 +734,17 @@ export class BotStateMachine {
         extractedDob = keepBest(extractedDob, ocrResult.dateOfBirth);
         extractedBirthPlace = keepBest(extractedBirthPlace, ocrResult.birthPlace);
         extractedSex = keepBest(extractedSex, ocrResult.sex);
+      } else if (cleanText && (isSmallTalk(cleanText) || isAck(cleanText) || /^\s*(hola|buenas?|buen[oa]s?\s+(d[ií]as?|tardes?|noches?)|donde\s+.*quedamos|c[oó]mo\s+(va|est[aá]s)|segu[ií]|continuar|seguimos|retomar)\b/i.test(cleanText) || (/[?¿]/.test(cleanText) && cleanText.trim().split(/\s+/).length <= 8))) {
+        // "hola" / "¿dónde quedamos?" / "seguí" estando en el paso de la cédula:
+        // NO es un nombre → se re-pide la foto, sin guardar basura.
+        await updateState('STEP2_DOCUMENT', { extractedName, extractedCi, ciPhotoUrl, extractedDob, extractedBirthPlace, extractedSex });
+        return {
+          replyText:
+            `📸 *Paso 2/9 — seguimos acá.*\n` +
+            `Necesito una *foto de tu Cédula* (frente y dorso). De ahí saco tu nombre y número.\n\n` +
+            (extractedName ? `_Ya tengo: ${extractedName}${extractedCi ? ` · ${extractedCi}` : ''}._\n` : '') +
+            `_Si preferís tipear: *Nombre y Apellido, N° de cédula*._`,
+        };
       } else if (cleanText) {
         // Texto tecleado o transcripto de audio ("me llamo Carlos Benítez, cédula 3.500.200").
         // Primero la IA de Niro; si falla, el split simple por coma.
