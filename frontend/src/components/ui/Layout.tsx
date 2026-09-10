@@ -124,7 +124,7 @@ export const Btn: React.FC<
 > = ({ variant = 'soft', icon, children, className = '', ...rest }) => {
   const v =
     variant === 'primary'
-      ? 'bg-gradient-to-r from-teal-500 to-emerald-500 hover:from-teal-400 hover:to-emerald-400 text-white shadow-sm shadow-emerald-500/25'
+      ? 'bg-gradient-to-r from-teal-600 to-emerald-600 hover:from-teal-500 hover:to-emerald-500 text-white shadow-sm shadow-emerald-500/25'
       : variant === 'danger'
         ? 'bg-rose-500/10 text-rose-600 dark:text-rose-400 hover:bg-rose-500/15 border border-rose-500/25'
         : variant === 'ghost'
@@ -154,46 +154,77 @@ export const AppShell: React.FC<{
   children: React.ReactNode;
 }> = ({ brand, nav, title, subtitle, headerRight, footer, children }) => {
   const [open, setOpen] = React.useState(false);
-  const NavList = (
-    <nav className="flex-1 px-3 py-2 space-y-1 overflow-y-auto">
-      {nav.map((n) => {
-        const cls = `w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-bold transition-colors ${
-          n.active ? 'bg-white/20 text-white' : 'text-white/75 hover:bg-white/10 hover:text-white'
-        }`;
-        const inner = (
-          <>
-            <span className="shrink-0 opacity-90">{n.icon}</span>
-            <span className="truncate flex-1 text-left">{n.label}</span>
-            {n.badge != null && <span className="text-[10px] font-black bg-white/25 rounded-full px-1.5 py-0.5">{n.badge}</span>}
-          </>
-        );
-        return n.href ? (
-          <a key={n.id} href={n.href} onClick={() => setOpen(false)} className={cls}>{inner}</a>
-        ) : (
-          <button key={n.id} type="button" onClick={() => { n.onClick?.(); setOpen(false); }} className={cls}>{inner}</button>
-        );
-      })}
-    </nav>
+  const [collapsed, setCollapsed] = React.useState(() => {
+    try { return localStorage.getItem('biopass_sidebar_collapsed') === '1'; } catch { return false; }
+  });
+  const toggleCollapsed = () => {
+    setCollapsed((c) => {
+      const n = !c;
+      try { localStorage.setItem('biopass_sidebar_collapsed', n ? '1' : '0'); } catch { /* noop */ }
+      return n;
+    });
+  };
+  const Chevron = ({ dir }: { dir: 'left' | 'right' }) => (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+      {dir === 'left' ? <path d="m15 18-6-6 6-6" /> : <path d="m9 18 6-6-6-6" />}
+    </svg>
   );
-  const Aside = (
+
+  const Aside = (mini: boolean) => (
     <div className="h-full flex flex-col bg-gradient-to-b from-teal-600 via-emerald-600 to-emerald-500 text-white">
-      <div className="px-4 py-4 flex items-center gap-2">{brand}</div>
-      {NavList}
-      {footer && <div className="px-3 py-3 border-t border-white/15">{footer}</div>}
+      <div className={`h-14 flex items-center border-b border-white/10 ${mini ? 'justify-center px-0' : 'px-4 justify-between gap-2'}`}>
+        <div className={`flex items-center gap-2 min-w-0 ${mini ? 'w-6 overflow-hidden' : ''}`}>{brand}</div>
+        {!mini && (
+          <button type="button" onClick={toggleCollapsed} title="Minimizar menú"
+            className="hidden lg:flex items-center justify-center w-7 h-7 rounded-lg text-white/80 hover:bg-white/15 hover:text-white transition-colors shrink-0">
+            <Chevron dir="left" />
+          </button>
+        )}
+      </div>
+      {mini && (
+        <button type="button" onClick={toggleCollapsed} title="Expandir menú"
+          className="hidden lg:flex items-center justify-center h-9 mx-2 mt-2 rounded-lg text-white/80 hover:bg-white/15 hover:text-white transition-colors">
+          <Chevron dir="right" />
+        </button>
+      )}
+      <nav className="flex-1 px-2 py-2 space-y-1 overflow-y-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+        {nav.map((n) => {
+          const cls = `w-full flex items-center rounded-xl text-sm font-bold transition-colors ${mini ? 'justify-center h-10' : 'gap-3 px-3 py-2.5'} ${
+            n.active ? 'bg-white/20 text-white' : 'text-white/75 hover:bg-white/10 hover:text-white'
+          }`;
+          const inner = (
+            <>
+              <span className="shrink-0 opacity-90">{n.icon}</span>
+              {!mini && <span className="truncate flex-1 text-left">{n.label}</span>}
+              {!mini && n.badge != null && <span className="text-[10px] font-black bg-white/25 rounded-full px-1.5 py-0.5">{n.badge}</span>}
+            </>
+          );
+          const t = typeof n.label === 'string' ? n.label : undefined;
+          return n.href ? (
+            <a key={n.id} href={n.href} onClick={() => setOpen(false)} className={cls} title={mini ? t : undefined}>{inner}</a>
+          ) : (
+            <button key={n.id} type="button" onClick={() => { n.onClick?.(); setOpen(false); }} className={cls} title={mini ? t : undefined}>{inner}</button>
+          );
+        })}
+      </nav>
+      {footer && !mini && <div className="px-3 py-3 border-t border-white/15">{footer}</div>}
     </div>
   );
+
+  const w = collapsed ? 'w-[72px]' : 'w-[248px]';
+  const pl = collapsed ? 'lg:pl-[72px]' : 'lg:pl-[248px]';
   return (
     <div className="min-h-screen bg-app text-fg">
       {/* Sidebar desktop */}
-      <aside className="hidden lg:block fixed inset-y-0 left-0 w-[248px] z-30">{Aside}</aside>
-      {/* Drawer móvil */}
+      <aside className={`hidden lg:block fixed inset-y-0 left-0 z-30 transition-[width] duration-200 ${w}`}>{Aside(collapsed)}</aside>
+      {/* Drawer móvil (siempre completo) */}
       {open && (
         <>
           <div className="lg:hidden fixed inset-0 bg-black/40 z-40" onClick={() => setOpen(false)} />
-          <aside className="lg:hidden fixed inset-y-0 left-0 w-[248px] z-50 shadow-2xl animate-slide-up">{Aside}</aside>
+          <aside className="lg:hidden fixed inset-y-0 left-0 w-[248px] z-50 shadow-2xl animate-slide-up">{Aside(false)}</aside>
         </>
       )}
-      <div className="lg:pl-[248px]">
+      <div className={`transition-[padding] duration-200 ${pl}`}>
         <header className="sticky top-0 z-20 bg-app/85 backdrop-blur-md border-b border-line">
           <div className="px-3 sm:px-6 py-2.5 flex items-center gap-3">
             <button type="button" onClick={() => setOpen(true)} className="lg:hidden p-2 -ml-1 rounded-lg hover:bg-muted text-fg-soft">
@@ -244,7 +275,7 @@ export function Segmented<T extends string>({
           type="button"
           onClick={() => onChange(o.id)}
           className={`flex items-center gap-1.5 rounded-xl font-bold shrink-0 transition-colors ${pad} ${
-            value === o.id ? 'bg-teal-500 text-slate-950' : 'bg-muted/70 text-fg-soft hover:bg-muted'
+            value === o.id ? 'bg-teal-500 text-white' : 'bg-muted/70 text-fg-soft hover:bg-muted'
           }`}
         >
           {o.icon}

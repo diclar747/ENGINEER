@@ -132,7 +132,7 @@ export const PinModal: React.FC<PinModalProps> = ({
             <button
               type="submit"
               disabled={loading}
-              className="w-1/2 py-3.5 px-4 rounded-2xl bg-gradient-to-r from-teal-500 to-emerald-500 hover:from-teal-400 hover:to-emerald-400 disabled:opacity-50 text-xs sm:text-sm font-black text-slate-950 shadow-lg shadow-teal-500/25 flex items-center justify-center space-x-2 transition-all active:scale-95"
+              className="w-1/2 py-3.5 px-4 rounded-2xl bg-gradient-to-r from-teal-600 to-emerald-600 hover:from-teal-500 hover:to-emerald-500 disabled:opacity-50 text-xs sm:text-sm font-black text-white shadow-lg shadow-teal-500/25 flex items-center justify-center space-x-2 transition-all active:scale-95"
             >
               {loading ? (
                 <>

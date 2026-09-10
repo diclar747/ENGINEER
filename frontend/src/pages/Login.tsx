@@ -107,7 +107,7 @@ export const Login: React.FC = () => {
             </p>
           </div>
           <button type="submit" disabled={loading || phone.length < 6 || pin.length !== 4 || code.length !== 6}
-            className="w-full py-3.5 px-4 rounded-2xl bg-gradient-to-r from-teal-500 to-emerald-500 hover:from-teal-400 hover:to-emerald-400 text-slate-950 font-black text-sm shadow-lg shadow-teal-500/20 flex items-center justify-center gap-2 transition-all hover:scale-[1.02] active:scale-[0.98] disabled:opacity-50">
+            className="w-full py-3.5 px-4 rounded-2xl bg-gradient-to-r from-teal-600 to-emerald-600 hover:from-teal-500 hover:to-emerald-500 text-white font-black text-sm shadow-lg shadow-teal-500/20 flex items-center justify-center gap-2 transition-all hover:scale-[1.02] active:scale-[0.98] disabled:opacity-50">
             {loading ? <Loader2 className="w-5 h-5 animate-spin" /> : (<><span>Ingresar al Pasaporte</span><ArrowRight className="w-4 h-4" /></>)}
           </button>
         </form>

@@ -173,7 +173,7 @@ export const Payments: React.FC = () => {
       <button
         onClick={generate}
         disabled={creating}
-        className="w-full py-4 rounded-2xl bg-gradient-to-r from-teal-500 to-emerald-500 hover:from-teal-400 hover:to-emerald-400 disabled:opacity-50 text-slate-950 font-black text-sm sm:text-base shadow-xl shadow-teal-500/25 flex items-center justify-center gap-2 transition-all hover:scale-[1.01] active:scale-[0.98]"
+        className="w-full py-4 rounded-2xl bg-gradient-to-r from-teal-600 to-emerald-600 hover:from-teal-500 hover:to-emerald-500 disabled:opacity-50 text-white font-black text-sm sm:text-base shadow-xl shadow-teal-500/25 flex items-center justify-center gap-2 transition-all hover:scale-[1.01] active:scale-[0.98]"
       >
         {creating ? (
           <Loader2 className="w-5 h-5 animate-spin" />

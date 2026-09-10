@@ -102,7 +102,7 @@ export const FeedbackProvider: React.FC<{ children: React.ReactNode }> = ({ chil
                     className={`px-4 py-2 rounded-xl text-sm font-black inline-flex items-center gap-2 disabled:opacity-50 ${
                       dlg.danger
                         ? 'bg-rose-600 text-white hover:bg-rose-500'
-                        : 'bg-teal-500 text-slate-950 hover:bg-teal-400'
+                        : 'bg-teal-500 text-white hover:bg-teal-400'
                     }`}
                   >
                     {busy && <Loader2 className="w-4 h-4 animate-spin" />}

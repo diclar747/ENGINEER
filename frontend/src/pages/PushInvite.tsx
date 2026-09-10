@@ -70,7 +70,7 @@ export const PushInvite: React.FC = () => {
           <button
             onClick={handleEnable}
             disabled={busy || state === 'denied'}
-            className="w-full inline-flex items-center justify-center gap-2 px-5 py-3.5 rounded-2xl bg-gradient-to-r from-teal-500 to-emerald-500 hover:from-teal-400 hover:to-emerald-400 disabled:opacity-50 text-slate-950 text-sm font-black shadow-lg shadow-teal-500/25 transition-all active:scale-95"
+            className="w-full inline-flex items-center justify-center gap-2 px-5 py-3.5 rounded-2xl bg-gradient-to-r from-teal-600 to-emerald-600 hover:from-teal-500 hover:to-emerald-500 disabled:opacity-50 text-white text-sm font-black shadow-lg shadow-teal-500/25 transition-all active:scale-95"
           >
             {busy ? <Loader2 className="w-4 h-4 animate-spin" /> : <BellRing className="w-4 h-4" />}
             <span>Aceptar notificaciones</span>

@@ -94,7 +94,7 @@ export const QrStickerStudio: React.FC = () => {
 
         <a
           href={pdfDownloadUrl}
-          className="w-full sm:w-auto flex items-center justify-center gap-2 px-6 py-3.5 rounded-2xl bg-gradient-to-r from-teal-500 to-emerald-500 hover:from-teal-400 hover:to-emerald-400 text-slate-950 font-black text-xs sm:text-sm shadow-xl shadow-teal-500/20 transition-all hover:scale-105 active:scale-95"
+          className="w-full sm:w-auto flex items-center justify-center gap-2 px-6 py-3.5 rounded-2xl bg-gradient-to-r from-teal-600 to-emerald-600 hover:from-teal-500 hover:to-emerald-500 text-white font-black text-xs sm:text-sm shadow-xl shadow-teal-500/20 transition-all hover:scale-105 active:scale-95"
         >
           <Download className="w-4 h-4 sm:w-5 sm:h-5" />
           <span>DESCARGAR PDF PARA IMPRIMIR</span>

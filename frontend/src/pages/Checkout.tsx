@@ -233,7 +233,7 @@ export const Checkout: React.FC = () => {
           <p className="mt-1 text-xs text-fg-muted">Te llevamos a tu panel…</p>
           <Link
             to="/dashboard"
-            className="mt-5 inline-flex items-center gap-2 px-6 py-3 rounded-2xl bg-gradient-to-r from-teal-500 to-emerald-500 hover:from-teal-400 hover:to-emerald-400 text-slate-950 text-sm font-black shadow-lg shadow-teal-500/25"
+            className="mt-5 inline-flex items-center gap-2 px-6 py-3 rounded-2xl bg-gradient-to-r from-teal-600 to-emerald-600 hover:from-teal-500 hover:to-emerald-500 text-white text-sm font-black shadow-lg shadow-teal-500/25"
           >
             <span>Ir a Mi Panel ahora</span>
             <ArrowRight className="w-4 h-4" />

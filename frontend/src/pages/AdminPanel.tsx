@@ -146,7 +146,7 @@ const Resumen: React.FC = () => {
       {/* Rango */}
       <div className="flex flex-wrap items-center gap-2">
         {[7, 30, 90].map((n) => (
-          <button key={n} onClick={() => setP(n)} className={`px-3 py-1.5 rounded-lg text-xs font-bold ${preset === n ? 'bg-teal-500 text-slate-950' : 'bg-muted text-fg-soft'}`}>{n} días</button>
+          <button key={n} onClick={() => setP(n)} className={`px-3 py-1.5 rounded-lg text-xs font-bold ${preset === n ? 'bg-teal-500 text-white' : 'bg-muted text-fg-soft'}`}>{n} días</button>
         ))}
         <input type="date" value={range.from} onChange={(e) => { setPreset(0); setRange({ ...range, from: e.target.value }); }} className={inputCls} />
         <span className="text-fg-muted text-xs">→</span>
@@ -344,7 +344,7 @@ const UserDrawer: React.FC<{ userId: string; onClose: () => void; onChanged: () 
                 <span className="text-xs text-fg-muted">meses</span>
                 <input type="number" min={0} value={extend.days} onChange={(e) => setExtend({ ...extend, days: Number(e.target.value) })} className="w-16 bg-card border border-line rounded-lg px-2 py-1.5 text-xs text-fg" />
                 <span className="text-xs text-fg-muted">días</span>
-                <button disabled={busy} onClick={doExtend} className="ml-auto px-3 py-1.5 rounded-lg bg-teal-500 text-slate-950 text-xs font-bold inline-flex items-center gap-1 disabled:opacity-50"><CalendarPlus className="w-3.5 h-3.5" />Aplicar</button>
+                <button disabled={busy} onClick={doExtend} className="ml-auto px-3 py-1.5 rounded-lg bg-teal-500 text-white text-xs font-bold inline-flex items-center gap-1 disabled:opacity-50"><CalendarPlus className="w-3.5 h-3.5" />Aplicar</button>
               </div>
             </div>
 
@@ -368,7 +368,7 @@ const UserDrawer: React.FC<{ userId: string; onClose: () => void; onChanged: () 
                   </select>
                 </label>
               </div>
-              <button disabled={busy} onClick={save} className="w-full px-4 py-2 rounded-xl bg-teal-500 text-slate-950 font-black text-sm inline-flex items-center justify-center gap-2 disabled:opacity-50">
+              <button disabled={busy} onClick={save} className="w-full px-4 py-2 rounded-xl bg-teal-500 text-white font-black text-sm inline-flex items-center justify-center gap-2 disabled:opacity-50">
                 {busy ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}Guardar cambios
               </button>
             </div>
@@ -742,7 +742,7 @@ const Contenido: React.FC = () => {
             </div>
           ))}
         </div>
-        <button onClick={saveSettings} disabled={savingS} className="mt-3 px-4 py-2 rounded-xl bg-teal-500 text-slate-950 font-bold text-sm inline-flex items-center gap-2 disabled:opacity-50">
+        <button onClick={saveSettings} disabled={savingS} className="mt-3 px-4 py-2 rounded-xl bg-teal-500 text-white font-bold text-sm inline-flex items-center gap-2 disabled:opacity-50">
           {savingS ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />} Guardar precios
         </button>
       </Section>
@@ -763,7 +763,7 @@ const Contenido: React.FC = () => {
             <input value={nw.labelEs} onChange={(e) => setNw({ ...nw, labelEs: e.target.value })} placeholder="Etiqueta ES" className="flex-1 min-w-[120px] bg-panel border border-line rounded-lg px-2 py-1.5 text-xs text-fg" />
             <input value={nw.labelGn} onChange={(e) => setNw({ ...nw, labelGn: e.target.value })} placeholder="Etiqueta GN" className="flex-1 min-w-[120px] bg-panel border border-line rounded-lg px-2 py-1.5 text-xs text-fg" />
             <input type="number" value={nw.sortOrder} onChange={(e) => setNw({ ...nw, sortOrder: Number(e.target.value) })} className="w-14 bg-panel border border-line rounded-lg px-2 py-1.5 text-xs text-fg" />
-            <button onClick={addCond} className="px-3 py-1.5 rounded-lg bg-teal-500 text-slate-950 font-bold text-xs inline-flex items-center gap-1"><Plus className="w-3.5 h-3.5" />Agregar</button>
+            <button onClick={addCond} className="px-3 py-1.5 rounded-lg bg-teal-500 text-white font-bold text-xs inline-flex items-center gap-1"><Plus className="w-3.5 h-3.5" />Agregar</button>
           </div>
         </div>
       </Section>
@@ -861,7 +861,7 @@ const IA: React.FC = () => {
             <input type="number" value={nw.sortOrder} onChange={(e) => setNw({ ...nw, sortOrder: Number(e.target.value) })} className="w-14 bg-panel border border-line rounded-lg px-2 py-1.5 text-xs text-fg" title="Orden" />
           </div>
           <textarea value={nw.content} onChange={(e) => setNw({ ...nw, content: e.target.value })} rows={5} placeholder="Contenido / conocimiento que la IA debe usar para responder…" className={`${inp} font-mono text-xs`} />
-          <button onClick={add} className="px-3.5 py-2 rounded-xl bg-teal-500 text-slate-950 font-bold text-sm inline-flex items-center gap-2"><Plus className="w-4 h-4" />Agregar prompt</button>
+          <button onClick={add} className="px-3.5 py-2 rounded-xl bg-teal-500 text-white font-bold text-sm inline-flex items-center gap-2"><Plus className="w-4 h-4" />Agregar prompt</button>
         </div>
       </Section>
 
@@ -869,7 +869,7 @@ const IA: React.FC = () => {
         <p className="text-xs text-fg-muted mb-3 -mt-1">Bitácora editable de lo que todavía falta implementar del documento de producto. Solo referencia interna.</p>
         <textarea value={settings['prd.pendientes'] ?? ''} onChange={(e) => setSettings({ ...settings, 'prd.pendientes': e.target.value })}
           rows={16} className={`${inp} font-mono text-xs leading-relaxed`} placeholder="- [ ] …" />
-        <button onClick={savePrd} disabled={savingPrd} className="mt-3 px-4 py-2 rounded-xl bg-teal-500 text-slate-950 font-bold text-sm inline-flex items-center gap-2 disabled:opacity-50">
+        <button onClick={savePrd} disabled={savingPrd} className="mt-3 px-4 py-2 rounded-xl bg-teal-500 text-white font-bold text-sm inline-flex items-center gap-2 disabled:opacity-50">
           {savingPrd ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />} Guardar
         </button>
       </Section>
@@ -1029,7 +1029,7 @@ const BotPanel: React.FC = () => {
           <div className="flex flex-wrap gap-2">
             <input value={testPhone} onChange={(e) => setTestPhone(e.target.value)} placeholder="595971…" className={`${inputCls} flex-1 min-w-[140px] font-mono`} />
             <input value={testText} onChange={(e) => setTestText(e.target.value)} placeholder="Texto (opcional)" className={`${inputCls} flex-1 min-w-[140px]`} />
-            <button onClick={sendTest} disabled={testBusy} className="px-3 py-2 rounded-xl bg-teal-500 text-slate-950 text-xs font-black inline-flex items-center gap-1.5 disabled:opacity-50">
+            <button onClick={sendTest} disabled={testBusy} className="px-3 py-2 rounded-xl bg-teal-500 text-white text-xs font-black inline-flex items-center gap-1.5 disabled:opacity-50">
               {testBusy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Send className="w-3.5 h-3.5" />} Enviar
             </button>
           </div>

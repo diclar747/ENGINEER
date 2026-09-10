@@ -161,7 +161,7 @@ export const Register: React.FC = () => {
         {started && (
           <div className="h-1 bg-muted">
             <div
-              className="h-full bg-gradient-to-r from-teal-500 to-emerald-500 transition-all duration-500"
+              className="h-full bg-gradient-to-r from-teal-600 to-emerald-600 transition-all duration-500"
               style={{ width: `${pct}%` }}
             />
           </div>
@@ -201,7 +201,7 @@ export const Register: React.FC = () => {
             <button
               type="submit"
               disabled={phone.replace(/[^0-9]/g, '').length < 7}
-              className="w-full py-3.5 rounded-2xl bg-gradient-to-r from-teal-500 to-emerald-500 hover:from-teal-400 hover:to-emerald-400 text-slate-950 font-black text-sm shadow-lg shadow-teal-500/20 flex items-center justify-center gap-2 transition-all active:scale-[0.98] disabled:opacity-50"
+              className="w-full py-3.5 rounded-2xl bg-gradient-to-r from-teal-600 to-emerald-600 hover:from-teal-500 hover:to-emerald-500 text-white font-black text-sm shadow-lg shadow-teal-500/20 flex items-center justify-center gap-2 transition-all active:scale-[0.98] disabled:opacity-50"
             >
               Empezar registro <ArrowRight className="w-4 h-4" />
             </button>
@@ -254,7 +254,7 @@ export const Register: React.FC = () => {
               </div>
               <button
                 onClick={() => navigate('/login')}
-                className="w-full py-3.5 rounded-2xl bg-gradient-to-r from-teal-500 to-emerald-500 text-slate-950 font-black text-sm flex items-center justify-center gap-2"
+                className="w-full py-3.5 rounded-2xl bg-gradient-to-r from-teal-600 to-emerald-600 text-white font-black text-sm flex items-center justify-center gap-2"
               >
                 Ir a iniciar sesión <ArrowRight className="w-4 h-4" />
               </button>

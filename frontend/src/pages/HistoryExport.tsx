@@ -41,7 +41,7 @@ export const HistoryExport: React.FC = () => {
         <div>
           <button
             onClick={() => setIsModalOpen(true)}
-            className="w-full sm:w-auto px-8 py-4 sm:py-5 rounded-2xl bg-gradient-to-r from-teal-500 to-emerald-500 hover:from-teal-400 hover:to-emerald-400 text-slate-950 font-black text-sm sm:text-base shadow-2xl shadow-teal-500/25 hover:scale-105 active:scale-95 transition-all flex items-center justify-center gap-3 mx-auto"
+            className="w-full sm:w-auto px-8 py-4 sm:py-5 rounded-2xl bg-gradient-to-r from-teal-600 to-emerald-600 hover:from-teal-500 hover:to-emerald-500 text-white font-black text-sm sm:text-base shadow-2xl shadow-teal-500/25 hover:scale-105 active:scale-95 transition-all flex items-center justify-center gap-3 mx-auto"
           >
             <Download className="w-5 h-5 sm:w-6 sm:h-6" />
             <span>DESCARGAR HISTORIAL COMPLETO</span>

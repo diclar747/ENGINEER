@@ -121,7 +121,7 @@ export const PushOptIn: React.FC = () => {
               <button
                 onClick={handleEnable}
                 disabled={busy}
-                className="inline-flex items-center gap-1.5 px-4 py-2.5 rounded-xl bg-gradient-to-r from-teal-500 to-emerald-500 hover:from-teal-400 hover:to-emerald-400 disabled:opacity-50 text-slate-950 text-xs font-black shadow-md shadow-teal-500/20 transition-all hover:scale-105 active:scale-95"
+                className="inline-flex items-center gap-1.5 px-4 py-2.5 rounded-xl bg-gradient-to-r from-teal-600 to-emerald-600 hover:from-teal-500 hover:to-emerald-500 disabled:opacity-50 text-white text-xs font-black shadow-md shadow-teal-500/20 transition-all hover:scale-105 active:scale-95"
               >
                 {busy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <BellRing className="w-3.5 h-3.5" />}
                 <span>Activar Alertas Push</span>

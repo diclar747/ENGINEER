@@ -47,7 +47,7 @@ export const AdminLogin: React.FC = () => {
               className="w-full pl-11 pr-4 py-3 bg-panel border border-line rounded-2xl text-base text-fg placeholder-fg-muted focus:border-teal-500 outline-none" />
           </div>
           <button type="submit" disabled={loading}
-            className="w-full py-3.5 rounded-2xl bg-gradient-to-r from-teal-500 to-emerald-500 text-slate-950 font-black text-sm flex items-center justify-center gap-2 disabled:opacity-50">
+            className="w-full py-3.5 rounded-2xl bg-gradient-to-r from-teal-600 to-emerald-600 text-white font-black text-sm flex items-center justify-center gap-2 disabled:opacity-50">
             {loading ? <Loader2 className="w-5 h-5 animate-spin" /> : 'Ingresar'}
           </button>
         </form>

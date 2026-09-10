@@ -102,7 +102,7 @@ export const Navbar: React.FC = () => {
             ) : (
               <Link
                 to="/login"
-                className="text-xs font-bold px-4 py-2 sm:px-5 sm:py-2.5 rounded-xl bg-gradient-to-r from-teal-500 to-emerald-500 hover:from-teal-400 hover:to-emerald-400 text-slate-950 shadow-md shadow-teal-500/25 transition-all hover:scale-105 active:scale-95"
+                className="text-xs font-bold px-4 py-2 sm:px-5 sm:py-2.5 rounded-xl bg-gradient-to-r from-teal-600 to-emerald-600 hover:from-teal-500 hover:to-emerald-500 text-white shadow-md shadow-teal-500/25 transition-all hover:scale-105 active:scale-95"
               >
                 Iniciar Sesión
               </Link>
