@@ -16,11 +16,9 @@ export const Login: React.FC = () => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [botNumber, setBotNumber] = useState('595985768793');
-  // El código OTP es opcional salvo que el servidor lo pida explícitamente
-  // (REQUIRE_LOGIN_OTP) — por defecto es solo teléfono + PIN, igual que por
-  // WhatsApp. Antes el botón de ingresar quedaba bloqueado sin un código de
-  // 6 dígitos SIEMPRE, lo pidiera el servidor o no.
-  const [needOtp, setNeedOtp] = useState(false);
+  // El login SIEMPRE pide un código de verificación por WhatsApp
+  // (REQUIRE_LOGIN_OTP): el campo del código va visible desde el arranque, no
+  // escondido detrás de un error.
 
   useEffect(() => {
     api.get('/bot/public-info').then((r) => r.data?.botNumber && setBotNumber(String(r.data.botNumber))).catch(() => {});
@@ -50,8 +48,7 @@ export const Login: React.FC = () => {
     } catch (err: any) {
       const d = err?.response?.data;
       if (d?.needOtp) {
-        setNeedOtp(true);
-        setError(otpSent ? 'Cargá el código que te enviamos por WhatsApp.' : 'Este número necesita un código de verificación — tocá "Enviar código".');
+        setError(otpSent ? 'Revisá el código que te llegó por WhatsApp.' : 'Tocá "Enviar código" y cargá el que te llega por WhatsApp.');
       } else {
         setError(d?.error || 'Teléfono, PIN o código incorrecto.');
       }
@@ -60,7 +57,7 @@ export const Login: React.FC = () => {
 
   return (
     <div className="min-h-[80vh] flex items-center justify-center px-4 sm:px-6 lg:px-8 py-8 sm:py-12">
-      <div className="max-w-md w-full bg-card border border-line/90 rounded-3xl p-6 sm:p-8 shadow-2xl space-y-6">
+      <div className="max-w-md w-full bg-card border border-line rounded-3xl p-6 sm:p-8 shadow-lg space-y-6">
         <div className="text-center">
           <div className="w-16 h-16 rounded-2xl bg-gradient-to-tr from-teal-500 to-cyan-400 p-0.5 mx-auto mb-4 shadow-lg shadow-teal-500/20">
             <div className="w-full h-full bg-panel rounded-[14px] flex items-center justify-center">
@@ -92,30 +89,24 @@ export const Login: React.FC = () => {
             </div>
             <p className="mt-1 text-[11px] text-fg-muted text-center">El PIN de 4 dígitos que elegiste en tu registro</p>
           </div>
-          {needOtp ? (
-            <div>
-              <label className="block text-xs font-bold uppercase tracking-wider text-fg-soft mb-1.5">Código de verificación (WhatsApp)</label>
-              <div className="flex gap-2">
-                <input type="text" inputMode="numeric" value={code}
-                  onChange={(e) => setCode(e.target.value.replace(/\D/g, '').slice(0, 6))} placeholder="000000" maxLength={6}
-                  className="flex-1 px-4 py-3 bg-panel border border-line rounded-2xl text-sm font-mono tracking-[0.3em] text-center text-fg placeholder-fg-muted focus:border-teal-500 focus:ring-2 focus:ring-teal-500/20 outline-none transition-all" />
-                <button type="button" onClick={sendOtp} disabled={otpLoading || phone.replace(/\D/g, '').length < 6}
-                  className="px-4 py-3 rounded-2xl border border-teal-500/40 bg-teal-500/10 text-teal-600 dark:text-teal-300 font-bold text-xs whitespace-nowrap hover:bg-teal-500/15 transition-colors disabled:opacity-50">
-                  {otpLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : otpSent ? 'Reenviar' : 'Enviar código'}
-                </button>
-              </div>
-              {otpMsg && <p className="mt-1 text-[11px] text-teal-600 dark:text-teal-300">{otpMsg}</p>}
+          <div>
+            <label className="block text-xs font-bold uppercase tracking-wider text-fg-soft mb-1.5">Código de verificación (WhatsApp)</label>
+            <div className="flex gap-2">
+              <input type="text" inputMode="numeric" value={code}
+                onChange={(e) => setCode(e.target.value.replace(/\D/g, '').slice(0, 6))} placeholder="000000" maxLength={6}
+                className="flex-1 min-w-0 px-4 py-3 bg-panel border border-line rounded-2xl text-sm font-mono tracking-[0.3em] text-center text-fg placeholder-fg-muted focus:border-teal-500 focus:ring-2 focus:ring-teal-500/20 outline-none transition-all" />
+              <button type="button" onClick={sendOtp} disabled={otpLoading || phone.replace(/\D/g, '').length < 6}
+                className="px-4 py-3 rounded-2xl border border-teal-500/40 bg-teal-500/10 text-teal-600 dark:text-teal-300 font-bold text-xs whitespace-nowrap hover:bg-teal-500/15 transition-colors disabled:opacity-50">
+                {otpLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : otpSent ? 'Reenviar' : 'Enviar código'}
+              </button>
             </div>
-          ) : (
-            <button
-              type="button"
-              onClick={() => setNeedOtp(true)}
-              className="text-[11px] text-fg-muted hover:text-teal-600 dark:hover:text-teal-300 underline"
-            >
-              ¿No te deja entrar? Pedí un código de verificación
-            </button>
-          )}
-          <button type="submit" disabled={loading || phone.length < 6 || pin.length !== 4 || (needOtp && code.length !== 6)}
+            <p className="mt-1.5 text-[11px] text-fg-muted">
+              {otpMsg
+                ? <span className="text-teal-600 dark:text-teal-300">{otpMsg}</span>
+                : 'Tocá "Enviar código" y te llega al instante por WhatsApp. Válido por unos minutos.'}
+            </p>
+          </div>
+          <button type="submit" disabled={loading || phone.length < 6 || pin.length !== 4 || code.length !== 6}
             className="w-full py-3.5 px-4 rounded-2xl bg-gradient-to-r from-teal-500 to-emerald-500 hover:from-teal-400 hover:to-emerald-400 text-slate-950 font-black text-sm shadow-lg shadow-teal-500/20 flex items-center justify-center gap-2 transition-all hover:scale-[1.02] active:scale-[0.98] disabled:opacity-50">
             {loading ? <Loader2 className="w-5 h-5 animate-spin" /> : (<><span>Ingresar al Pasaporte</span><ArrowRight className="w-4 h-4" /></>)}
           </button>
