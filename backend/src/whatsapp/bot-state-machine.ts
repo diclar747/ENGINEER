@@ -863,15 +863,20 @@ export class BotStateMachine {
       }
 
       // Respuesta que no es un "sí" claro NI un "no" claro: NO se reinicia el paso
-      // (eso era un loop infinito "Datos detectados" ⇄ "escribí tu nombre"). Se
-      // vuelve a mostrar la MISMA pregunta de confirmación.
+      // (eso era un loop infinito). Se re-muestra la MISMA tarjeta de datos.
       if (!isAffirmative(cleanText)) {
+        const extra = [
+          tempData.extractedDob && `🎂 *Fecha de nacimiento:* ${tempData.extractedDob}`,
+          tempData.extractedBirthPlace && `📍 *Lugar de nacimiento:* ${tempData.extractedBirthPlace}`,
+          tempData.extractedSex && `⚧ *Sexo:* ${tempData.extractedSex}`,
+        ].filter(Boolean).join('\n');
         return {
           replyText:
-            `🔍 *Confirmá tus datos:*\n\n` +
+            `🔍 *Datos detectados automáticamente:*\n\n` +
             `👤 *Nombre:* ${tempData.extractedName || '—'}\n` +
-            `🆔 *Cédula:* ${tempData.extractedCi || '—'}\n\n` +
-            `Respondé *1* si son correctos, o *2* para corregirlos.`,
+            `🆔 *Cédula:* ${tempData.extractedCi || '—'}\n` +
+            (extra ? `${extra}\n` : '') +
+            `\n¿Son correctos?\n*[1]* Sí, continuar ✅\n*[2]* No — mandar otra foto de la cédula 📸`,
         };
       }
 
