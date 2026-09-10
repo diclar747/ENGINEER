@@ -3,6 +3,7 @@ import {
   FileText, Upload, Plus, Loader2, Eye, Calendar, Search, X,
   FlaskConical, Pill, ScanLine, HeartPulse, Image as ImageIcon, Video, File as FileIcon,
 } from 'lucide-react';
+import { Section } from './ui/Layout';
 
 export type Study = {
   id: string; title: string; studyType?: string; studyDate?: string | null;
@@ -74,23 +75,19 @@ export const StudiesList: React.FC<Props> = ({
   const inp = 'bg-panel border border-line rounded-lg px-2.5 py-1.5 text-xs text-fg outline-none focus:border-teal-500';
 
   return (
-    <div className="bg-card border border-line rounded-3xl p-5 sm:p-6 shadow-xl space-y-4">
-      <div className="flex items-center justify-between border-b border-line/80 pb-3">
-        <div>
-          <h3 className="text-sm font-black uppercase tracking-wider text-fg-soft flex items-center gap-2">
-            <FileText className="w-4 h-4 text-teal-600 dark:text-teal-400" />
-            <span>{title}</span>
-          </h3>
-          <p className="text-xs text-fg-muted mt-0.5">{subtitle}</p>
-        </div>
-        {onUpload && (
-          <label className="cursor-pointer px-3.5 py-2 rounded-xl bg-teal-600 hover:bg-teal-500 active:scale-95 text-white font-bold text-xs shadow-md shadow-teal-600/20 flex items-center gap-1.5 transition-all shrink-0">
-            {uploading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}
-            <span>{uploading ? 'Subiendo...' : 'Subir'}</span>
-            <input type="file" className="hidden" onChange={onUpload} disabled={uploading} accept=".pdf,.png,.jpg,.jpeg,.webp,.mp4,.mov" />
-          </label>
-        )}
-      </div>
+    <Section
+      title={title}
+      icon={<FileText className="w-4 h-4" />}
+      bodyClassName="space-y-4"
+      right={onUpload ? (
+        <label className="cursor-pointer px-3.5 py-2 rounded-xl bg-teal-600 hover:bg-teal-500 active:scale-95 text-white font-bold text-xs shadow-md shadow-teal-600/20 flex items-center gap-1.5 transition-all shrink-0">
+          {uploading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}
+          <span>{uploading ? 'Subiendo...' : 'Subir'}</span>
+          <input type="file" className="hidden" onChange={onUpload} disabled={uploading} accept=".pdf,.png,.jpg,.jpeg,.webp,.mp4,.mov" />
+        </label>
+      ) : undefined}
+    >
+      {subtitle && <p className="text-xs text-fg-muted -mt-1">{subtitle}</p>}
 
       {studies.length > 0 && (
         <div className="flex flex-wrap items-center gap-2">
@@ -161,6 +158,6 @@ export const StudiesList: React.FC<Props> = ({
           })}
         </div>
       )}
-    </div>
+    </Section>
   );
 };

@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Pill, Plus, Trash2, Loader2, AlertTriangle, FileText, Camera, PencilLine } from 'lucide-react';
 import type { Medication } from '../types';
+import { Section } from './ui/Layout';
 
 interface Props {
   medications: Medication[];
@@ -75,17 +76,13 @@ export const MedicationsList: React.FC<Props> = ({
   };
 
   return (
-    <div className="bg-card border border-line rounded-3xl p-5 sm:p-6 shadow-xl space-y-4">
-      <div className="flex items-center justify-between border-b border-line/80 pb-3">
-        <div>
-          <h3 className="text-sm font-black uppercase tracking-wider text-fg-soft flex items-center gap-2">
-            <Pill className="w-4 h-4 text-teal-600 dark:text-teal-400" />
-            <span>{title}</span>
-          </h3>
-          <p className="text-xs text-fg-muted mt-0.5">{subtitle}</p>
-        </div>
-        <span className="text-[11px] text-fg-muted">{medications.length}</span>
-      </div>
+    <Section
+      title={title}
+      icon={<Pill className="w-4 h-4" />}
+      right={<span>{medications.length}</span>}
+      bodyClassName="space-y-4"
+    >
+      {subtitle && <p className="text-xs text-fg-muted -mt-1">{subtitle}</p>}
 
       {alerts.length > 0 && (
         <div className="p-3.5 rounded-2xl bg-gradient-to-r from-amber-950/70 via-orange-950/50 to-amber-950/30 border border-amber-500/50">
@@ -184,6 +181,6 @@ export const MedicationsList: React.FC<Props> = ({
           </button>
         </div>
       )}
-    </div>
+    </Section>
   );
 };

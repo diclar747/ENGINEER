@@ -233,8 +233,8 @@ const Movimientos: React.FC = () => {
         <input type="date" value={f.to} onChange={(e) => set('to', e.target.value)} className={inputCls} />
         <button onClick={load} className="px-3 py-2 bg-muted rounded-xl text-fg-soft"><RefreshCw className="w-4 h-4" /></button>
       </div>
-      <div className="overflow-x-auto">
-        <table className="w-full text-xs">
+      <div className="overflow-x-auto overscroll-x-contain rounded-xl border border-line/60 [-webkit-overflow-scrolling:touch]">
+        <table className="w-full text-xs min-w-[640px]">
           <thead className="text-fg-muted border-b border-line"><tr>{['Fecha', 'Tipo', 'Detalle', 'Estado', 'Monto'].map((h) => <th key={h} className="text-left font-semibold px-2 py-2 whitespace-nowrap">{h}</th>)}</tr></thead>
           <tbody>
             {loading && <tr><td colSpan={5} className="py-6 text-center"><Loader2 className="w-4 h-4 animate-spin inline text-teal-500" /></td></tr>}
@@ -461,17 +461,17 @@ const Clientes: React.FC = () => {
     <div className="space-y-3">
       <div className="flex flex-wrap gap-2">
         <div className="relative flex-1 min-w-[180px]">
-          <Search className="w-4 h-4 text-fg-muted absolute left-3 top-2.5" />
+          <Search className="w-4 h-4 text-fg-muted absolute left-3 top-2.5 pointer-events-none" />
           <input value={search} onChange={(e) => { setPage(1); setSearch(e.target.value); }} placeholder="Buscar nombre, teléfono, CI…"
-            className="w-full pl-9 pr-3 py-2 bg-card border border-line rounded-xl text-sm text-fg outline-none focus:border-teal-500" />
+            className={`${inputCls} w-full pl-9`} />
         </div>
         <select value={status} onChange={(e) => { setPage(1); setStatus(e.target.value); }} className={inputCls}>
           <option value="">Todos</option><option value="ACTIVE">Activos</option><option value="PENDING_PAYMENT">Pendiente pago</option><option value="EXPIRED">Vencidos</option><option value="CANCELLED">Cancelados</option>
         </select>
         <button onClick={load} className="px-3 py-2 bg-muted rounded-xl text-fg-soft hover:bg-muted"><RefreshCw className="w-4 h-4" /></button>
       </div>
-      <div className="overflow-x-auto bg-card border border-line rounded-2xl">
-        <table className="w-full text-xs">
+      <div className="overflow-x-auto overscroll-x-contain bg-card border border-line rounded-2xl [-webkit-overflow-scrolling:touch]">
+        <table className="w-full text-xs min-w-[760px]">
           <thead className="text-fg-muted border-b border-line"><tr>{['Nombre', 'Teléfono', 'CI', 'Estado', 'Plan', 'Vence', 'Est.'].map((h) => (<th key={h} className="text-left font-semibold px-3 py-2.5 whitespace-nowrap">{h}</th>))}</tr></thead>
           <tbody>
             {loading && (<tr><td colSpan={7} className="px-3 py-8 text-center"><Loader2 className="w-5 h-5 animate-spin inline text-teal-600 dark:text-teal-400" /></td></tr>)}
@@ -564,8 +564,8 @@ const Suscripciones: React.FC = () => {
           ))}
         </div>
       )}
-      <div className="overflow-x-auto bg-card border border-line rounded-2xl">
-        <table className="w-full text-xs">
+      <div className="overflow-x-auto overscroll-x-contain bg-card border border-line rounded-2xl [-webkit-overflow-scrolling:touch]">
+        <table className="w-full text-xs min-w-[760px]">
           <thead className="text-fg-muted border-b border-line"><tr>{['Cliente', 'Teléfono', 'Plan', 'Estado', 'Inicio', 'Vence', 'Días', 'Multa'].map((h) => (<th key={h} className="text-left font-semibold px-3 py-2.5 whitespace-nowrap">{h}</th>))}</tr></thead>
           <tbody>
             {loading && (<tr><td colSpan={8} className="px-3 py-8 text-center"><Loader2 className="w-5 h-5 animate-spin inline text-teal-600 dark:text-teal-400" /></td></tr>)}
@@ -681,8 +681,8 @@ const Pagos: React.FC = () => {
         </div>
       )}
 
-      <div className="overflow-x-auto bg-card border border-line rounded-2xl">
-        <table className="w-full text-xs">
+      <div className="overflow-x-auto overscroll-x-contain bg-card border border-line rounded-2xl [-webkit-overflow-scrolling:touch]">
+        <table className="w-full text-xs min-w-[760px]">
           <thead className="text-fg-muted border-b border-line"><tr>{['Fecha', 'Cliente', 'Gateway', 'Método', 'Monto', 'Estado', 'Ref', ''].map((h) => (<th key={h} className="text-left font-semibold px-3 py-2.5 whitespace-nowrap">{h}</th>))}</tr></thead>
           <tbody>
             {loading && (<tr><td colSpan={8} className="px-3 py-8 text-center"><Loader2 className="w-5 h-5 animate-spin inline text-teal-600 dark:text-teal-400" /></td></tr>)}
@@ -742,25 +742,23 @@ const Contenido: React.FC = () => {
     ['price.br.monthly', 'BR · Mensual (R$)'], ['price.br.annual', 'BR · Anual (R$)'], ['price.br.fine', 'BR · Multa (R$)'],
   ];
   return (
-    <div className="space-y-6">
-      <section>
-        <h3 className="text-sm font-black text-fg mb-2">Precios de planes</h3>
-        <div className="bg-card border border-line rounded-2xl p-4 grid grid-cols-2 lg:grid-cols-3 gap-3">
+    <div className="space-y-4">
+      <Section title="Precios de planes" icon={<DollarSign className="w-4 h-4" />}>
+        <div className="grid grid-cols-2 lg:grid-cols-3 gap-3">
           {priceKeys.map(([k, label]) => (
             <div key={k}>
               <label className="text-[11px] font-semibold text-fg-muted">{label}</label>
               <input value={settings[k] ?? ''} onChange={(e) => setSettings({ ...settings, [k]: e.target.value })} inputMode="numeric"
-                className="w-full mt-1 bg-panel border border-line rounded-lg px-3 py-2 text-sm text-fg" placeholder="(usa el valor por defecto si está vacío)" />
+                className={`${inputCls} w-full mt-1`} placeholder="(usa el valor por defecto si está vacío)" />
             </div>
           ))}
         </div>
         <button onClick={saveSettings} disabled={savingS} className="mt-3 px-4 py-2 rounded-xl bg-teal-500 text-slate-950 font-bold text-sm inline-flex items-center gap-2 disabled:opacity-50">
           {savingS ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />} Guardar precios
         </button>
-      </section>
-      <section>
-        <h3 className="text-sm font-black text-fg mb-2">Condiciones médicas (opciones del bot)</h3>
-        <div className="bg-card border border-line rounded-2xl divide-y divide-line">
+      </Section>
+      <Section title="Condiciones médicas (opciones del bot)" icon={<ListChecks className="w-4 h-4" />} bodyClassName="-mx-1">
+        <div className="border border-line rounded-xl divide-y divide-line overflow-hidden">
           {conds.map((c) => (
             <div key={c.id} className="p-3 flex flex-wrap items-center gap-2">
               <span className="w-8 text-center font-mono text-fg-muted text-xs">{c.code}</span>
@@ -779,7 +777,7 @@ const Contenido: React.FC = () => {
             <button onClick={addCond} className="px-3 py-1.5 rounded-lg bg-teal-500 text-slate-950 font-bold text-xs inline-flex items-center gap-1"><Plus className="w-3.5 h-3.5" />Agregar</button>
           </div>
         </div>
-      </section>
+      </Section>
     </div>
   );
 };
@@ -833,10 +831,9 @@ const IA: React.FC = () => {
   const inp = 'w-full bg-panel border border-line rounded-lg px-3 py-2 text-sm text-fg outline-none focus:border-teal-500';
 
   return (
-    <div className="space-y-8">
-      <section>
-        <h3 className="text-sm font-black text-fg mb-1">Prompts de IA del asistente</h3>
-        <p className="text-xs text-fg-muted mb-3">
+    <div className="space-y-4">
+      <Section title="Prompts de IA del asistente" icon={<Sparkles className="w-4 h-4" />}>
+        <p className="text-xs text-fg-muted mb-3 -mt-1">
           El bot arma su instrucción concatenando los prompts <b>activos</b> de tipo <i>General</i> + los del momento del usuario
           (<i>antes de registrarse</i> o <i>miembro activo</i>). Se aplican en ~1 minuto, sin reiniciar nada.
         </p>
@@ -877,17 +874,16 @@ const IA: React.FC = () => {
           <textarea value={nw.content} onChange={(e) => setNw({ ...nw, content: e.target.value })} rows={5} placeholder="Contenido / conocimiento que la IA debe usar para responder…" className={`${inp} font-mono text-xs`} />
           <button onClick={add} className="px-3.5 py-2 rounded-xl bg-teal-500 text-slate-950 font-bold text-sm inline-flex items-center gap-2"><Plus className="w-4 h-4" />Agregar prompt</button>
         </div>
-      </section>
+      </Section>
 
-      <section>
-        <h3 className="text-sm font-black text-fg mb-1">Pendientes / lo que falta (PRD)</h3>
-        <p className="text-xs text-fg-muted mb-3">Bitácora editable de lo que todavía falta implementar del documento de producto. Solo referencia interna.</p>
+      <Section title="Pendientes / lo que falta (PRD)" icon={<ListChecks className="w-4 h-4" />}>
+        <p className="text-xs text-fg-muted mb-3 -mt-1">Bitácora editable de lo que todavía falta implementar del documento de producto. Solo referencia interna.</p>
         <textarea value={settings['prd.pendientes'] ?? ''} onChange={(e) => setSettings({ ...settings, 'prd.pendientes': e.target.value })}
           rows={16} className={`${inp} font-mono text-xs leading-relaxed`} placeholder="- [ ] …" />
         <button onClick={savePrd} disabled={savingPrd} className="mt-3 px-4 py-2 rounded-xl bg-teal-500 text-slate-950 font-bold text-sm inline-flex items-center gap-2 disabled:opacity-50">
           {savingPrd ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />} Guardar
         </button>
-      </section>
+      </Section>
     </div>
   );
 };
@@ -1081,8 +1077,8 @@ const BotPanel: React.FC = () => {
           <input value={fPhone} onChange={(e) => setFPhone(e.target.value)} placeholder="Filtrar por número…" className={`${inputCls} font-mono`} />
           <button onClick={load} className="px-3 py-2 bg-muted rounded-xl text-fg-soft"><RefreshCw className="w-4 h-4" /></button>
         </div>
-        <div className="overflow-x-auto">
-          <table className="w-full text-xs">
+        <div className="overflow-x-auto overscroll-x-contain rounded-xl border border-line/60 [-webkit-overflow-scrolling:touch]">
+          <table className="w-full text-xs min-w-[680px]">
             <thead className="text-fg-muted">
               <tr className="text-left [&>th]:py-1.5 [&>th]:font-bold border-b border-line">
                 <th>Hora</th><th>Dir</th><th>Número</th><th>Tipo</th><th>Mensaje</th><th>Estado</th>
@@ -1242,8 +1238,8 @@ const BotHistory: React.FC = () => {
           </button>
         </div>
 
-        <div className="overflow-x-auto">
-          <table className="w-full text-xs">
+        <div className="overflow-x-auto overscroll-x-contain rounded-xl border border-line/60 [-webkit-overflow-scrolling:touch]">
+          <table className="w-full text-xs min-w-[680px]">
             <thead className="text-fg-muted">
               <tr className="text-left [&>th]:py-1.5 [&>th]:font-bold border-b border-line">
                 <th className="w-6"></th><th>Fecha</th><th>Dir</th><th>Número</th><th>Tipo</th><th>Mensaje</th><th>Estado</th><th></th>

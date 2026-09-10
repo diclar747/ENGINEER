@@ -259,7 +259,7 @@ export const RemindersCalendar: React.FC = () => {
 
   if (loading) {
     return (
-      <div className="bg-card border border-line rounded-3xl p-6 shadow-xl text-center py-10">
+      <div className="bg-card border border-line rounded-2xl p-6 shadow-sm text-center py-10">
         <Loader2 className="w-6 h-6 animate-spin inline text-teal-600 dark:text-teal-400" />
       </div>
     );
@@ -274,7 +274,7 @@ export const RemindersCalendar: React.FC = () => {
   const weekDays = Array.from({ length: 7 }, (_, i) => addDaysKey(startOfWeekKey(anchor), i));
 
   return (
-    <div className="bg-card border border-line rounded-3xl p-4 sm:p-6 shadow-xl space-y-4">
+    <div className="bg-card border border-line rounded-2xl p-4 sm:p-5 shadow-sm space-y-4">
       {/* Header */}
       <div className="flex flex-wrap items-center justify-between gap-3 border-b border-line/80 pb-3">
         <h3 className="text-sm font-black uppercase tracking-wider text-fg-soft flex items-center gap-2">

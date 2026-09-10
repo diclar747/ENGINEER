@@ -243,7 +243,7 @@ export const Dashboard: React.FC = () => {
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 sm:gap-8">
         
         {/* QR Code Quick Card */}
-        <div className="bg-card border border-line rounded-3xl p-5 sm:p-6 shadow-xl flex flex-col items-center text-center">
+        <div className="bg-card border border-line rounded-2xl p-4 sm:p-5 shadow-sm flex flex-col items-center text-center">
           <div className="w-12 h-12 rounded-2xl bg-teal-500/10 text-teal-600 dark:text-teal-400 flex items-center justify-center mb-3">
             <QrCode className="w-6 h-6" />
           </div>
