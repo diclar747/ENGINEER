@@ -254,6 +254,36 @@ function bulkReminderDeleteScope(text: string, inReminderCtx: boolean): 'ALL' | 
   return null;
 }
 
+/**
+ * Extrae nombre / teléfono / relación de una línea de contacto de emergencia,
+ * TOLERANTE a cualquier separador (o ninguno). Antes se hacía
+ * `text.split(/[,:\-]/)` — si el usuario escribía el teléfono con "+" y
+ * espacios en vez de guiones (p. ej. "Lorena Franco +595 981 380 730
+ * (Familiar)", sin coma), el split no partía nada, TODO el texto quedaba
+ * como "nombre" y el teléfono caía en el placeholder de relleno
+ * "0981000000" — guardando un contacto de emergencia con el número
+ * INVENTADO, sin avisar. Ahora se busca el teléfono con regex donde sea
+ * que esté (7+ dígitos, tolera +/espacios/puntos/guiones) y se saca la
+ * relación entre paréntesis al final; lo que sobra es el nombre.
+ */
+function parseContactLine(text: string): { name: string; phone: string | null; relationship: string } {
+  let t = (text || '').trim();
+  let relationship = 'Familiar';
+  const relMatch = t.match(/\(([^)]+)\)\s*$/);
+  if (relMatch) {
+    relationship = relMatch[1].trim().slice(0, 40) || 'Familiar';
+    t = t.slice(0, relMatch.index).trim();
+  }
+  const phoneMatch = t.match(/(\+?\d[\d\s.\-]{6,15}\d)/);
+  let phone: string | null = null;
+  if (phoneMatch && phoneMatch.index !== undefined) {
+    phone = phoneMatch[1].replace(/[^\d+]/g, '');
+    t = (t.slice(0, phoneMatch.index) + ' ' + t.slice(phoneMatch.index + phoneMatch[0].length)).trim();
+  }
+  const name = t.replace(/^[,:;\-\s]+|[,:;\-\s]+$/g, '').replace(/\s{2,}/g, ' ').trim() || 'Contacto de Emergencia';
+  return { name, phone, relationship };
+}
+
 /** Disparador global de recuperación de PIN. */
 function isRecoverPinCmd(text: string): boolean {
   const t = norm(text);
@@ -1041,10 +1071,22 @@ export class BotStateMachine {
 
     // STEP 3: EMERGENCY CONTACT
     if (state === 'STEP3_CONTACT') {
-      const contactParts = cleanText.split(/[,:\-]/);
-      const contactName = contactParts[0]?.trim() || 'Contacto de Emergencia';
-      const contactPhone = contactParts[1]?.trim() || '0981000000';
-      const relationship = contactParts[2]?.trim() || 'Familiar';
+      const parsedContact = parseContactLine(cleanText);
+      // Sin teléfono NO se guarda — antes esto caía en el placeholder "0981000000"
+      // en silencio, dejando un contacto de emergencia con un número inventado.
+      if (!parsedContact.phone) {
+        return {
+          replyText: tr(
+            `😕 No encontré un número de teléfono ahí. Escribí el *nombre y el teléfono completo* (con código de área) — ej: *María Pérez, 0981123456 (Madre)*.`,
+            `😕 Ndaijuhúi teléfono. Ehai *réra ha teléfono* — techapyrã: *María Pérez, 0981123456 (Sy)*.`,
+            `😕 Não encontrei um telefone aí. Escreva o *nome e telefone completo* — ex: *Maria Pérez, 0981123456 (Mãe)*.`,
+            `😕 I couldn't find a phone number there. Type the *name and full phone number* — e.g. *Maria Perez, 0981123456 (Mother)*.`
+          ),
+        };
+      }
+      const contactName = parsedContact.name;
+      const contactPhone = parsedContact.phone;
+      const relationship = parsedContact.relationship;
 
       // Save emergency contact to database
       await prisma.emergencyContact.create({
@@ -1111,12 +1153,13 @@ export class BotStateMachine {
     if (state === 'STEP5_EMAIL') {
       const opts = await getConditionOptions();
       const noneIdx = opts.length + 1;
-      const listEs = opts.map((o, i) => `*[${i + 1}]* ${o.labelEs}`).join('\n') + `\n*[${noneIdx}]* Ninguna condición`;
-      const listGn = opts.map((o, i) => `*[${i + 1}]* ${o.labelGn}`).join('\n') + `\n*[${noneIdx}]* Mba'eve`;
+      const otrosIdx = noneIdx + 1;
+      const listEs = opts.map((o, i) => `*[${i + 1}]* ${o.labelEs}`).join('\n') + `\n*[${noneIdx}]* Ninguna condición\n*(${otrosIdx})* Otros`;
+      const listGn = opts.map((o, i) => `*[${i + 1}]* ${o.labelGn}`).join('\n') + `\n*[${noneIdx}]* Mba'eve\n*(${otrosIdx})* Ambue`;
 
       await updateState(
         'STEP6_CONDITIONS',
-        { email: cleanText, condLabels: opts.map((o) => o.labelEs), condNoneIdx: noneIdx },
+        { email: cleanText, condLabels: opts.map((o) => o.labelEs), condNoneIdx: noneIdx, condOtrosIdx: otrosIdx },
         { email: cleanText }
       );
 
@@ -1146,49 +1189,15 @@ export class BotStateMachine {
       };
     }
 
-    // STEP 6: MEDICAL CONDITIONS & ALLERGIES
-    if (state === 'STEP6_CONDITIONS') {
-      const tmp6 = getTempData();
-      const condLabels: string[] = Array.isArray(tmp6.condLabels) && tmp6.condLabels.length
-        ? tmp6.condLabels
-        : DEFAULT_CONDITIONS.map((o) => o.labelEs);
-      const noneIdx: number = tmp6.condNoneIdx || condLabels.length + 1;
-
-      const picked = (cleanText.match(/\d+/g) || []).map(Number);
-      const selectedConditions: string[] = [];
-      for (const n of picked) {
-        if (n >= 1 && n <= condLabels.length && !selectedConditions.includes(condLabels[n - 1])) {
-          selectedConditions.push(condLabels[n - 1]);
-        }
-      }
-      // Si marcó "Ninguna", se ignoran las demás.
-      if (picked.includes(noneIdx)) selectedConditions.length = 0;
-
-      // Extract allergy text (lo que no son números / separadores de la selección)
-      let allergies = cleanText.replace(/[0-9,;\-]/g, ' ').replace(/\s+/g, ' ').trim();
-
-      // Hace falta una respuesta EXPLÍCITA: un número válido, o "ninguna". Sin eso NO
-      // se avanza (antes cualquier texto — o una reentrega de WhatsApp — saltaba el paso).
-      const saidNone = picked.includes(noneIdx) || /\b(ningun[ao]|nada|no\s+tengo|sin\s+condicion|no)\b/i.test(norm(cleanText));
-      const pickedValid = selectedConditions.length > 0;
-      if (!pickedValid && !saidNone) {
-        return {
-          replyText: tr(
-            `🩺 Respondé con los *números* de tus condiciones separados por coma (ej: *1, 3*), o *${noneIdx}* si no tenés ninguna.\n_Podés agregar tus alergias después de los números._`,
-            `🩺 Embohovái umi *papapy* nde mba'asýgui, coma rupive (techapyrã: *1, 3*), térã *${noneIdx}* ndaipóri ramo.`,
-            `🩺 Responda com os *números* das suas condições separados por vírgula (ex: *1, 3*), ou *${noneIdx}* se nenhuma.`,
-            `🩺 Reply with the *numbers* of your conditions separated by commas (e.g. *1, 3*), or *${noneIdx}* if none.`
-          ),
-        };
-      }
-      if (!allergies || saidNone && !pickedValid) allergies = 'Ninguna declarada';
-
+    // Cierra el Paso 6 (condiciones + alergias) y pasa al Paso 7 (grupo sanguíneo).
+    // Reusado por STEP6_CONDITIONS (camino directo) y STEP6_OTHER_TEXT (cuando
+    // eligió "Otros" y hace falta un mensaje más para el texto libre).
+    const finishConditionsStep = async (selectedConditions: string[], allergies: string) => {
       await updateState('STEP6B_BLOOD', { selectedConditions, allergies }, {
         emergencyConditions: JSON.stringify(selectedConditions),
         severeAllergies: allergies,
         contraindicatedMeds: allergies.toLowerCase().includes('penicilina') ? 'Penicilina, Betalactámicos' : 'Ninguno declarado',
       });
-
       return {
         replyText: tr(
           `✅ *Condiciones médicas y alergias registradas.*\n\n` +
@@ -1205,6 +1214,87 @@ export class BotStateMachine {
             `Choose:\n*[1]* O+\n*[2]* O−\n*[3]* A+\n*[4]* A−\n*[5]* B+\n*[6]* B−\n*[7]* AB+\n*[8]* AB−\n*[9]* I don't know`
         ),
       };
+    };
+
+    // Paso 6b: eligió "Otros" y no vino texto en el mismo mensaje → un mensaje
+    // más pidiendo la descripción, y recién ahí se cierra el paso.
+    if (state === 'STEP6_OTHER_TEXT') {
+      const desc = cleanText.trim();
+      if (desc.length < 2) {
+        return {
+          replyText: tr(
+            `✏️ Contame en pocas palabras cuál es tu otra condición médica:`,
+            `✏️ Ehai mbovymi nde mba'asy ambue:`,
+            `✏️ Me conte em poucas palavras qual é sua outra condição médica:`,
+            `✏️ Tell me in a few words what your other medical condition is:`
+          ),
+        };
+      }
+      const tmp6b = getTempData();
+      const selectedConditions: string[] = Array.isArray(tmp6b.selectedConditions) ? tmp6b.selectedConditions : [];
+      selectedConditions.push(`Otros: ${desc.slice(0, 80)}`);
+      return finishConditionsStep(selectedConditions, tmp6b.allergies || 'Ninguna declarada');
+    }
+
+    // STEP 6: MEDICAL CONDITIONS & ALLERGIES
+    if (state === 'STEP6_CONDITIONS') {
+      const tmp6 = getTempData();
+      const condLabels: string[] = Array.isArray(tmp6.condLabels) && tmp6.condLabels.length
+        ? tmp6.condLabels
+        : DEFAULT_CONDITIONS.map((o) => o.labelEs);
+      const noneIdx: number = tmp6.condNoneIdx || condLabels.length + 1;
+      const otrosIdx: number = tmp6.condOtrosIdx || noneIdx + 1;
+
+      const picked = (cleanText.match(/\d+/g) || []).map(Number);
+      const selectedConditions: string[] = [];
+      for (const n of picked) {
+        if (n >= 1 && n <= condLabels.length && !selectedConditions.includes(condLabels[n - 1])) {
+          selectedConditions.push(condLabels[n - 1]);
+        }
+      }
+      // Si marcó "Ninguna", se ignoran las demás.
+      if (picked.includes(noneIdx)) selectedConditions.length = 0;
+      const pickedOtros = picked.includes(otrosIdx);
+
+      // Extract allergy text (lo que no son números / separadores de la selección)
+      let allergies = cleanText.replace(/[0-9,;\-]/g, ' ').replace(/\s+/g, ' ').trim();
+
+      // Hace falta una respuesta EXPLÍCITA: un número válido, "Otros", o "ninguna". Sin
+      // eso NO se avanza (antes cualquier texto — o una reentrega de WhatsApp — saltaba el paso).
+      const saidNone = picked.includes(noneIdx) || /\b(ningun[ao]|nada|no\s+tengo|sin\s+condicion|no)\b/i.test(norm(cleanText));
+      const pickedValid = selectedConditions.length > 0 || pickedOtros;
+      if (!pickedValid && !saidNone) {
+        return {
+          replyText: tr(
+            `🩺 Respondé con los *números* de tus condiciones separados por coma (ej: *1, 3*), *${otrosIdx}* si tenés otra, o *${noneIdx}* si no tenés ninguna.\n_Podés agregar tus alergias después de los números._`,
+            `🩺 Embohovái umi *papapy* nde mba'asýgui, coma rupive (techapyrã: *1, 3*), térã *${noneIdx}* ndaipóri ramo.`,
+            `🩺 Responda com os *números* das suas condições separados por vírgula (ex: *1, 3*), *${otrosIdx}* se tem outra, ou *${noneIdx}* se nenhuma.`,
+            `🩺 Reply with the *numbers* of your conditions separated by commas (e.g. *1, 3*), *${otrosIdx}* for another one, or *${noneIdx}* if none.`
+          ),
+        };
+      }
+      if (!allergies || (saidNone && !pickedValid)) allergies = 'Ninguna declarada';
+
+      // "Otros" elegido: el texto libre de este mismo mensaje (si vino) describe la
+      // condición, no una alergia. Sin texto → se pregunta aparte (STEP6_OTHER_TEXT).
+      if (pickedOtros) {
+        const otherDesc = allergies !== 'Ninguna declarada' ? allergies : '';
+        if (!otherDesc) {
+          await updateState('STEP6_OTHER_TEXT', { selectedConditions, allergies: 'Ninguna declarada' });
+          return {
+            replyText: tr(
+              `✏️ Contame en pocas palabras cuál es tu otra condición médica:`,
+              `✏️ Ehai mbovymi nde mba'asy ambue:`,
+              `✏️ Me conte em poucas palavras qual é sua outra condição médica:`,
+              `✏️ Tell me in a few words what your other medical condition is:`
+            ),
+          };
+        }
+        selectedConditions.push(`Otros: ${otherDesc.slice(0, 80)}`);
+        allergies = 'Ninguna declarada';
+      }
+
+      return finishConditionsStep(selectedConditions, allergies);
     }
 
     // STEP 6B: BLOOD TYPE / RH
@@ -1393,9 +1483,11 @@ export class BotStateMachine {
       const pr = await PaymentService.getPlanPrices();
       const gs = (n: number) => `Gs. ${n.toLocaleString('es-PY')}`;
       const rs = (n: number) => `R$ ${n.toLocaleString('pt-BR')}`;
+      const us = (n: number) => `U$ ${n.toFixed(2)}`;
       const menu =
         `🇵🇾 *Paraguay:*\n*[1]* Plan Mensual (${gs(pr.PY.MONTHLY)} / mes)\n*[2]* Plan Anual (${gs(pr.PY.ANNUAL)} / año)\n\n` +
-        `🇧🇷 *Brasil:*\n*[3]* Plano Mensal (${rs(pr.BR.MONTHLY)} / mês)\n*[4]* Plano Anual (${rs(pr.BR.ANNUAL)} / ano)\n\n`;
+        `🇧🇷 *Brasil:*\n*[3]* Plano Mensal (${rs(pr.BR.MONTHLY)} / mês)\n*[4]* Plano Anual (${rs(pr.BR.ANNUAL)} / ano)\n\n` +
+        `🇺🇸 *USA:*\n*[5]* Plan Mensual (${us(pr.USA.MONTHLY)}/mes)\n*[6]* Plan Anual (${us(pr.USA.ANNUAL)})\n\n`;
 
       await updateState('STEP8_PAYMENT', {});
       return {
@@ -1404,29 +1496,29 @@ export class BotStateMachine {
             `💳 *Paso 9/9 (Activación y Pago):*\n` +
             `Elegí tu país y plan para activar tu Bio-Pass y generar tu QR de rescate:\n\n` +
             menu +
-            `_Respondé 1, 2, 3 o 4 para recibir el link de pago y el código PIX / Alias._`,
+            `_Respondé 1, 2, 3, 4, 5 o 6 para recibir el link de pago y el código PIX / Alias._`,
           `✅ *Clave de recuperación oñeñemoneĩ.*\n\n` +
             `💳 *Paso 9/9 (Activación ha Pago):*\n` +
             `Eiporavo nde tetã ha plan:\n\n` +
             menu +
-            `_Embohovái 1, 2, 3 térã 4._`,
+            `_Embohovái 1, 2, 3, 4, 5 térã 6._`,
           `✅ *Chave de recuperação confirmada.*\n\n` +
             `💳 *Passo 9/9 (Ativação e Pagamento):*\n` +
             `Escolha seu país e plano para ativar seu Bio-Pass e gerar seu QR:\n\n` +
             menu +
-            `_Responda 1, 2, 3 ou 4 para receber o link de pagamento e o código PIX / Alias._`,
+            `_Responda 1, 2, 3, 4, 5 ou 6 para receber o link de pagamento e o código PIX / Alias._`,
           `✅ *Recovery key confirmed.*\n\n` +
             `💳 *Step 9/9 (Activation & Payment):*\n` +
             `Choose your country and plan to activate your Bio-Pass and generate your rescue QR:\n\n` +
             menu +
-            `_Reply 1, 2, 3 or 4 to get the payment link and PIX / Alias code._`
+            `_Reply 1, 2, 3, 4, 5 or 6 to get the payment link and PIX / Alias / PayPal code._`
         ),
       };
     }
 
     // STEP 8: PAYMENT PLAN SELECTION & ORDER GENERATION
     if (state === 'STEP8_PAYMENT') {
-      let country: 'PARAGUAY' | 'BRASIL' = 'PARAGUAY';
+      let country: 'PARAGUAY' | 'BRASIL' | 'USA' = 'PARAGUAY';
       let plan: 'MONTHLY' | 'ANNUAL' = 'ANNUAL';
 
       if (cleanText === '1') {
@@ -1440,6 +1532,12 @@ export class BotStateMachine {
         plan = 'MONTHLY';
       } else if (cleanText === '4') {
         country = 'BRASIL';
+        plan = 'ANNUAL';
+      } else if (cleanText === '5') {
+        country = 'USA';
+        plan = 'MONTHLY';
+      } else if (cleanText === '6') {
+        country = 'USA';
         plan = 'ANNUAL';
       }
 
@@ -1466,6 +1564,17 @@ export class BotStateMachine {
             `🏦 *Alternativa — Transferencia SIPAP / Tigo Money:*\n` +
             `${order.aliasInfo}\n\n` +
             `_Apenas se acredite el pago, tu QR y Kit de Stickers (3x3 cm) se envían acá automáticamente._`,
+        };
+      } else if (country === 'USA') {
+        // Sin gateway de tarjeta USD integrado: instrucciones manuales (PayPal / Zelle,
+        // editables en /admin → Contenido), confirmación manual como la SIPAP de Paraguay.
+        return {
+          replyText: `💳 *PAYMENT ORDER GENERATED (USA)*\n\n` +
+            `💰 *Amount:* ${order.formattedAmount} (${plan === 'ANNUAL' ? 'Annual Plan' : 'Monthly Plan'})\n` +
+            `🔢 *Reference:* \`${order.referenceCode}\`\n\n` +
+            `🌐 *Pay online (card):*\n${order.paymentLink}\n\n` +
+            `💵 *Or pay via PayPal / Zelle:*\n${order.aliasInfo}\n\n` +
+            `_As soon as we confirm your payment, your rescue QR and Sticker Kit (3x3 cm, shipped) will be released here._`,
         };
       } else {
         return {
@@ -2475,17 +2584,21 @@ export class BotStateMachine {
           };
         }
         if (freeIntent.intent === 'CHANGE_CONTACT' && freeIntent.contactName) {
+          // Sin teléfono NO se guarda (antes caía en el placeholder "0981000000" sin avisar).
+          if (!freeIntent.contactPhone) {
+            return { replyText: `📞 Decime también el *teléfono* de ${freeIntent.contactName} para guardar el contacto (con código de área).` + contMsg };
+          }
           await prisma.emergencyContact.deleteMany({ where: { userId: user.id } });
           await prisma.emergencyContact.create({
             data: {
               userId: user.id,
               fullName: freeIntent.contactName,
-              phoneNumber: freeIntent.contactPhone || '0981000000',
+              phoneNumber: freeIntent.contactPhone,
               isPrimary: true,
             },
           });
           return {
-            replyText: `✅ *Contacto de emergencia actualizado:*\n👤 ${freeIntent.contactName}\n📞 ${freeIntent.contactPhone || 'Guardado'}` + contMsg,
+            replyText: `✅ *Contacto de emergencia actualizado:*\n👤 ${freeIntent.contactName}\n📞 ${freeIntent.contactPhone}` + contMsg,
           };
         }
         if (freeIntent.intent === 'CHANGE_ADDRESS' && freeIntent.value) {
@@ -2866,17 +2979,21 @@ export class BotStateMachine {
       }
 
       if (parsedIntent.intent === 'CHANGE_CONTACT' && parsedIntent.contactName) {
+        // Sin teléfono NO se guarda (antes caía en el placeholder "0981000000" sin avisar).
+        if (!parsedIntent.contactPhone) {
+          return { replyText: `📞 Decime también el *teléfono* de ${parsedIntent.contactName} para guardar el contacto (con código de área).` };
+        }
         await prisma.emergencyContact.deleteMany({ where: { userId: user.id } });
         await prisma.emergencyContact.create({
           data: {
             userId: user.id,
             fullName: parsedIntent.contactName,
-            phoneNumber: parsedIntent.contactPhone || '0981000000',
+            phoneNumber: parsedIntent.contactPhone,
             isPrimary: true,
           },
         });
         return {
-          replyText: `✅ *Contacto de emergencia actualizado:*\n👤 ${parsedIntent.contactName}\n📞 ${parsedIntent.contactPhone || 'Guardado'}`,
+          replyText: `✅ *Contacto de emergencia actualizado:*\n👤 ${parsedIntent.contactName}\n📞 ${parsedIntent.contactPhone}`,
         };
       }
 

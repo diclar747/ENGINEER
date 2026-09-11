@@ -4,7 +4,7 @@ import { api } from '../utils/api';
 import { CreditCard, CheckCircle2, Loader2, ArrowRight, ShieldCheck, Sparkles, Check } from 'lucide-react';
 import { stripAsterisks } from '../utils/textFormat';
 
-type Country = 'PARAGUAY' | 'BRASIL';
+type Country = 'PARAGUAY' | 'BRASIL' | 'USA';
 type Plan = 'MONTHLY' | 'ANNUAL';
 
 export const Payments: React.FC = () => {
@@ -52,16 +52,19 @@ export const Payments: React.FC = () => {
 
   // Los precios vienen de /payments/methods (editables desde el panel admin). Los textos
   // estáticos quedan solo como fallback si el endpoint falla.
-  const cc = country === 'PARAGUAY' ? pricing?.paraguay : pricing?.brasil;
+  const cc = country === 'PARAGUAY' ? pricing?.paraguay : country === 'USA' ? pricing?.usa : pricing?.brasil;
   const isPY = country === 'PARAGUAY';
+  const isUSA = country === 'USA';
   const fb = isPY
     ? { annual: 'Gs. 300.000', monthly: 'Gs. 35.000', methods: ['Bancard · Tarjetas de Crédito / Débito', 'Transferencia SIPAP (Alias: BIOPASS.PY)', 'Billetera Tigo Money'] }
-    : { annual: 'R$ 220,00', monthly: 'R$ 25,00', methods: ['PIX Instantâneo (Copia e Cola + QR)', 'Cartão de Crédito e Débito'] };
+    : isUSA
+      ? { annual: 'U$ 20.00', monthly: 'U$ 2.00', methods: ['PayPal', 'Zelle'] }
+      : { annual: 'R$ 220,00', monthly: 'R$ 25,00', methods: ['PIX Instantâneo (Copia e Cola + QR)', 'Cartão de Crédito e Débito'] };
   const plans = {
-    flag: isPY ? '🇵🇾' : '🇧🇷',
-    annual: `${cc?.plans?.annual?.formatted || fb.annual} / ${isPY ? 'año' : 'ano'}`,
-    annualSave: isPY ? 'Ahorras 2 meses' : 'Economize 2 meses',
-    monthly: `${cc?.plans?.monthly?.formatted || fb.monthly} / ${isPY ? 'mes' : 'mês'}`,
+    flag: isPY ? '🇵🇾' : isUSA ? '🇺🇸' : '🇧🇷',
+    annual: `${cc?.plans?.annual?.formatted || fb.annual} / ${isPY ? 'año' : isUSA ? 'year' : 'ano'}`,
+    annualSave: isPY ? 'Ahorras 2 meses' : isUSA ? 'Save 4 months' : 'Economize 2 meses',
+    monthly: `${cc?.plans?.monthly?.formatted || fb.monthly} / ${isPY ? 'mes' : isUSA ? 'month' : 'mês'}`,
     methods: (cc?.methods && cc.methods.length ? cc.methods : fb.methods) as string[],
   };
 
@@ -98,8 +101,8 @@ export const Payments: React.FC = () => {
         <label className="block text-xs font-bold uppercase tracking-wider text-fg-muted">
           Selecciona tu país de facturación:
         </label>
-        <div className="grid grid-cols-2 gap-3">
-          {(['PARAGUAY', 'BRASIL'] as Country[]).map((c) => (
+        <div className="grid grid-cols-3 gap-3">
+          {(['PARAGUAY', 'BRASIL', 'USA'] as Country[]).map((c) => (
             <button
               key={c}
               onClick={() => setCountry(c)}
@@ -109,8 +112,8 @@ export const Payments: React.FC = () => {
                   : 'border-line bg-card hover:border-line'
               }`}
             >
-              <span className="text-2xl">{c === 'PARAGUAY' ? '🇵🇾' : '🇧🇷'}</span>
-              <p className="mt-1 text-sm font-bold text-fg">{c === 'PARAGUAY' ? 'Paraguay' : 'Brasil'}</p>
+              <span className="text-2xl">{c === 'PARAGUAY' ? '🇵🇾' : c === 'USA' ? '🇺🇸' : '🇧🇷'}</span>
+              <p className="mt-1 text-sm font-bold text-fg">{c === 'PARAGUAY' ? 'Paraguay' : c === 'USA' ? 'USA' : 'Brasil'}</p>
             </button>
           ))}
         </div>

@@ -295,20 +295,22 @@ export const Checkout: React.FC = () => {
             </div>
           )}
 
-          {/* Alias / transfer (Paraguay) */}
+          {/* Alias / transfer (Paraguay: SIPAP/Tigo · USA: PayPal/Zelle) */}
           {order.aliasInfo && (
             <div className="rounded-3xl border border-line bg-card p-6 space-y-3 shadow-xl">
               <h3 className="text-sm font-bold text-fg flex items-center gap-2">
                 <Landmark className="w-4 h-4 text-teal-600 dark:text-teal-400" />
-                <span>Transferencia SIPAP / Tigo Money</span>
+                <span>{order.currency === 'USD' ? 'PayPal / Zelle' : 'Transferencia SIPAP / Tigo Money'}</span>
               </h3>
               <pre className="text-xs whitespace-pre-wrap bg-panel border border-line rounded-xl p-3.5 text-fg-soft font-mono leading-relaxed">
                 {order.aliasInfo}
               </pre>
               <div className="flex flex-wrap items-center gap-2 pt-1">
-                <CopyButton text={order.aliasInfo} label="Copiar Datos SIPAP" />
+                <CopyButton text={order.aliasInfo} label={order.currency === 'USD' ? 'Copy details' : 'Copiar Datos SIPAP'} />
                 <span className="text-[11px] text-fg-muted">
-                  Envía el comprobante por WhatsApp para confirmación manual si no usas Bancard.
+                  {order.currency === 'USD'
+                    ? 'Send your receipt via WhatsApp for manual confirmation.'
+                    : 'Envía el comprobante por WhatsApp para confirmación manual si no usas Bancard.'}
                 </span>
               </div>
             </div>

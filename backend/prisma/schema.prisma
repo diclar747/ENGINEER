@@ -39,6 +39,7 @@ enum PlanType {
 enum CountryCode {
   PARAGUAY
   BRASIL
+  USA
   OTHER
 }
 

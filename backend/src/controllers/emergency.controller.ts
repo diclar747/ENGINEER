@@ -3,6 +3,21 @@ import { prisma } from '../database/prisma';
 import { EmergencyService } from '../services/emergency.service';
 import { ZeroKnowledgeSecurity } from '../security/zero-knowledge';
 
+/**
+ * IP real del visitante. El pedido pasa Cloudflare → Traefik → nginx del frontend
+ * (proxy /api) → este backend: 3 saltos, pero `app.set('trust proxy', 1)` solo
+ * confía en 1 → `req.ip` terminaba resolviendo la IP INTERNA de Traefik (rango
+ * `10.x`), nunca la real — por eso la alerta de escaneo siempre mostraba
+ * "Ubicación aproximada: Asunción (Acceso Local/Prueba)" y "IP: 10.0.x.x" incluso
+ * en escaneos genuinos desde afuera. Cloudflare (proxied/orange-cloud) siempre
+ * pone `CF-Connecting-IP` con la IP real del visitante — se usa esa primero.
+ */
+function realClientIp(req: Request): string {
+  const cf = req.headers['cf-connecting-ip'];
+  if (typeof cf === 'string' && cf.trim()) return cf.trim();
+  return req.ip || req.socket.remoteAddress || '127.0.0.1';
+}
+
 export class EmergencyController {
   /**
    * Public emergency scan endpoint (No PIN required)
@@ -10,7 +25,7 @@ export class EmergencyController {
    */
   public static async getEmergencyCard(req: Request, res: Response): Promise<void> {
     const { token } = req.params;
-    const ip = req.ip || req.socket.remoteAddress || '127.0.0.1';
+    const ip = realClientIp(req);
     const userAgent = req.headers['user-agent'] || 'Unknown Scanner Browser';
 
     try {
@@ -62,7 +77,7 @@ export class EmergencyController {
     }
 
     // Log consultation access
-    const ip = req.ip || req.socket.remoteAddress || '127.0.0.1';
+    const ip = realClientIp(req);
     await prisma.scanAuditLog.create({
       data: {
         userId: user.id,

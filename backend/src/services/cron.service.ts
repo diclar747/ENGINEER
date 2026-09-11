@@ -60,7 +60,7 @@ export class CronService {
       const renewalOrder = await PaymentService.createPaymentOrder({
         userId: user.id,
         plan: sub.plan,
-        country: isPY ? 'PARAGUAY' : 'BRASIL',
+        country: sub.country === 'USA' ? 'USA' : isPY ? 'PARAGUAY' : 'BRASIL',
         isFine: sub.status === 'CANCELLED',
       });
 

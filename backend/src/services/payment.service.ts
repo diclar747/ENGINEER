@@ -10,7 +10,7 @@ import { BancardService } from './bancard.service';
 export interface CreateOrderParams {
   userId: string;
   plan: 'MONTHLY' | 'ANNUAL';
-  country: 'PARAGUAY' | 'BRASIL';
+  country: 'PARAGUAY' | 'BRASIL' | 'USA';
   paymentMethod?: string;
   isFine?: boolean;
 }
@@ -18,13 +18,22 @@ export interface CreateOrderParams {
 interface PlanPriceTable {
   PY: { MONTHLY: number; ANNUAL: number; FINE: number };
   BR: { MONTHLY: number; ANNUAL: number; FINE: number };
+  USA: { MONTHLY: number; ANNUAL: number; FINE: number };
+}
+
+/** Formatea el monto en la moneda del país. */
+function formatAmount(country: CreateOrderParams['country'], amount: number): string {
+  if (country === 'PARAGUAY') return `Gs. ${amount.toLocaleString('es-PY')}`;
+  if (country === 'USA') return `U$ ${amount.toFixed(2)}`;
+  return `R$ ${amount.toFixed(2)}`;
 }
 
 export class PaymentService {
   /**
    * Precios de los planes. Se leen de AppSetting (editables desde /admin → Contenido),
    * con fallback a config.payments.planPrices (env). Claves: price.py.monthly, price.py.annual,
-   * price.py.fine, price.br.monthly, price.br.annual, price.br.fine.
+   * price.py.fine, price.br.monthly, price.br.annual, price.br.fine, price.usa.monthly,
+   * price.usa.annual, price.usa.fine.
    */
   public static async getPlanPrices(): Promise<PlanPriceTable> {
     const def = config.payments.planPrices;
@@ -46,9 +55,14 @@ export class PaymentService {
           ANNUAL: num('price.br.annual', def.BR.ANNUAL),
           FINE: num('price.br.fine', def.BR.FINE),
         },
+        USA: {
+          MONTHLY: num('price.usa.monthly', def.USA.MONTHLY),
+          ANNUAL: num('price.usa.annual', def.USA.ANNUAL),
+          FINE: num('price.usa.fine', def.USA.FINE),
+        },
       };
     } catch {
-      return { PY: { ...def.PY }, BR: { ...def.BR } };
+      return { PY: { ...def.PY }, BR: { ...def.BR }, USA: { ...def.USA } };
     }
   }
 
@@ -57,10 +71,12 @@ export class PaymentService {
    * con fallback a config/env. Claves AppSetting:
    *   pay.py.bank · pay.py.alias · pay.py.tigo · pay.py.extra  (líneas libres: Pagopar, Personal Pay, tPago…)
    *   pay.br.pix · pay.br.extra
+   *   pay.usa.paypal · pay.usa.zelle · pay.usa.extra
    */
   public static async getPaymentMethods(): Promise<{
     py: { bank: string; alias: string; tigo: string; extra: string };
     br: { pix: string; extra: string };
+    usa: { paypal: string; zelle: string; extra: string };
   }> {
     const c = config.payments;
     let s: Record<string, string> = {};
@@ -81,13 +97,20 @@ export class PaymentService {
         pix: s['pay.br.pix'] || c.brasilPixKey,
         extra: s['pay.br.extra'] || '',
       },
+      usa: {
+        paypal: s['pay.usa.paypal'] || c.usaPaypal,
+        zelle: s['pay.usa.zelle'] || c.usaZelle,
+        extra: s['pay.usa.extra'] || '',
+      },
     };
   }
 
   /**
-   * Creates a payment order for Paraguay or Brasil.
+   * Creates a payment order for Paraguay, Brasil or USA.
    * - PY: Bancard vPOS hosted checkout when configured, plus alias/transfer instructions as fallback.
    * - BR: real Pix BR Code (valid CRC16) or Mercado Pago Pix charge.
+   * - USA: instrucciones manuales (PayPal / Zelle), editables desde /admin — no hay gateway de
+   *   tarjeta USD integrado; se confirma manual como la transferencia SIPAP de Paraguay.
    * The `paymentLink` always points to the in-app /checkout page, which renders the right method.
    */
   public static async createPaymentOrder(params: CreateOrderParams) {
@@ -98,10 +121,11 @@ export class PaymentService {
     if (!user) throw new Error('User not found');
 
     const isPY = params.country === 'PARAGUAY';
-    const currency = isPY ? 'PYG' : 'BRL';
+    const isUSA = params.country === 'USA';
+    const currency = isPY ? 'PYG' : isUSA ? 'USD' : 'BRL';
     // Precios editables desde el panel admin (AppSetting price.*), con fallback al config/env.
     const prices = await PaymentService.getPlanPrices();
-    const P = isPY ? prices.PY : prices.BR;
+    const P = isPY ? prices.PY : isUSA ? prices.USA : prices.BR;
     let baseAmount = params.plan === 'ANNUAL' ? P.ANNUAL : P.MONTHLY;
     if (params.isFine) baseAmount += P.FINE;
 
@@ -116,7 +140,7 @@ export class PaymentService {
       data: {
         userId: user.id,
         plan: params.plan,
-        country: isPY ? 'PARAGUAY' : 'BRASIL',
+        country: params.country,
         currency,
         amount: baseAmount,
         status: 'PENDING_PAYMENT',
@@ -131,13 +155,20 @@ export class PaymentService {
     let pixPayload: string | undefined;
     let pixQrImage: string | undefined;
     let gatewayRef: string | undefined;
-    let gateway: 'MERCADOPAGO' | 'PIX' | 'BANCARD' | 'BANK_TRANSFER' = isPY ? 'BANK_TRANSFER' : 'PIX';
-    let paymentMethod = isPY ? 'ALIAS / TRANSFERENCIA' : 'PIX';
+    let gateway: 'MERCADOPAGO' | 'PIX' | 'BANCARD' | 'BANK_TRANSFER' = isPY || isUSA ? 'BANK_TRANSFER' : 'PIX';
+    let paymentMethod = isUSA ? 'PAYPAL / ZELLE' : isPY ? 'ALIAS / TRANSFERENCIA' : 'PIX';
     let externalRedirect: string | undefined;
     let orderExpiry: Date | undefined;
 
     const methods = await PaymentService.getPaymentMethods();
-    if (isPY) {
+    if (isUSA) {
+      aliasInfo =
+        `PAYPAL: ${methods.usa.paypal}\n` +
+        (methods.usa.zelle ? `ZELLE: ${methods.usa.zelle}\n` : '') +
+        `TITULAR: DOORWAY CORTEX BIO-PASS\n` +
+        (methods.usa.extra ? `${methods.usa.extra}\n` : '') +
+        `REF: ${referenceCode}`;
+    } else if (isPY) {
       // Secondary/manual instructions, shown alongside the Bancard checkout.
       aliasInfo =
         `BANCO: ${methods.py.bank}\n` +
@@ -221,9 +252,9 @@ export class PaymentService {
       referenceCode,
       amount: baseAmount,
       currency,
-      formattedAmount: isPY ? `Gs. ${baseAmount.toLocaleString('es-PY')}` : `R$ ${baseAmount.toFixed(2)}`,
+      formattedAmount: formatAmount(params.country, baseAmount),
       plan: params.plan,
-      country: isPY ? 'PARAGUAY' : 'BRASIL',
+      country: params.country,
       gateway,
       paymentMethod,
       checkoutUrl: checkoutLink,
@@ -247,6 +278,7 @@ export class PaymentService {
     });
     if (!order) return null;
     const isPY = order.currency === 'PYG';
+    const isUSD = order.currency === 'USD';
     // Link de pasarela externa = una URL absoluta que NO es nuestra propia página /checkout.
     const link = order.paymentLink || '';
     const externalRedirect =
@@ -265,7 +297,11 @@ export class PaymentService {
       paymentMethod: order.paymentMethod,
       amount: order.amount,
       currency: order.currency,
-      formattedAmount: isPY ? `Gs. ${order.amount.toLocaleString('es-PY')}` : `R$ ${order.amount.toFixed(2)}`,
+      formattedAmount: isPY
+        ? `Gs. ${order.amount.toLocaleString('es-PY')}`
+        : isUSD
+          ? `U$ ${order.amount.toFixed(2)}`
+          : `R$ ${order.amount.toFixed(2)}`,
       plan: order.subscription?.plan,
       aliasInfo: order.aliasInfo,
       pixPayload: order.pixPayload,
@@ -317,7 +353,12 @@ export class PaymentService {
 
     const emergencyUrl = `${config.publicEmergencyBaseUrl}/${updatedUser.emergencyToken}`;
     const isPY = order.currency === 'PYG';
-    const amountFormatted = isPY ? `Gs. ${order.amount.toLocaleString('es-PY')}` : `R$ ${order.amount.toFixed(2)}`;
+    const isUSD = order.currency === 'USD';
+    const amountFormatted = isPY
+      ? `Gs. ${order.amount.toLocaleString('es-PY')}`
+      : isUSD
+        ? `U$ ${order.amount.toFixed(2)}`
+        : `R$ ${order.amount.toFixed(2)}`;
 
     // Invoice email (best-effort)
     if (updatedUser.email) {

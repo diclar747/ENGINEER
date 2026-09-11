@@ -148,6 +148,8 @@ export const config = {
     paraguayBank: process.env.PARAGUAY_BANK_NAME || 'Banco Continental',
     paraguayTigoWallet: process.env.PARAGUAY_TIGO_MONEY_WALLET || '0981123456',
     brasilPixKey: process.env.BRASIL_PIX_KEY || 'financeiro@bio-pass.com',
+    usaPaypal: process.env.USA_PAYPAL || 'pay@bio-pass.cnid.com.py',
+    usaZelle: process.env.USA_ZELLE || '',
     planPrices: {
       PY: {
         MONTHLY: 35000, // Gs. 35.000 / mes
@@ -158,6 +160,11 @@ export const config = {
         MONTHLY: 25,     // R$ 25 / mes
         ANNUAL: 220,     // R$ 220 / año
         FINE: 44,        // R$ 44
+      },
+      USA: {
+        MONTHLY: 2,      // U$ 2 / mes
+        ANNUAL: 20,      // U$ 20 / año
+        FINE: 5,         // U$ 5
       },
     },
   },

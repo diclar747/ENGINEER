@@ -729,6 +729,12 @@ const Contenido: React.FC = () => {
   const priceKeys: [string, string][] = [
     ['price.py.monthly', 'PY · Mensual (Gs.)'], ['price.py.annual', 'PY · Anual (Gs.)'], ['price.py.fine', 'PY · Multa (Gs.)'],
     ['price.br.monthly', 'BR · Mensual (R$)'], ['price.br.annual', 'BR · Anual (R$)'], ['price.br.fine', 'BR · Multa (R$)'],
+    ['price.usa.monthly', 'USA · Monthly (U$)'], ['price.usa.annual', 'USA · Annual (U$)'], ['price.usa.fine', 'USA · Fine (U$)'],
+  ];
+  const payUsaKeys: [string, string, string][] = [
+    ['pay.usa.paypal', 'PayPal (email)', 'pay@bio-pass.cnid.com.py'],
+    ['pay.usa.zelle', 'Zelle (email / teléfono)', ''],
+    ['pay.usa.extra', 'Otra línea (opcional)', ''],
   ];
   return (
     <div className="space-y-4">
@@ -739,6 +745,15 @@ const Contenido: React.FC = () => {
               <label className="text-[11px] font-semibold text-fg-muted">{label}</label>
               <input value={settings[k] ?? ''} onChange={(e) => setSettings({ ...settings, [k]: e.target.value })} inputMode="numeric"
                 className={`${inputCls} w-full mt-1`} placeholder="(usa el valor por defecto si está vacío)" />
+            </div>
+          ))}
+        </div>
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mt-4 pt-4 border-t border-line">
+          {payUsaKeys.map(([k, label, ph]) => (
+            <div key={k}>
+              <label className="text-[11px] font-semibold text-fg-muted">{label}</label>
+              <input value={settings[k] ?? ''} onChange={(e) => setSettings({ ...settings, [k]: e.target.value })}
+                className={`${inputCls} w-full mt-1`} placeholder={ph || '(vacío = no se muestra)'} />
             </div>
           ))}
         </div>

@@ -72,6 +72,7 @@ export class PaymentController {
     const p = await PaymentService.getPlanPrices();
     const gs = (n: number) => `Gs. ${n.toLocaleString('es-PY')}`;
     const rs = (n: number) => `R$ ${n.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}`;
+    const us = (n: number) => `U$ ${n.toFixed(2)}`;
     res.json({
       paraguay: {
         currency: 'PYG',
@@ -92,6 +93,16 @@ export class PaymentController {
           fine: { name: 'Multa de Reativação', amount: p.BR.FINE, formatted: rs(p.BR.FINE) },
         },
         methods: ['PIX Instantâneo', 'Cartão de Crédito / Débito'],
+      },
+      usa: {
+        currency: 'USD',
+        gateway: 'BANK_TRANSFER',
+        plans: {
+          monthly: { name: 'Monthly Plan', amount: p.USA.MONTHLY, formatted: us(p.USA.MONTHLY) },
+          annual: { name: 'Annual Plan', amount: p.USA.ANNUAL, formatted: us(p.USA.ANNUAL) },
+          fine: { name: 'Reactivation Fee', amount: p.USA.FINE, formatted: us(p.USA.FINE) },
+        },
+        methods: ['PayPal', 'Zelle'],
       },
     });
   }
