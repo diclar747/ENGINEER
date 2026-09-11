@@ -712,6 +712,31 @@ export class BotStateMachine {
           ),
         };
       }
+      // Contactos "@lid": WhatsApp no expone el número real → lo pedimos ACÁ, así
+      // el registro queda con un número marcable (login web, panel admin, avisos).
+      if (msg.isLid) {
+        await updateState('STEP1C_LINK_NUM', {}, { termsAcceptedAt: new Date() });
+        return {
+          replyText: tr(
+            `✅ *Términos aceptados.*\n\n` +
+              `📱 *Paso 1 — Tu número de WhatsApp:*\n` +
+              `Tu WhatsApp no me pasa tu número (pasa con algunas cuentas, por privacidad). ` +
+              `Escribí tu *número completo con código de país*, sin espacios ni guiones (ej: *595981123456*). ` +
+              `Lo necesito para tu acceso a la web y para avisarte del pago.`,
+            `✅ *Términos oñeñemoneĩ.*\n\n` +
+              `📱 *Paso 1 — Ne número WhatsApp:*\n` +
+              `Ehai ne *número completo código de país reheve*, space'ỹre (techapyrã: *595981123456*).`,
+            `✅ *Termos aceitos.*\n\n` +
+              `📱 *Passo 1 — Seu número de WhatsApp:*\n` +
+              `Seu WhatsApp não me passa o número. Escreva o *número completo com código do país*, ` +
+              `sem espaços (ex: *595981123456*).`,
+            `✅ *Terms accepted.*\n\n` +
+              `📱 *Step 1 — Your WhatsApp number:*\n` +
+              `Your WhatsApp doesn't share your number with me. Type your *full number with country code*, ` +
+              `no spaces (e.g. *595981123456*).`
+          ),
+        };
+      }
       await updateState('STEP2_DOCUMENT', {}, { termsAcceptedAt: new Date() });
       return {
         replyText: tr(
@@ -731,6 +756,75 @@ export class BotStateMachine {
             `Send a *clear photo of your ID* (front and back). ` +
             `We'll read your name, number, date and place of birth from it.`
         ),
+      };
+    }
+
+    // STEP 1C: número real de WhatsApp para contactos "@lid" (ver STEP1B_TERMS).
+    if (state === 'STEP1C_LINK_NUM') {
+      const step2Msg = tr(
+        `📸 *Paso 2/9 (Documento de Identidad):*\n` +
+          `Enviá una *foto NÍTIDA de tu Cédula* (frente y dorso).`,
+        `📸 *Paso 2/9 (Cédula):*\nEmondo *ta'anga potĩ nde Cédula rehegua*.`,
+        `📸 *Passo 2/9 (Documento):*\nEnvie uma *foto NÍTIDA do seu documento* (frente e verso).`,
+        `📸 *Step 2/9 (ID Document):*\nSend a *clear photo of your ID* (front and back).`
+      );
+
+      // "OMITIR" / "no tengo" → seguimos con el id del lid (se puede vincular luego).
+      if (/^\s*(omitir|saltar|skip|no tengo|despu[eé]s|luego|m[aá]s tarde)\b/i.test(cleanText)) {
+        await updateState('STEP2_DOCUMENT', {});
+        return { replyText: tr('Ok, seguimos. Podés vincular tu número más tarde escribiendo *VINCULAR*.\n\n', 'Ok.\n\n', 'Ok, seguimos.\n\n', 'Ok.\n\n') + step2Msg };
+      }
+
+      const typed = cleanText.replace(/[^0-9]/g, '').replace(/^0+/, '');
+      const norm10 = typed.length === 9 && typed.startsWith('9') ? `595${typed}` : typed; // 9xx xxx xxx → 595...
+      if (!/^\d{8,15}$/.test(norm10)) {
+        return {
+          replyText: tr(
+            `Ese no parece un número válido. Escribilo completo, con código de país y sin espacios (ej: *595981123456*), o escribí *OMITIR*.`,
+            `Ndaha'éi número oĩporãva. Ehai code de país reheve (techapyrã: *595981123456*), térã *OMITIR*.`,
+            `Não parece um número válido. Escreva com código do país (ex: *595981123456*), ou *OMITIR*.`,
+            `That doesn't look valid. Type it with country code (e.g. *595981123456*), or type *OMITIR*.`
+          ),
+        };
+      }
+
+      const clash = await prisma.user.findFirst({ where: { phoneNumber: norm10, NOT: { id: user.id } }, select: { id: true } });
+      if (clash) {
+        return {
+          replyText: tr(
+            `Ya hay otra cuenta con ese número. Verificá el número o escribí a *soporte@bio-pass.cnid.com.py*. Probá con otro o escribí *OMITIR*.`,
+            `Oĩma ambue cuenta upe número reheve. Eha'ã ambue térã ehai *OMITIR*.`,
+            `Já existe outra conta com esse número. Tente outro ou escreva *OMITIR*.`,
+            `There's already an account with that number. Try another or type *OMITIR*.`
+          ),
+        };
+      }
+
+      // Verificación anti-spoofing: el número tiene que resolver a ESTE mismo lid.
+      // Si el lookup no concluye (sesión @lid degradada), lo aceptamos igual.
+      const lookup = await whatsappBot.lookupNumber(norm10).catch(() => null);
+      const typedLid = (lookup?.lid || '').split('@')[0];
+      if (lookup && lookup.exists !== false && typedLid && typedLid !== rawPhone) {
+        return {
+          replyText: tr(
+            `😕 Ese número corresponde a otro WhatsApp, no al que me estás escribiendo. Tiene que ser este mismo. Probá de nuevo o escribí *OMITIR*.`,
+            `😕 Upe número ambue WhatsApp-gua. Eha'ã jey térã ehai *OMITIR*.`,
+            `😕 Esse número é de outro WhatsApp. Tente de novo ou escreva *OMITIR*.`,
+            `😕 That number belongs to a different WhatsApp. Try again or type *OMITIR*.`
+          ),
+        };
+      }
+
+      await prisma.user.update({ where: { id: user.id }, data: { phoneNumber: norm10, whatsappJid: `${rawPhone}@lid` } });
+      await updateState('STEP2_DOCUMENT', {});
+      return {
+        replyText:
+          tr(
+            `✅ *Número guardado: ${norm10}.* Con ese número y tu PIN vas a poder entrar a la web.\n\n`,
+            `✅ *Número oñeñongatu: ${norm10}.*\n\n`,
+            `✅ *Número salvo: ${norm10}.*\n\n`,
+            `✅ *Number saved: ${norm10}.*\n\n`
+          ) + step2Msg,
       };
     }
 

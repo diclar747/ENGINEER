@@ -658,7 +658,45 @@ export class AdminController {
         take: pageSize,
       }),
     ]);
-    res.json({ total, page, pageSize, rows });
+
+    // Resolver el TITULAR de cada fila: los chats "@lid" guardan el id del lid en
+    // `phone` (no un número marcable). Con el join mostramos el nombre y, si lo
+    // tenemos, el número real del titular.
+    const isRealMsisdn = (x?: string | null) => !!x && /^\d{7,13}$/.test(x);
+    const jids = [...new Set(rows.map((r) => r.jid).filter(Boolean) as string[])];
+    const phones = [...new Set(rows.map((r) => r.phone).filter(Boolean) as string[])];
+    const lidDigits = jids.map((j) => j.split('@')[0]);
+    const users = jids.length || phones.length
+      ? await prisma.user.findMany({
+          where: {
+            OR: [
+              { whatsappJid: { in: jids } },
+              { phoneNumber: { in: [...new Set([...phones, ...lidDigits])] } },
+            ],
+          },
+          select: { fullName: true, phoneNumber: true, whatsappJid: true },
+        })
+      : [];
+    const byJid = new Map<string, (typeof users)[number]>();
+    const byPhone = new Map<string, (typeof users)[number]>();
+    for (const u of users) {
+      if (u.whatsappJid) byJid.set(u.whatsappJid, u);
+      if (u.phoneNumber) byPhone.set(u.phoneNumber, u);
+    }
+    const enriched = rows.map((r) => {
+      const u =
+        (r.jid && byJid.get(r.jid)) ||
+        (r.phone && byPhone.get(r.phone)) ||
+        (r.jid && byPhone.get(r.jid.split('@')[0])) ||
+        null;
+      return {
+        ...r,
+        contactName: u?.fullName || null,
+        contactPhone: isRealMsisdn(u?.phoneNumber) && u!.phoneNumber !== r.phone ? u!.phoneNumber : null,
+      };
+    });
+
+    res.json({ total, page, pageSize, rows: enriched });
   }
 
   /** Borra un mensaje puntual del historial. */

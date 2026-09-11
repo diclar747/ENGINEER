@@ -1240,7 +1240,26 @@ const BotHistory: React.FC = () => {
                   <td><input type="checkbox" checked={hSelected.has(m.id)} onChange={() => toggleHSelected(m.id)} /></td>
                   <td className="text-fg-muted whitespace-nowrap">{new Date(m.ts).toLocaleString('es-PY')}</td>
                   <td>{m.dir === 'in' ? <ArrowDownLeft className="w-3.5 h-3.5 text-sky-500" /> : m.dir === 'out' ? <ArrowUpRight className="w-3.5 h-3.5 text-teal-500" /> : <Activity className="w-3.5 h-3.5 text-fg-muted" />}</td>
-                  <td className="font-mono text-fg-soft whitespace-nowrap">{m.phone || (m.jid ? m.jid.split('@')[0] : '—')}</td>
+                  <td className="whitespace-nowrap">
+                    {(() => {
+                      const raw = m.phone || (m.jid ? m.jid.split('@')[0] : '—');
+                      const isLid = !!m.jid && m.jid.endsWith('@lid');
+                      if (m.contactPhone) return (
+                        <>
+                          <span className="font-mono text-fg">{m.contactPhone}</span>
+                          {m.contactName && <div className="text-fg-muted text-[11px] truncate max-w-[11rem]">{m.contactName}</div>}
+                          <div className="font-mono text-fg-faint text-[10px]">{raw}{isLid ? ' · LID' : ''}</div>
+                        </>
+                      );
+                      if (m.contactName) return (
+                        <>
+                          <span className="text-fg">{m.contactName}</span>
+                          <div className="font-mono text-fg-muted text-[11px]">{raw}{isLid ? ' · LID (sin nº real)' : ''}</div>
+                        </>
+                      );
+                      return <span className="font-mono text-fg-soft">{raw}{isLid ? ' · LID' : ''}</span>;
+                    })()}
+                  </td>
                   <td className="text-fg-muted">{m.kind || '—'}</td>
                   <td className="max-w-[22rem]"><div className="whitespace-pre-wrap text-fg">{m.text || '—'}</div>{m.error && <div className="text-rose-500 text-[11px]">{m.error}</div>}</td>
                   <td>{m.status ? <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold whitespace-nowrap ${(ST_BADGE[m.status] || ST_BADGE.skipped).cls}`}>{(ST_BADGE[m.status] || ST_BADGE.skipped).label}</span> : '—'}</td>
