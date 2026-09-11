@@ -97,6 +97,24 @@ export class PushService {
     return { sent, pruned };
   }
 
+  /**
+   * Paridad con WhatsApp: mismo evento, mismo aviso, en push. `body` puede venir con el
+   * formato de WhatsApp (`*negrita*`, `_itálica_`, emojis, saltos de línea) — se limpia
+   * para la notificación del navegador. Nunca tira (best-effort, igual que el envío por
+   * WhatsApp de al lado no bloquea si push falla, y viceversa).
+   */
+  static async notify(userId: string, title: string, body: string, opts: Partial<PushPayload> = {}): Promise<void> {
+    if (!this.enabled) return;
+    const clean = body
+      .replace(/[*_`~]/g, '')
+      .replace(/\n{2,}/g, ' · ')
+      .replace(/\n/g, ' ')
+      .replace(/\s{2,}/g, ' ')
+      .trim()
+      .slice(0, 180);
+    await this.sendToUser(userId, { title, body: clean, ...opts }).catch(() => {});
+  }
+
   /** Emergency-scan alert — high urgency, requires interaction so it stays on screen. */
   static async sendEmergencyAlert(
     userId: string,

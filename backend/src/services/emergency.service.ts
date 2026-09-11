@@ -251,6 +251,11 @@ export class EmergencyService {
       (acc ? ` _(±${acc} m)_` : '') + `\n` +
       `🗺️ https://maps.google.com/?q=${lat},${lng}\n\n` +
       `_Compartida por el navegador de quien escaneó tu QR de emergencia._`;
+    PushService.notify(user.id, '📌 Ubicación exacta del escaneo', msg, {
+      tag: 'biopass-scan',
+      url: '/audit-logs',
+      requireInteraction: true,
+    });
     whatsappBot.sendMessage(user.whatsappJid || user.phoneNumber, msg).catch((err) => {
       console.error(`Failed to dispatch WhatsApp scan-location to ${user.phoneNumber}:`, err?.message || err);
     });

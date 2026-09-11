@@ -6,6 +6,7 @@ import { PaymentService } from './payment.service';
 import { OtpService } from './otp.service';
 import { MedicationReminderService } from './medication-reminder.service';
 import { AiPromptService } from './ai-prompt.service';
+import { PushService } from './push.service';
 
 export class CronService {
   /**
@@ -72,6 +73,7 @@ export class CronService {
           `🔗 *Enlace de renovación:* ${renewalOrder.paymentLink}\n` +
           (isPY ? `🏦 *Alias:* ${renewalOrder.aliasInfo}` : `📱 *PIX Copia y Pega:*\n\`${renewalOrder.pixPayload}\``);
 
+        PushService.notify(user.id, '⏳ Tu Bio-Pass vence en 5 días', msg, { tag: 'subscription', url: '/payments' });
         await whatsappBot.sendMessage(user.whatsappJid || user.phoneNumber, msg);
         await prisma.subscription.update({
           where: { id: sub.id },
@@ -87,6 +89,7 @@ export class CronService {
           `Realiza el pago hoy mismo para mantener tu QR de emergencia activo y visible ante paramédicos.\n\n` +
           `🔗 *Pagar Ahora:* ${renewalOrder.paymentLink}`;
 
+        PushService.notify(user.id, '🚨 Hoy vence tu Bio-Pass', msg, { tag: 'subscription', url: '/payments', requireInteraction: true });
         await whatsappBot.sendMessage(user.whatsappJid || user.phoneNumber, msg);
         await prisma.subscription.update({
           where: { id: sub.id },
@@ -109,6 +112,7 @@ export class CronService {
           `Actualiza tu pago ahora para evitar recargos por cancelación:\n\n` +
           `🔗 *Enlace:* ${renewalOrder.paymentLink}`;
 
+        PushService.notify(user.id, '⚠️ Aviso crítico Bio-Pass', msg, { tag: 'subscription', url: '/payments', requireInteraction: true });
         await whatsappBot.sendMessage(user.whatsappJid || user.phoneNumber, msg);
         await prisma.subscription.update({
           where: { id: sub.id },
@@ -126,6 +130,7 @@ export class CronService {
           `Si deseas recuperarlos en los próximos 30 días, abona una multa de *${fineText}* más la cuota correspondiente y reactivamos tu cuenta.\n\n` +
           `🔗 *Enlace de reactivación con multa incluida:*\n${renewalOrder.paymentLink}`;
 
+        PushService.notify(user.id, '🚫 Bio-Pass cancelado por falta de pago', msg, { tag: 'subscription', url: '/payments', requireInteraction: true });
         await whatsappBot.sendMessage(user.whatsappJid || user.phoneNumber, msg);
         await prisma.subscription.update({
           where: { id: sub.id },

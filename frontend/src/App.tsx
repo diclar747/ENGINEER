@@ -3,6 +3,7 @@ import { Routes, Route, Navigate, Outlet, useLocation, useNavigate } from 'react
 import { HeartPulse, QrCode, Download, CreditCard, Lock, Bot, LogOut, ShieldCheck } from 'lucide-react';
 import { Navbar } from './components/Navbar';
 import { PwaInstallPrompt } from './components/PwaInstallPrompt';
+import { PushPrompt } from './components/PushPrompt';
 import { ThemeToggle } from './components/ThemeToggle';
 import { AppShell } from './components/ui/Layout';
 import { Login } from './pages/Login';
@@ -86,6 +87,7 @@ const UserShell: React.FC = () => {
     >
       <Outlet />
       <PwaInstallPrompt />
+      <PushPrompt />
     </AppShell>
   );
 };

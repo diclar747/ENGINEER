@@ -1,6 +1,7 @@
 import { prisma } from '../database/prisma';
 import { whatsappBot } from '../whatsapp/baileys.client';
 import { NiroService } from './niro.service';
+import { PushService } from './push.service';
 import { parseMedications, formatMedications, normName } from './medication.util';
 import { config } from '../config';
 
@@ -1053,7 +1054,7 @@ export class MedicationReminderService {
 
     const reminders = await prisma.medicationReminder.findMany({
       where: { active: true },
-      include: { user: { select: { phoneNumber: true, whatsappJid: true, status: true, language: true } } },
+      include: { user: { select: { id: true, phoneNumber: true, whatsappJid: true, status: true, language: true } } },
     });
 
     for (const r of reminders) {
@@ -1066,6 +1067,7 @@ export class MedicationReminderService {
           const msg = gnEnd
             ? `✅ *${r.medication}* — opa pe tratamiento. Ndorohechavéima momandu'a.`
             : `✅ Terminó el tratamiento de *${r.medication}*. No te aviso más por este. _Si seguís tomándolo, escribí *5* y cargalo de nuevo._`;
+          PushService.notify(r.user.id, '✅ Tratamiento terminado', msg, { tag: `reminder-${r.id}` });
           if (await whatsappBot.sendMessage(r.user.whatsappJid || r.user.phoneNumber, msg)) {
             await prisma.medicationReminder.update({ where: { id: r.id }, data: { active: false, lastSentSlot: 'ENDED' } });
             sent++;
@@ -1091,6 +1093,7 @@ export class MedicationReminderService {
           const msg = gn
             ? `📅 *Momandu'a: turno* ko'ẽrõ\n\n*${r.medication}*\n🕒 ${dtLocal}`
             : `📅 *Recordatorio: turno mañana*\n\n*${r.medication}*\n🕒 ${dtLocal}`;
+          PushService.notify(r.user.id, '📅 Turno mañana', msg, { tag: `reminder-${r.id}`, url: '/dashboard' });
           if (await whatsappBot.sendMessage(target, msg)) {
             await prisma.medicationReminder.update({ where: { id: r.id }, data: { lastSentAt: new Date(), lastSentSlot: 'D-1' } });
             sent++;
@@ -1103,6 +1106,7 @@ export class MedicationReminderService {
           const msg = gn
             ? `📅 *Turno* — *${r.medication}*\n🕒 ${dtLocal}`
             : `📅 *Tu turno médico*\n\n*${r.medication}*\n🕒 ${dtLocal}\n\n_Faltan ${leadLabel(lead)}. No faltes._`;
+          PushService.notify(r.user.id, '📅 Tu turno médico', msg, { tag: `reminder-${r.id}`, url: '/dashboard', requireInteraction: true });
           if (await whatsappBot.sendMessage(target, msg)) {
             await prisma.medicationReminder.update({
               where: { id: r.id },
@@ -1131,6 +1135,7 @@ export class MedicationReminderService {
             const msg = gn
               ? `⏰ *Momandu'a: ${leadLabel(lead)} rupi*\n\n*${r.medication}*${r.dose ? ` (${r.dose})` : ''} — ${fmtHHMM(new Date(nd))}.`
               : `⏰ *En ${leadLabel(lead)} toca tu medicación*\n\n*${r.medication}*${r.dose ? ` (${r.dose})` : ''} a las ${fmtHHMM(new Date(nd))}.`;
+            PushService.notify(r.user.id, '⏰ Se acerca tu medicación', msg, { tag: `reminder-${r.id}`, url: '/dashboard' });
             if (await whatsappBot.sendMessage(target, msg)) {
               await prisma.medicationReminder.update({ where: { id: r.id }, data: { lastSentAt: new Date(), lastSentSlot: preTag } });
               sent++;
@@ -1145,6 +1150,7 @@ export class MedicationReminderService {
             const msg = gn
               ? `⏰ *Momandu'a pohã*\n\nHi'ára reipuru hag̃ua *${r.medication}*${r.dose ? ` (${r.dose})` : ''}.\n\n_Ehai *YA TOMÉ* rejapo rire._`
               : `⏰ *Recordatorio de medicación*\n\nEs hora de tomar *${r.medication}*${r.dose ? ` (${r.dose})` : ''}.\n\n_Cuando la tomes escribí *YA TOMÉ* y recalculo la próxima._`;
+            PushService.notify(r.user.id, '⏰ Hora de tu medicación', msg, { tag: `reminder-${r.id}`, url: '/dashboard', requireInteraction: true });
             if (await whatsappBot.sendMessage(target, msg)) {
               const next = this.computeNextDose(new Date(nd), r.intervalHours, new Date());
               await prisma.medicationReminder.update({
@@ -1183,6 +1189,7 @@ export class MedicationReminderService {
             const preMsg = gn
               ? `⏰ *Momandu'a: ${leadLabel(lead)} rupi*\n\n*${r.medication}*${r.dose ? ` (${r.dose})` : ''} — ${slot}.`
               : `⏰ *En ${leadLabel(lead)} toca tu medicación*\n\n*${r.medication}*${r.dose ? ` (${r.dose})` : ''} a las ${slot}.\n\n_Preparala con tiempo._`;
+            PushService.notify(r.user.id, '⏰ Se acerca tu medicación', preMsg, { tag: `reminder-${r.id}`, url: '/dashboard' });
             if (await whatsappBot.sendMessage(target, preMsg)) {
               await prisma.medicationReminder.update({ where: { id: r.id }, data: { lastSentAt: new Date(), lastSentSlot: preTag } });
               sent++;
@@ -1200,6 +1207,7 @@ export class MedicationReminderService {
         const msg = gn
           ? `⏰ *Momandu'a pohã*\n\nHi'ára reipuru hag̃ua *${r.medication}*${r.dose ? ` (${r.dose})` : ''}.\n\n_Ehai *MENU* rehecha hag̃ua opciones._`
           : `⏰ *Recordatorio de medicación*\n\nEs hora de tomar *${r.medication}*${r.dose ? ` (${r.dose})` : ''}.\n\n_Cuidá tu salud. Escribí *MENU* para ver tus opciones._`;
+        PushService.notify(r.user.id, '⏰ Hora de tu medicación', msg, { tag: `reminder-${r.id}`, url: '/dashboard', requireInteraction: true });
         if (await whatsappBot.sendMessage(target, msg)) {
           await prisma.medicationReminder.update({ where: { id: r.id }, data: { lastSentAt: new Date(), lastSentSlot: tag } });
           sent++;
