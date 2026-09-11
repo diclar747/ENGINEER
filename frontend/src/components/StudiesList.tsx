@@ -83,7 +83,7 @@ export const StudiesList: React.FC<Props> = ({
         <label className="cursor-pointer px-3.5 py-2 rounded-xl bg-teal-600 hover:bg-teal-500 active:scale-95 text-white font-bold text-xs shadow-md shadow-teal-600/20 flex items-center gap-1.5 transition-all shrink-0">
           {uploading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}
           <span>{uploading ? 'Subiendo...' : 'Subir'}</span>
-          <input type="file" className="hidden" onChange={onUpload} disabled={uploading} accept=".pdf,.png,.jpg,.jpeg,.webp,.mp4,.mov" />
+          <input type="file" multiple className="hidden" onChange={onUpload} disabled={uploading} accept=".pdf,.png,.jpg,.jpeg,.webp,.mp4,.mov" />
         </label>
       ) : undefined}
     >

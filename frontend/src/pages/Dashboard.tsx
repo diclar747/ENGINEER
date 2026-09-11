@@ -79,25 +79,44 @@ export const Dashboard: React.FC = () => {
   };
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
-    const formData = new FormData();
-    formData.append('file', file);
-    formData.append('title', file.name.replace(/\.[^/.]+$/, ''));
+    // El input admite selección múltiple (`multiple`) — hay que subir CADA
+    // archivo elegido, uno por uno (el endpoint recibe un solo `file` por
+    // request). Antes solo se leía `files[0]`: si elegías 10 PDF de una,
+    // se subía nomás el primero y el resto se perdía en silencio.
+    const files = Array.from(e.target.files || []);
+    e.target.value = ''; // permite re-elegir el mismo archivo más tarde
+    if (!files.length) return;
 
     setUploading(true);
-    try {
-      const res = await api.post('/medical/studies/upload', formData, {
-        headers: { 'Content-Type': 'multipart/form-data' },
-      });
-      setStudies([res.data.study, ...studies]);
-      toast.success('Estudio subido y procesado.');
-    } catch (err: any) {
-      toast.error('Error subiendo estudio: ' + (err?.response?.data?.error || err.message));
-    } finally {
-      setUploading(false);
+    const uploaded: any[] = [];
+    const failed: string[] = [];
+    for (const file of files) {
+      const formData = new FormData();
+      formData.append('file', file);
+      formData.append('title', file.name.replace(/\.[^/.]+$/, ''));
+      try {
+        const res = await api.post('/medical/studies/upload', formData, {
+          headers: { 'Content-Type': 'multipart/form-data' },
+        });
+        uploaded.push(res.data.study);
+      } catch (err: any) {
+        failed.push(`${file.name}: ${err?.response?.data?.error || err.message}`);
+      }
     }
+    if (uploaded.length) {
+      setStudies((prev) => [...uploaded, ...prev]);
+      toast.success(
+        uploaded.length === 1 ? 'Estudio subido y procesado.' : `${uploaded.length} estudios subidos y procesados.`
+      );
+    }
+    if (failed.length) {
+      toast.error(
+        failed.length === 1
+          ? `Error subiendo estudio: ${failed[0]}`
+          : `${failed.length} de ${files.length} archivos fallaron:\n${failed.join('\n')}`
+      );
+    }
+    setUploading(false);
   };
 
   const handleExportSubmit = async (pin: string) => {
