@@ -2211,10 +2211,28 @@ export class BotStateMachine {
           await updateState('ACTIVE_MEMBER', {});
           return { replyText: activeMenu() };
         }
+        // "olvida", "fue un error", "me equivoqué", "no era eso"… — el archivo se
+        // mandó SIN querer y no hay que categorizarlo. Antes solo "cancelar/LISTO"
+        // salían de acá; cualquier otra cosa (incluida esta frase muy común)
+        // quedaba repitiendo "¿Qué es lo que mandaste?" en bucle.
+        const mistakeWords = norm(cleanText).replace(/[^\p{L}\s]/gu, ' ').replace(/\s+/g, ' ').trim();
+        const isMistake =
+          mistakeWords.length &&
+          mistakeWords.split(' ').length <= 8 &&
+          /\b(olvid\w*|equivoqu\w*|error|sin querer|no importa|ignora\w*|dejalo|nada|mal|no era eso)\b/.test(mistakeWords);
+        if (isMistake) {
+          await updateState('ACTIVE_MEMBER', { pendingUpload: null });
+          return {
+            replyText: tr(
+              '👍 Listo, no lo guardé.\n\n_Escribí *MENU* para ver las opciones._',
+              '👍 Oĩma, nda\'aguardái.\n\n_Ehai *MENU*._'
+            ),
+          };
+        }
         if (!/^[123]$/.test(cleanText)) {
           return {
             replyText: tr(
-              '¿Qué es lo que mandaste?\n*[1]* 💊 Un medicamento\n*[2]* 📄 Una receta\n*[3]* 🧪 Un estudio / análisis',
+              '¿Qué es lo que mandaste?\n*[1]* 💊 Un medicamento\n*[2]* 📄 Una receta\n*[3]* 🧪 Un estudio / análisis\n\n_O escribí "fue un error" si lo mandaste sin querer._',
               'Mba\'épa emondo va\'ekue?\n*[1]* 💊 Pohã\n*[2]* 📄 Receta\n*[3]* 🧪 Estudio'
             ),
           };
