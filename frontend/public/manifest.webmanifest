@@ -1,7 +1,7 @@
 {
-  "name": "Bio-Pass — Tu pasaporte de salud en línea",
+  "name": "Bio-Pass",
   "short_name": "Bio-Pass",
-  "description": "Tu pasaporte médico y ficha de emergencia por QR, siempre con vos. Cifrado Zero-Knowledge.",
+  "description": "Pasaporte médico y QR de emergencia.",
   "lang": "es",
   "dir": "ltr",
   "start_url": "/",

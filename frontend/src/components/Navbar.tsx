@@ -70,24 +70,6 @@ export const Navbar: React.FC = () => {
             </div>
           </Link>
 
-          {/* Desktop nav */}
-          <nav className="hidden lg:flex items-center gap-1 flex-1 justify-center max-w-2xl">
-            {NAV_ITEMS.map(({ label, path, icon: Icon }) => (
-              <Link
-                key={path}
-                to={path}
-                className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-[13px] font-semibold whitespace-nowrap transition-all duration-200 ${
-                  isActive(path)
-                    ? 'bg-teal-500/15 text-teal-600 dark:text-teal-300 border border-teal-500/30 shadow-sm'
-                    : 'text-fg-soft hover:text-fg hover:bg-muted/60 border border-transparent'
-                }`}
-              >
-                <Icon className="w-4 h-4 shrink-0" />
-                <span>{label}</span>
-              </Link>
-            ))}
-          </nav>
-
           {/* Right actions */}
           <div className="flex items-center gap-2.5 shrink-0">
             <ThemeToggle />
@@ -111,13 +93,13 @@ export const Navbar: React.FC = () => {
         </div>
       </div>
 
-      {/* Móvil: mismo patrón de FAB + bottom-sheet que el panel autenticado — el
-          menú apretado de hamburguesa apenas se veía. Desktop conserva el nav de
-          arriba tal cual. */}
+      {/* Menú por FAB + bottom-sheet en TODOS los tamaños (no solo móvil) — el nav
+          de arriba se sacó del todo, el mismo patrón que ya usa el panel
+          autenticado (AppShell). */}
       {mobileOpen && (
         <>
-          <div className="lg:hidden fixed inset-0 bg-black/45 z-40 animate-fade-in" onClick={() => setMobileOpen(false)} />
-          <div className="lg:hidden fixed inset-x-0 bottom-0 z-50 bg-card rounded-t-3xl border-t border-line shadow-2xl animate-slide-up pb-[calc(0.5rem+var(--safe-bottom))]">
+          <div className="fixed inset-0 bg-black/45 z-40 animate-fade-in" onClick={() => setMobileOpen(false)} />
+          <div className="fixed inset-x-0 bottom-0 z-50 bg-card rounded-t-3xl border-t border-line shadow-2xl animate-slide-up pb-[calc(0.5rem+var(--safe-bottom))] sm:inset-x-auto sm:right-6 sm:bottom-24 sm:w-80 sm:rounded-3xl sm:border">
             <div className="pt-3 pb-1 flex justify-center"><div className="w-10 h-1.5 rounded-full bg-line" /></div>
             <div className="px-4 pb-2 pt-1 flex items-center gap-2 border-b border-line/70">
               <HeartPulse className="w-4 h-4 text-teal-600 dark:text-teal-400" />
@@ -159,14 +141,15 @@ export const Navbar: React.FC = () => {
         </>
       )}
 
-      {/* FAB móvil — mismo look que el del panel autenticado (corazón, degradado
-          teal→emerald, halo pulsante). Oculto mientras el bottom-sheet está abierto. */}
+      {/* FAB — mismo look que el del panel autenticado (corazón, degradado
+          teal→emerald, halo pulsante), en TODOS los tamaños de pantalla, siempre
+          abajo. Oculto mientras el menú está abierto. */}
       {!mobileOpen && (
         <button
           type="button"
           onClick={() => setMobileOpen(true)}
           aria-label="Abrir menú"
-          className="lg:hidden fixed right-4 bottom-[calc(1rem+var(--safe-bottom))] z-40 w-14 h-14 rounded-full bg-gradient-to-br from-teal-500 to-emerald-600 text-white shadow-xl shadow-emerald-600/35 flex items-center justify-center active:scale-90 transition-transform"
+          className="fixed right-4 sm:right-6 bottom-[calc(1rem+var(--safe-bottom))] sm:bottom-6 z-40 w-14 h-14 rounded-full bg-gradient-to-br from-teal-500 to-emerald-600 text-white shadow-xl shadow-emerald-600/35 flex items-center justify-center active:scale-90 transition-transform"
         >
           <span className="absolute inset-0 rounded-full bg-emerald-400/40 animate-ping [animation-duration:2.6s]" />
           <HeartPulse className="w-6 h-6 relative" />
