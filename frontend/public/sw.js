@@ -2,8 +2,9 @@
 
 // Bump on every deploy that must invalidate old caches. The `activate` handler
 // deletes any cache whose name is not this one.
-// v6: nueva marca del ícono/splash (corazón heart-pulse sobre degradado).
-const CACHE_NAME = 'biopass-cache-v6';
+// v7: badge de notificación monocromo (antes usaba el ícono a color como badge
+// y Android lo rellenaba entero — salía un blob irreconocible en la barra de estado).
+const CACHE_NAME = 'biopass-cache-v7';
 
 // Only truly static, rarely-changing assets are pre-cached. The app shell
 // (index.html) and hashed JS/CSS are handled network-first so a new deploy
@@ -16,6 +17,7 @@ const PRECACHE_ASSETS = [
   '/icon-512.png',
   '/icon-maskable.png',
   '/apple-touch-icon.png',
+  '/badge-96.png',
 ];
 
 self.addEventListener('install', (event) => {
@@ -107,7 +109,9 @@ self.addEventListener('push', (event) => {
     renotify: true,
     requireInteraction: !!data.requireInteraction,
     icon: '/icon-192.png',
-    badge: '/icon-192.png',
+    // Badge = silueta blanca monocromo en fondo transparente (no el ícono a color):
+    // Android recorta por canal alfa para pintarlo en la barra de estado.
+    badge: '/badge-96.png',
     data: { url: data.url || '/', ...(data.data || {}) },
     vibrate: data.requireInteraction ? [200, 100, 200, 100, 200] : [120],
   };

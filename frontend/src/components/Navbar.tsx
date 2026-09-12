@@ -22,7 +22,11 @@ const NAV_ITEMS = [
   { label: 'Exportar', path: '/export', icon: Download },
   { label: 'Pagos', path: '/payments', icon: CreditCard },
   { label: 'Auditoría', path: '/audit-logs', icon: Lock },
-  { label: 'Asistente Bot', path: '/bot-simulator', icon: Bot },
+  // /bot-simulator es la herramienta de depuración del ADMIN (puede impersonar
+  // cualquier número) — redirige a /admin/login para cualquier visitante público.
+  // El asistente público real, que hace el mismo trabajo que WhatsApp (responde,
+  // guarda, registra) sin necesitar sesión de admin, es /registro.
+  { label: 'Asistente Bot', path: '/registro', icon: Bot },
 ];
 
 export const Navbar: React.FC = () => {

@@ -52,10 +52,17 @@ export const Register: React.FC = () => {
   const [busy, setBusy] = useState(false);
   const [state, setState] = useState('STEP1_WELCOME');
   const [done, setDone] = useState(false);
+  const [returningMember, setReturningMember] = useState(false);
   const [staged, setStaged] = useState<{ file: File; previewUrl?: string } | null>(null);
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+  // Este chat también es el "Asistente Bot" público del nav — muchos de los que
+  // entran acá ya son socios activos que quieren preguntar algo (no registrarse).
+  // Si ya venían activos ANTES del primer mensaje, no es un "registro recién
+  // completado": seguimos la conversación como WhatsApp en vez de cortar con la
+  // pantalla de "¡listo, andá a loguearte!".
+  const firstReplyRef = useRef(true);
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' });
@@ -63,6 +70,8 @@ export const Register: React.FC = () => {
 
   const post = useCallback(
     async (message: string, file?: File) => {
+      const isFirst = firstReplyRef.current;
+      firstReplyRef.current = false;
       setBusy(true);
       try {
         const fd = new FormData();
@@ -75,7 +84,13 @@ export const Register: React.FC = () => {
           { id: `b-${Date.now()}`, who: 'bot', text: data.reply, imageUrl: data.mediaAttachment?.dataUrl },
         ]);
         if (data.state) setState(data.state);
-        if (data.completed) setDone(true);
+        // Solo mostramos la pantalla de "¡listo!" si la cuenta se activó JUSTO AHORA
+        // (recién terminó de registrarse). Si ya venía activa desde el primer mensaje,
+        // es un socio existente charlando — seguimos como un chat normal.
+        if (data.completed) {
+          if (isFirst) setReturningMember(true);
+          else setDone(true);
+        }
       } catch (err: any) {
         setMessages((p) => [
           ...p,
@@ -148,17 +163,21 @@ export const Register: React.FC = () => {
             </div>
           </div>
           <div className="min-w-0 flex-1">
-            <h1 className="text-[15px] font-bold leading-tight truncate">Crear mi Bio-Pass</h1>
+            <h1 className="text-[15px] font-bold leading-tight truncate">
+              {returningMember ? 'Asistente Bio-Pass' : 'Crear mi Bio-Pass'}
+            </h1>
             <p className="text-[11px] text-fg-muted leading-tight">
               {done
                 ? '¡Registro completo!'
-                : started
-                  ? `Paso ${Math.min(idx + 1, STEPS.length)}/${STEPS.length} · ${STEPS[Math.min(idx, STEPS.length - 1)].label}`
-                  : 'Registro guiado · < 3 min'}
+                : returningMember
+                  ? 'Ya sos socio activo — preguntame lo que necesites'
+                  : started
+                    ? `Paso ${Math.min(idx + 1, STEPS.length)}/${STEPS.length} · ${STEPS[Math.min(idx, STEPS.length - 1)].label}`
+                    : 'Registro guiado · < 3 min'}
             </p>
           </div>
         </div>
-        {started && (
+        {started && !returningMember && (
           <div className="h-1 bg-muted">
             <div
               className="h-full bg-gradient-to-r from-teal-600 to-emerald-600 transition-all duration-500"
@@ -215,6 +234,14 @@ export const Register: React.FC = () => {
         </div>
       ) : (
         <>
+          {returningMember && (
+            <div className="shrink-0 px-3.5 py-2 bg-teal-500/10 border-b border-teal-500/20 text-[11px] text-fg-soft flex items-center justify-between gap-2">
+              <span>Ya tenés una cuenta activa — para gestionarla completa (pagos, descargas, historial), entrá a tu panel.</span>
+              <button onClick={() => navigate('/login')} className="shrink-0 font-bold text-teal-600 dark:text-teal-300 whitespace-nowrap">
+                Iniciar sesión
+              </button>
+            </div>
+          )}
           {/* Chat */}
           <div ref={scrollRef} className="flex-1 min-h-0 overflow-y-auto px-3 py-4 space-y-2.5">
             {messages.map((m) => (
