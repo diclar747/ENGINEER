@@ -199,4 +199,77 @@ export class AuthController {
 
     res.json({ user });
   }
+
+  /**
+   * Cambia el PIN de seguridad. `currentPin` se verifica SIEMPRE contra el hash
+   * en el server (nunca confiar solo en que el cliente pudo descifrar algo) —
+   * el cliente además reencripta su bóveda Zero-Knowledge con el PIN nuevo
+   * (misma sal) y manda el blob ya reencriptado en `encryptedMedicalBlob`;
+   * si la cuenta no tenía bóveda cifrada todavía, ese campo viene vacío y solo
+   * se actualiza el hash de verificación.
+   */
+  public static async changePin(req: AuthenticatedRequest, res: Response): Promise<void> {
+    if (!req.user) { res.status(401).json({ error: 'Unauthorized' }); return; }
+    const { currentPin, newPin, encryptedMedicalBlob } = req.body;
+    if (!/^\d{4}$/.test(String(newPin || ''))) {
+      res.status(400).json({ error: 'El PIN nuevo debe tener exactamente 4 números.' });
+      return;
+    }
+    const user = await prisma.user.findUnique({ where: { id: req.user.userId } });
+    if (!user || !user.pinHash) { res.status(404).json({ error: 'Cuenta no encontrada.' }); return; }
+    const ok = await ZeroKnowledgeSecurity.verifyPin(String(currentPin || ''), user.pinHash);
+    if (!ok) { res.status(401).json({ error: 'El PIN actual es incorrecto.' }); return; }
+
+    const newPinHash = await ZeroKnowledgeSecurity.hashPin(String(newPin));
+    await prisma.user.update({
+      where: { id: user.id },
+      data: {
+        pinHash: newPinHash,
+        ...(encryptedMedicalBlob !== undefined ? { encryptedMedicalBlob } : {}),
+      },
+    });
+    res.json({ success: true });
+  }
+
+  /**
+   * Paso 1 de cambiar teléfono: manda un código OTP al número NUEVO (prueba que
+   * lo controla). No toca `phoneNumber` todavía — eso pasa en `confirmPhoneChange`.
+   */
+  public static async requestPhoneChange(req: AuthenticatedRequest, res: Response): Promise<void> {
+    if (!req.user) { res.status(401).json({ error: 'Unauthorized' }); return; }
+    const cleanPhone = String(req.body?.newPhone || '').replace(/[^0-9]/g, '');
+    if (!/^\d{7,15}$/.test(cleanPhone)) {
+      res.status(400).json({ error: 'Número inválido. Formato internacional (ej: 595981123456).' });
+      return;
+    }
+    const clash = await prisma.user.findFirst({ where: { phoneNumber: cleanPhone, NOT: { id: req.user.userId } } });
+    if (clash) { res.status(409).json({ error: 'Ya hay otra cuenta con ese número.' }); return; }
+
+    const dispatch = await OtpService.createAndSend(cleanPhone, 'PROFILE_CHANGE');
+    res.json({
+      success: true,
+      channel: dispatch.channel,
+      message: `Te enviamos un código por WhatsApp al ${cleanPhone} para confirmar el cambio.`,
+      devOtp: config.env === 'development' ? dispatch.devCode : undefined,
+    });
+  }
+
+  /** Paso 2: confirma el código enviado al número nuevo y recién ahí lo aplica. */
+  public static async confirmPhoneChange(req: AuthenticatedRequest, res: Response): Promise<void> {
+    if (!req.user) { res.status(401).json({ error: 'Unauthorized' }); return; }
+    const cleanPhone = String(req.body?.newPhone || '').replace(/[^0-9]/g, '');
+    const code = String(req.body?.code || '');
+    if (!/^\d{7,15}$/.test(cleanPhone) || !code) {
+      res.status(400).json({ error: 'Faltan datos.' });
+      return;
+    }
+    const otp = await OtpService.verify(cleanPhone, code, 'PROFILE_CHANGE');
+    if (!otp.ok) { res.status(401).json({ error: otp.reason || 'Código incorrecto.' }); return; }
+
+    const clash = await prisma.user.findFirst({ where: { phoneNumber: cleanPhone, NOT: { id: req.user.userId } } });
+    if (clash) { res.status(409).json({ error: 'Ya hay otra cuenta con ese número.' }); return; }
+
+    const user = await prisma.user.update({ where: { id: req.user.userId }, data: { phoneNumber: cleanPhone } });
+    res.json({ success: true, phoneNumber: user.phoneNumber });
+  }
 }

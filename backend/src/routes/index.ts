@@ -31,6 +31,9 @@ router.post('/auth/request-otp', otpRequestLimiter, authLimiter, AuthController.
 router.post('/auth/verify-login', authLimiter, AuthController.verifyLogin);
 router.post('/auth/register-step', registerLimiter, upload.single('media'), AuthController.registerStep);
 router.get('/auth/profile', authMiddleware, AuthController.getProfile);
+router.put('/auth/pin', authMiddleware, authLimiter, AuthController.changePin);
+router.post('/auth/phone/request-otp', authMiddleware, otpRequestLimiter, authLimiter, AuthController.requestPhoneChange);
+router.put('/auth/phone', authMiddleware, authLimiter, AuthController.confirmPhoneChange);
 
 // Emergency & Rescuer Access (Public & Consultation Mode)
 router.get('/emergency/:token', emergencyLimiter, EmergencyController.getEmergencyCard);

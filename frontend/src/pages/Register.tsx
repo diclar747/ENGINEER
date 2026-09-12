@@ -71,12 +71,19 @@ export const Register: React.FC = () => {
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
-  // Este chat también es el "Asistente Bot" público del nav — muchos de los que
-  // entran acá ya son socios activos que quieren preguntar algo (no registrarse).
-  // Si ya venían activos ANTES del primer mensaje, no es un "registro recién
-  // completado": seguimos la conversación como WhatsApp en vez de cortar con la
-  // pantalla de "¡listo, andá a loguearte!".
-  const firstReplyRef = useRef(true);
+  // Este chat también es el "Asistente Bot" del nav (público Y logueado) — muchos
+  // de los que entran acá ya son socios activos que quieren preguntar algo (no
+  // registrarse). Si ya venían activos ANTES del primer mensaje, no es un
+  // "registro recién completado": seguimos la conversación como WhatsApp en vez
+  // de cortar con la pantalla de "¡listo!". OJO: antes esto se decidía mirando
+  // si era "el primer mensaje de la sesión" — pero un socio existente que manda
+  // un SEGUNDO mensaje también sigue teniendo `completed=true` (su cuenta sigue
+  // activa), y esa lógica lo mandaba igual a la pantalla de cierre. Ahora se fija
+  // el estado de la cuenta UNA sola vez, en el primer reply, y ya no cambia.
+  const accountStatusRef = useRef<'unknown' | 'was-active' | 'was-registering'>('unknown');
+  // ¿Ya había sesión (vino del FAB del dashboard, no de afuera)? Si es así, los
+  // botones de "ya tenés cuenta" van al panel, no a pedir loguearse de nuevo.
+  const isLoggedIn = !!localStorage.getItem('biopass_token');
 
   // Primer paso ANTES del formulario de teléfono: pedir el permiso de
   // notificaciones. 'checking' evita el parpadeo mientras se consulta el
@@ -107,8 +114,6 @@ export const Register: React.FC = () => {
 
   const post = useCallback(
     async (message: string, file?: File) => {
-      const isFirst = firstReplyRef.current;
-      firstReplyRef.current = false;
       setBusy(true);
       try {
         const fd = new FormData();
@@ -121,12 +126,16 @@ export const Register: React.FC = () => {
           { id: `b-${Date.now()}`, who: 'bot', text: data.reply, imageUrl: data.mediaAttachment?.dataUrl },
         ]);
         if (data.state) setState(data.state);
-        // Solo mostramos la pantalla de "¡listo!" si la cuenta se activó JUSTO AHORA
-        // (recién terminó de registrarse). Si ya venía activa desde el primer mensaje,
-        // es un socio existente charlando — seguimos como un chat normal.
-        if (data.completed) {
-          if (isFirst) setReturningMember(true);
-          else setDone(true); // el login que sigue liga la suscripción anónima a esta cuenta (ver Login.tsx)
+        // El estado de la cuenta (¿ya estaba activa, o se estaba registrando?) se
+        // fija UNA sola vez con el primer reply y ya no cambia — así un socio
+        // existente puede mandar cuantos mensajes quiera sin que de repente
+        // aparezca la pantalla de "¡registro completo!".
+        if (accountStatusRef.current === 'unknown') {
+          accountStatusRef.current = data.completed ? 'was-active' : 'was-registering';
+          if (data.completed) setReturningMember(true);
+        } else if (data.completed && accountStatusRef.current === 'was-registering') {
+          accountStatusRef.current = 'was-active'; // no repetir la pantalla de cierre en mensajes futuros
+          setDone(true); // el login que sigue liga la suscripción anónima a esta cuenta (ver Login.tsx)
         }
       } catch (err: any) {
         setMessages((p) => [
@@ -180,7 +189,10 @@ export const Register: React.FC = () => {
   const pct = done ? 100 : Math.round((idx / STEPS.length) * 100);
 
   return (
-    <div className="fixed inset-0 flex flex-col bg-app text-fg">
+    // En pantallas anchas, el chat queda como una columna centrada tipo "WhatsApp
+    // Web" (no estirado de punta a punta) — en el teléfono sigue de borde a borde.
+    <div className="fixed inset-0 flex justify-center bg-app sm:bg-muted/40">
+    <div className="w-full sm:max-w-2xl h-full flex flex-col bg-app text-fg sm:border-x sm:border-line sm:shadow-xl">
       {/* Header */}
       <header
         className="shrink-0 bg-card border-b border-line"
@@ -188,7 +200,7 @@ export const Register: React.FC = () => {
       >
         <div className="flex items-center gap-2.5 px-3 py-2.5">
           <button
-            onClick={() => (started ? window.location.reload() : navigate('/login'))}
+            onClick={() => (started ? window.location.reload() : navigate(isLoggedIn ? '/dashboard' : '/login'))}
             className="p-1.5 -ml-1 rounded-full hover:bg-muted text-fg-soft shrink-0"
             aria-label="Volver"
           >
@@ -299,21 +311,30 @@ export const Register: React.FC = () => {
             >
               Empezar registro <ArrowRight className="w-4 h-4" />
             </button>
-            <p className="text-center text-[11px] text-fg-muted">
-              ¿Ya tenés cuenta?{' '}
-              <button type="button" onClick={() => navigate('/login')} className="text-teal-600 dark:text-teal-300 font-semibold">
-                Iniciar sesión
-              </button>
-            </p>
+            {!isLoggedIn && (
+              <p className="text-center text-[11px] text-fg-muted">
+                ¿Ya tenés cuenta?{' '}
+                <button type="button" onClick={() => navigate('/login')} className="text-teal-600 dark:text-teal-300 font-semibold">
+                  Iniciar sesión
+                </button>
+              </p>
+            )}
           </form>
         </div>
       ) : (
         <>
           {returningMember && (
             <div className="shrink-0 px-3.5 py-2 bg-teal-500/10 border-b border-teal-500/20 text-[11px] text-fg-soft flex items-center justify-between gap-2">
-              <span>Ya tenés una cuenta activa — para gestionarla completa (pagos, descargas, historial), entrá a tu panel.</span>
-              <button onClick={() => navigate('/login')} className="shrink-0 font-bold text-teal-600 dark:text-teal-300 whitespace-nowrap">
-                Iniciar sesión
+              <span>
+                {isLoggedIn
+                  ? 'Ya sos socio activo — para pagos, descargas e historial completo, andá a tu panel.'
+                  : 'Ya tenés una cuenta activa — para gestionarla completa (pagos, descargas, historial), entrá a tu panel.'}
+              </span>
+              <button
+                onClick={() => navigate(isLoggedIn ? '/dashboard' : '/login')}
+                className="shrink-0 font-bold text-teal-600 dark:text-teal-300 whitespace-nowrap"
+              >
+                {isLoggedIn ? 'Ir a mi panel' : 'Iniciar sesión'}
               </button>
             </div>
           )}
@@ -430,6 +451,7 @@ export const Register: React.FC = () => {
       )}
 
       <input ref={fileRef} type="file" accept="image/*,application/pdf" className="hidden" onChange={onFile} />
+    </div>
     </div>
   );
 };
