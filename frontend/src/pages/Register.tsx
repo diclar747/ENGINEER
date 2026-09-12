@@ -45,9 +45,21 @@ const stepIndex = (state: string) => {
 
 const now = () => new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
+/** Si ya hay una sesión (vino del FAB del dashboard, no de afuera sin cuenta),
+ *  se conoce el teléfono — se precarga para no hacerlo re-tipear el suyo propio. */
+function knownPhone(): string {
+  try {
+    const raw = localStorage.getItem('biopass_user');
+    const u = raw ? JSON.parse(raw) : null;
+    return u?.phoneNumber ? String(u.phoneNumber) : '';
+  } catch {
+    return '';
+  }
+}
+
 export const Register: React.FC = () => {
   const navigate = useNavigate();
-  const [phone, setPhone] = useState('');
+  const [phone, setPhone] = useState(knownPhone);
   const [started, setStarted] = useState(false);
   const [messages, setMessages] = useState<Msg[]>([]);
   const [input, setInput] = useState('');

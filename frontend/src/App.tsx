@@ -57,6 +57,9 @@ const USER_NAV = [
   { id: 'export', label: 'Exportar historial', icon: <Download className="w-[18px] h-[18px]" />, path: '/export' },
   { id: 'payments', label: 'Pagos', icon: <CreditCard className="w-[18px] h-[18px]" />, path: '/payments' },
   { id: 'audit-logs', label: 'Auditoría', icon: <Lock className="w-[18px] h-[18px]" />, path: '/audit-logs' },
+  // Mismo asistente público (/registro) — un socio logueado también puede
+  // preguntarle algo al bot desde acá, no solo desde afuera sin cuenta.
+  { id: 'bot', label: 'Asistente Bot', icon: <Bot className="w-[18px] h-[18px]" />, path: '/registro' },
 ];
 
 /** Shell con barra lateral para el área autenticada del titular. */
