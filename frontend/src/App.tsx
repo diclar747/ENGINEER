@@ -40,6 +40,11 @@ const AppLayout: React.FC = () => (
       <Outlet />
     </main>
     <PwaInstallPrompt />
+    {/* El permiso de notificaciones se pide ACÁ, al abrir la app — no solo
+        después de loguearse. Si todavía no hay cuenta conocida, la suscripción
+        queda anónima y se vincula sola en cuanto el login/registro identifica
+        al usuario (mismo endpoint upsertea por endpoint del navegador). */}
+    <PushPrompt />
     <footer className="border-t border-line/80 py-6 text-center text-[11px] text-fg-muted">
       Doorway Cortex Bio-Pass · Zero-Knowledge Health Passport · AES-256-GCM
     </footer>

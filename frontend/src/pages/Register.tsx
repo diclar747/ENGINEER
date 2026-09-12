@@ -11,9 +11,11 @@ import {
   CheckCircle2,
   ArrowRight,
   ArrowLeft,
+  BellRing,
 } from 'lucide-react';
 import { API_BASE_URL } from '../utils/api';
 import { renderFormattedText } from '../utils/textFormat';
+import { getPushState, subscribeToPush } from '../utils/push';
 
 interface Msg {
   id: string;
@@ -64,6 +66,29 @@ export const Register: React.FC = () => {
   // pantalla de "¡listo, andá a loguearte!".
   const firstReplyRef = useRef(true);
 
+  // Primer paso ANTES del formulario de teléfono: pedir el permiso de
+  // notificaciones. 'checking' evita el parpadeo mientras se consulta el
+  // estado; si ya estaba decidido (aceptado/bloqueado antes, o no soportado),
+  // se salta solo — no hay nada que preguntar de nuevo.
+  const [pushGate, setPushGate] = useState<'checking' | 'show' | 'done'>('checking');
+  const [pushBusy, setPushBusy] = useState(false);
+  useEffect(() => {
+    getPushState()
+      .then((s) => setPushGate(s === 'default' ? 'show' : 'done'))
+      .catch(() => setPushGate('done'));
+  }, []);
+  const decidePush = async (accept: boolean) => {
+    if (accept) {
+      setPushBusy(true);
+      try {
+        await subscribeToPush();
+      } finally {
+        setPushBusy(false);
+      }
+    }
+    setPushGate('done');
+  };
+
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' });
   }, [messages, busy, staged]);
@@ -89,7 +114,7 @@ export const Register: React.FC = () => {
         // es un socio existente charlando — seguimos como un chat normal.
         if (data.completed) {
           if (isFirst) setReturningMember(true);
-          else setDone(true);
+          else setDone(true); // el login que sigue liga la suscripción anónima a esta cuenta (ver Login.tsx)
         }
       } catch (err: any) {
         setMessages((p) => [
@@ -167,17 +192,19 @@ export const Register: React.FC = () => {
               {returningMember ? 'Asistente Bio-Pass' : 'Crear mi Bio-Pass'}
             </h1>
             <p className="text-[11px] text-fg-muted leading-tight">
-              {done
-                ? '¡Registro completo!'
-                : returningMember
-                  ? 'Ya sos socio activo — preguntame lo que necesites'
-                  : started
-                    ? `Paso ${Math.min(idx + 1, STEPS.length)}/${STEPS.length} · ${STEPS[Math.min(idx, STEPS.length - 1)].label}`
-                    : 'Registro guiado · < 3 min'}
+              {pushGate === 'show'
+                ? 'Paso 1 · Notificaciones'
+                : done
+                  ? '¡Registro completo!'
+                  : returningMember
+                    ? 'Ya sos socio activo — preguntame lo que necesites'
+                    : started
+                      ? `Paso ${Math.min(idx + 1, STEPS.length)}/${STEPS.length} · ${STEPS[Math.min(idx, STEPS.length - 1)].label}`
+                      : 'Registro guiado · < 3 min'}
             </p>
           </div>
         </div>
-        {started && !returningMember && (
+        {started && !returningMember && pushGate === 'done' && (
           <div className="h-1 bg-muted">
             <div
               className="h-full bg-gradient-to-r from-teal-600 to-emerald-600 transition-all duration-500"
@@ -187,7 +214,43 @@ export const Register: React.FC = () => {
         )}
       </header>
 
-      {!started ? (
+      {pushGate === 'checking' ? (
+        <div className="flex-1 flex items-center justify-center">
+          <Loader2 className="w-6 h-6 animate-spin text-teal-500" />
+        </div>
+      ) : pushGate === 'show' ? (
+        /* Paso 1, ANTES de pedir el teléfono: notificaciones. */
+        <div className="flex-1 overflow-y-auto flex items-center justify-center p-6">
+          <div className="w-full max-w-sm text-center space-y-5">
+            <div className="w-16 h-16 rounded-2xl bg-gradient-to-tr from-teal-500 to-emerald-500 flex items-center justify-center mx-auto shadow-lg shadow-teal-500/30">
+              <BellRing className="w-8 h-8 text-white" />
+            </div>
+            <div>
+              <h2 className="text-xl font-black tracking-tight">Activá las notificaciones</h2>
+              <p className="text-xs text-fg-muted mt-1.5 leading-relaxed">
+                Te avisamos al instante en este dispositivo cuando alguien escanee tu QR de emergencia,
+                cuando toca tu medicación o se acerca un turno — además del aviso por WhatsApp.
+              </p>
+            </div>
+            <div className="space-y-2">
+              <button
+                onClick={() => decidePush(true)}
+                disabled={pushBusy}
+                className="w-full py-3.5 rounded-2xl bg-gradient-to-r from-teal-600 to-emerald-600 hover:from-teal-500 hover:to-emerald-500 disabled:opacity-50 text-white font-black text-sm shadow-lg shadow-teal-500/20 transition-all active:scale-[0.98]"
+              >
+                {pushBusy ? 'Activando…' : 'Activar notificaciones'}
+              </button>
+              <button
+                onClick={() => decidePush(false)}
+                disabled={pushBusy}
+                className="w-full py-2.5 rounded-2xl text-fg-muted hover:text-fg text-xs font-semibold transition-colors"
+              >
+                Ahora no, continuar
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : !started ? (
         /* Phone number — first screen */
         <div className="flex-1 overflow-y-auto flex items-center justify-center p-6">
           <form onSubmit={begin} className="w-full max-w-sm space-y-5">

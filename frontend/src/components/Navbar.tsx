@@ -1,7 +1,6 @@
 import React, { useState } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import {
-  ShieldCheck,
   HeartPulse,
   QrCode,
   CreditCard,
@@ -9,10 +8,7 @@ import {
   Bot,
   Lock,
   LogOut,
-  Menu,
   X,
-  Smartphone,
-  Sparkles,
 } from 'lucide-react';
 import { ThemeToggle } from './ThemeToggle';
 
@@ -111,48 +107,71 @@ export const Navbar: React.FC = () => {
                 Iniciar Sesión
               </Link>
             )}
-
-            {/* Mobile toggle */}
-            <button
-              onClick={() => setMobileOpen((v) => !v)}
-              className="lg:hidden p-2.5 rounded-xl border border-line bg-muted/90 text-fg-soft hover:text-fg transition-colors"
-              aria-label="Abrir menú"
-            >
-              {mobileOpen ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
-            </button>
           </div>
         </div>
-
-        {/* Mobile nav drawer */}
-        {mobileOpen && (
-          <nav className="lg:hidden pb-5 pt-2 border-t border-line/80 grid grid-cols-2 gap-2 animate-fadeIn">
-            {NAV_ITEMS.map(({ label, path, icon: Icon }) => (
-              <Link
-                key={path}
-                to={path}
-                onClick={() => setMobileOpen(false)}
-                className={`flex items-center gap-2.5 px-3.5 py-3 rounded-xl text-xs font-semibold transition-all ${
-                  isActive(path)
-                    ? 'bg-teal-500/15 text-teal-600 dark:text-teal-300 border border-teal-500/30'
-                    : 'text-fg-soft hover:text-fg bg-panel/60 border border-line/80'
-                }`}
-              >
-                <Icon className="w-4 h-4 shrink-0 text-teal-600 dark:text-teal-400" />
-                <span className="truncate">{label}</span>
-              </Link>
-            ))}
-            {token && (
-              <button
-                onClick={handleLogout}
-                className="col-span-2 mt-1 flex items-center justify-center gap-2 text-xs font-bold py-3 rounded-xl border border-rose-500/30 bg-rose-500/10 text-rose-600 dark:text-rose-300 transition-colors"
-              >
-                <LogOut className="w-4 h-4" />
-                <span>Cerrar Sesión</span>
-              </button>
-            )}
-          </nav>
-        )}
       </div>
+
+      {/* Móvil: mismo patrón de FAB + bottom-sheet que el panel autenticado — el
+          menú apretado de hamburguesa apenas se veía. Desktop conserva el nav de
+          arriba tal cual. */}
+      {mobileOpen && (
+        <>
+          <div className="lg:hidden fixed inset-0 bg-black/45 z-40 animate-fade-in" onClick={() => setMobileOpen(false)} />
+          <div className="lg:hidden fixed inset-x-0 bottom-0 z-50 bg-card rounded-t-3xl border-t border-line shadow-2xl animate-slide-up pb-[calc(0.5rem+var(--safe-bottom))]">
+            <div className="pt-3 pb-1 flex justify-center"><div className="w-10 h-1.5 rounded-full bg-line" /></div>
+            <div className="px-4 pb-2 pt-1 flex items-center gap-2 border-b border-line/70">
+              <HeartPulse className="w-4 h-4 text-teal-600 dark:text-teal-400" />
+              <span className="font-black text-fg text-sm">Menú</span>
+              <button type="button" onClick={() => setMobileOpen(false)} className="ml-auto p-1.5 rounded-lg text-fg-muted hover:bg-muted">
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <nav className="p-2 max-h-[60vh] overflow-y-auto">
+              {NAV_ITEMS.map(({ label, path, icon: Icon }) => (
+                <Link
+                  key={path}
+                  to={path}
+                  onClick={() => setMobileOpen(false)}
+                  className={`flex items-center gap-3.5 px-3.5 py-3.5 rounded-2xl text-[15px] font-bold transition-colors ${
+                    isActive(path)
+                      ? 'bg-teal-500/12 text-teal-700 dark:text-teal-300'
+                      : 'text-fg-soft hover:bg-muted active:bg-muted'
+                  }`}
+                >
+                  <Icon className={`w-5 h-5 shrink-0 ${isActive(path) ? '' : 'text-fg-muted'}`} />
+                  <span className="flex-1 text-left truncate">{label}</span>
+                  {isActive(path) && <span className="w-1.5 h-1.5 rounded-full bg-teal-500" />}
+                </Link>
+              ))}
+            </nav>
+            {token && (
+              <div className="px-3 pb-2 pt-1 border-t border-line/70">
+                <button
+                  onClick={handleLogout}
+                  className="w-full flex items-center justify-center gap-2 text-sm font-bold py-3 rounded-2xl border border-rose-500/30 bg-rose-500/10 text-rose-600 dark:text-rose-300 transition-colors"
+                >
+                  <LogOut className="w-4 h-4" />
+                  <span>Cerrar Sesión</span>
+                </button>
+              </div>
+            )}
+          </div>
+        </>
+      )}
+
+      {/* FAB móvil — mismo look que el del panel autenticado (corazón, degradado
+          teal→emerald, halo pulsante). Oculto mientras el bottom-sheet está abierto. */}
+      {!mobileOpen && (
+        <button
+          type="button"
+          onClick={() => setMobileOpen(true)}
+          aria-label="Abrir menú"
+          className="lg:hidden fixed right-4 bottom-[calc(1rem+var(--safe-bottom))] z-40 w-14 h-14 rounded-full bg-gradient-to-br from-teal-500 to-emerald-600 text-white shadow-xl shadow-emerald-600/35 flex items-center justify-center active:scale-90 transition-transform"
+        >
+          <span className="absolute inset-0 rounded-full bg-emerald-400/40 animate-ping [animation-duration:2.6s]" />
+          <HeartPulse className="w-6 h-6 relative" />
+        </button>
+      )}
     </header>
   );
 };

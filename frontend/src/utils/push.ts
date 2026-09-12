@@ -76,6 +76,23 @@ export async function subscribeToPush(emergencyToken?: string): Promise<PushStat
   return 'subscribed';
 }
 
+/**
+ * Llamar justo después de un login o registro exitoso. Si el navegador YA
+ * tiene el permiso concedido (p. ej. lo aceptó en el PushPrompt de /login antes
+ * de tener cuenta, quedando una suscripción anónima), re-suscribe con el token
+ * de auth ya en el header — el backend hace upsert por endpoint y la liga a
+ * este usuario. Si el permiso todavía no se decidió o está bloqueado, NO
+ * vuelve a pedirlo acá (ya se le preguntó, o dijo que no) — nunca lanza.
+ */
+export async function rebindPushIfGranted(emergencyToken?: string): Promise<void> {
+  try {
+    if (!pushSupported() || Notification.permission !== 'granted') return;
+    await subscribeToPush(emergencyToken);
+  } catch {
+    /* best-effort */
+  }
+}
+
 export async function unsubscribeFromPush(): Promise<void> {
   const reg = await navigator.serviceWorker.getRegistration();
   const sub = reg ? await reg.pushManager.getSubscription() : null;
