@@ -41,6 +41,7 @@ export const Navbar: React.FC = () => {
   const isActive = (path: string) => location.pathname === path;
 
   return (
+    <>
     <header className="border-b border-line/80 bg-app/90 backdrop-blur-xl sticky top-0 z-40 transition-all">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         <div className="flex items-center justify-between gap-4 h-16 sm:h-18">
@@ -92,7 +93,12 @@ export const Navbar: React.FC = () => {
           </div>
         </div>
       </div>
+    </header>
 
+    {/* FUERA del <header>: tiene backdrop-blur (backdrop-filter), que crea un
+        "containing block" propio para position:fixed — el FAB/hoja quedaban
+        fixed RELATIVO A ESE HEADER (una franja angosta arriba de todo) en vez
+        de a la ventana, por eso el botón aparecía pegado arriba en vez de abajo. */}
       {/* Menú por FAB + bottom-sheet en TODOS los tamaños (no solo móvil) — el nav
           de arriba se sacó del todo, el mismo patrón que ya usa el panel
           autenticado (AppShell). */}
@@ -155,6 +161,6 @@ export const Navbar: React.FC = () => {
           <HeartPulse className="w-6 h-6 relative" />
         </button>
       )}
-    </header>
+    </>
   );
 };
