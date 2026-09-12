@@ -3,6 +3,7 @@ import bcrypt from 'bcryptjs';
 import { prisma } from '../database/prisma';
 import { config } from '../config';
 import { whatsappBot } from '../whatsapp/baileys.client';
+import { PushService } from './push.service';
 import { OtpPurpose } from '@prisma/client';
 
 export interface OtpDispatchResult {
@@ -52,9 +53,21 @@ export class OtpService {
     // número real no es dialable), se manda ahí para que le llegue seguro.
     let target = cleanPhone;
     try {
-      const u = await prisma.user.findUnique({ where: { phoneNumber: cleanPhone }, select: { whatsappJid: true } });
+      const u = await prisma.user.findUnique({ where: { phoneNumber: cleanPhone }, select: { whatsappJid: true, id: true } });
       if (u?.whatsappJid) target = u.whatsappJid;
-    } catch { /* sin acceso a user → se manda al número */ }
+      // Push, en paralelo al WhatsApp: solo llega si ESTE navegador ya tiene una
+      // suscripción guardada para esta cuenta (de una sesión anterior donde aceptó
+      // el prompt) — un dispositivo nuevo que nunca se logueó no tiene a quién
+      // mandarle nada por push todavía, así que ahí solo llega por WhatsApp.
+      if (u?.id) {
+        PushService.notify(
+          u.id,
+          '🔐 Código de verificación Bio-Pass',
+          `Tu código es ${code}. Vence en ${config.otp.ttlMinutes} minutos. No lo compartas con nadie.`,
+          { tag: 'biopass-otp' }
+        );
+      }
+    } catch { /* sin acceso a user → se manda al número, sin push */ }
     const delivered = await whatsappBot.sendMessage(target, text);
     const botOnline = whatsappBot.getStatus().connected;
 
