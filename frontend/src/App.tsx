@@ -1,6 +1,6 @@
 import React from 'react';
 import { Routes, Route, Navigate, Outlet, useLocation, useNavigate } from 'react-router-dom';
-import { HeartPulse, QrCode, Download, CreditCard, Lock, Bot, LogOut, ShieldCheck } from 'lucide-react';
+import { HeartPulse, QrCode, Download, CreditCard, Lock, Bot, LogOut, ShieldCheck, Settings as SettingsIcon } from 'lucide-react';
 import { Navbar } from './components/Navbar';
 import { PwaInstallPrompt } from './components/PwaInstallPrompt';
 import { PushPrompt } from './components/PushPrompt';
@@ -9,6 +9,7 @@ import { AppShell } from './components/ui/Layout';
 import { Login } from './pages/Login';
 import { Register } from './pages/Register';
 import { Dashboard } from './pages/Dashboard';
+import { Settings } from './pages/Settings';
 import { QrStickerStudio } from './pages/QrStickerStudio';
 import { HistoryExport } from './pages/HistoryExport';
 import { Payments } from './pages/Payments';
@@ -57,6 +58,7 @@ const USER_NAV = [
   { id: 'export', label: 'Exportar historial', icon: <Download className="w-[18px] h-[18px]" />, path: '/export' },
   { id: 'payments', label: 'Pagos', icon: <CreditCard className="w-[18px] h-[18px]" />, path: '/payments' },
   { id: 'audit-logs', label: 'Auditoría', icon: <Lock className="w-[18px] h-[18px]" />, path: '/audit-logs' },
+  { id: 'settings', label: 'Configuración', icon: <SettingsIcon className="w-[18px] h-[18px]" />, path: '/settings' },
   // Mismo asistente público (/registro) — un socio logueado también puede
   // preguntarle algo al bot desde acá, no solo desde afuera sin cuenta.
   { id: 'bot', label: 'Asistente Bot', icon: <Bot className="w-[18px] h-[18px]" />, path: '/registro' },
@@ -134,6 +136,7 @@ const App: React.FC = () => {
             <Route path="/export" element={<HistoryExport />} />
             <Route path="/payments" element={<Payments />} />
             <Route path="/audit-logs" element={<AuditLogs />} />
+            <Route path="/settings" element={<Settings />} />
           </Route>
         </Route>
 
