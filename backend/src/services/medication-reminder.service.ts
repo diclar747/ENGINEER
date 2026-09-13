@@ -747,6 +747,7 @@ export class MedicationReminderService {
   /** Persiste un borrador ya confirmado. Calcula `nextDoseAt` para INTERVAL. */
   static async createFromDraft(userId: string, d: Partial<ReminderDraft>) {
     if (d.kind === 'APPOINTMENT') {
+      const leadMinutes = d.leadMinutes ?? 30; // sin preferencia del usuario → 30 min por defecto
       return prisma.medicationReminder.create({
         data: {
           userId,
@@ -754,7 +755,10 @@ export class MedicationReminderService {
           medication: this.cap((d.medication || 'Consulta médica').slice(0, 120)),
           whenAt: d.whenAt ? new Date(d.whenAt) : null,
           times: '[]',
-          leadMinutes: d.leadMinutes ?? 120,
+          leadMinutes,
+          // Segundo aviso automático 10 min antes, además del principal — salvo que
+          // el principal YA sea de 10 min (no mandar el mismo aviso dos veces).
+          secondLeadMinutes: leadMinutes !== 10 ? 10 : null,
         },
       });
     }
@@ -1113,6 +1117,24 @@ export class MedicationReminderService {
               data: { lastSentAt: new Date(), lastSentSlot: 'LEAD', active: whenMs > nowMs },
             });
             sent++;
+          }
+        }
+        // Segundo aviso automático (ej. 10 min antes), además del principal — mismo
+        // registro, otro offset (`secondLeadMinutes`, ver createFromDraft).
+        else if (r.secondLeadMinutes && r.lastSentSlot !== 'LEAD2') {
+          const untilLead2 = whenMs - nowMs - r.secondLeadMinutes * 60_000;
+          if (untilLead2 <= 150_000 && whenMs - nowMs > -15 * 60_000) {
+            const msg2 = gn
+              ? `📅 *Momandu'a: turno*\n\n*${r.medication}*\n🕒 ${dtLocal}`
+              : `📅 *Recordatorio: tu turno*\n\n*${r.medication}*\n🕒 ${dtLocal}\n\n_Faltan ${leadLabel(r.secondLeadMinutes)}. No faltes._`;
+            PushService.notify(r.user.id, '📅 Tu turno médico', msg2, { tag: `reminder-${r.id}-2`, url: '/dashboard', requireInteraction: true });
+            if (await whatsappBot.sendMessage(target, msg2)) {
+              await prisma.medicationReminder.update({
+                where: { id: r.id },
+                data: { lastSentAt: new Date(), lastSentSlot: 'LEAD2', active: whenMs > nowMs },
+              });
+              sent++;
+            }
           }
         }
         if (whenMs < nowMs - 3600_000) {

@@ -1902,7 +1902,11 @@ export class BotStateMachine {
           case 'when':
             return '📅 ¿Qué día y hora es el turno? (ej: _"mañana 9:00"_, _"15/10 a las 14:30"_)';
           case 'lead':
-            return '⏱️ ¿Con cuánta anticipación te aviso?\n*[1]* 1 hora antes · *[2]* 2 horas · *[3]* 3 horas · *[4]* 1 día antes';
+            return (
+              '⏱️ ¿Con cuánta anticipación te aviso? Escribime lo que quieras — ' +
+              '_"10 minutos antes"_, _"media hora antes"_, _"2 horas antes"_, _"el día antes"_… lo que necesites.\n' +
+              '_Si no estás seguro, escribí *LISTO* y te aviso 30 minutos antes (y de nuevo 10 minutos antes)._'
+            );
           default:
             return '';
         }
@@ -2480,6 +2484,11 @@ export class BotStateMachine {
         }
 
         if (state === 'ACTIVE_REMIND_LEAD') {
+          // "listo"/"default"/"lo que sea"/"da igual"... = sin preferencia → 30 min.
+          if (/^(listo|default|normal|lo que sea|da igual|cualquiera|no se|no s[eé]|vos decid[ií]s|cualquier cosa|est[aá]ndar|as[ií] est[aá] bien|vos eleg[ií]|no importa)$/.test(lc)) {
+            draft.leadMinutes = 30;
+            return advanceRemind(draft);
+          }
           const opt: Record<string, number> = { '1': 60, '2': 120, '3': 180, '4': 1440 };
           let mins = opt[cleanText];
           if (!mins) {
@@ -2492,7 +2501,14 @@ export class BotStateMachine {
               else if (mm) mins = +mm[1];
             }
           }
-          if (!mins || mins < 5 || mins > 10080) return { replyText: remindQuestion('lead', draft) };
+          if (mins !== undefined && mins < 5) {
+            return {
+              replyText:
+                'Reviso los turnos cada 5 minutos, así que no puedo avisarte con menos que eso — pedime al menos ' +
+                '_"5 minutos antes"_, o escribí *LISTO* para que te avise 30 minutos antes por defecto.',
+            };
+          }
+          if (!mins || mins > 10080) return { replyText: remindQuestion('lead', draft) };
           draft.leadMinutes = mins;
           return advanceRemind(draft);
         }
@@ -2539,7 +2555,13 @@ export class BotStateMachine {
             draft.scheduleKind === 'INTERVAL'
               ? `Te aviso ${MedicationReminderService.leadLabel(draft.leadMinutes ?? 10)} antes y a la hora. Cuando la tomes escribí *YA TOMÉ* y recalculo la próxima.${dur}`
               : `Te aviso ${MedicationReminderService.leadLabel(draft.leadMinutes ?? 10)} antes y a la hora, todos los días.${dur}`;
-          const how = draft.kind === 'APPOINTMENT' ? `Te aviso ${MedicationReminderService.leadLabel(draft.leadMinutes ?? 120)} antes.` : howMed;
+          const apptLead = draft.leadMinutes ?? 30;
+          const how =
+            draft.kind === 'APPOINTMENT'
+              ? apptLead !== 10
+                ? `Te aviso ${MedicationReminderService.leadLabel(apptLead)} antes, y de nuevo 10 minutos antes.`
+                : `Te aviso ${MedicationReminderService.leadLabel(apptLead)} antes.`
+              : howMed;
           return {
             replyText:
               `✅ *¡Guardado en tu bóveda!*\n\n${MedicationReminderService.describeDraft(draft)}\n${how}\n` +
