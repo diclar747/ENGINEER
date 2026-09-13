@@ -7,6 +7,7 @@ import {
   HeartPulse,
   Paperclip,
   Camera,
+  Mic,
   X,
   CheckCircle2,
   ArrowRight,
@@ -69,8 +70,15 @@ export const Register: React.FC = () => {
   const [returningMember, setReturningMember] = useState(false);
   const [staged, setStaged] = useState<{ file: File; previewUrl?: string } | null>(null);
 
+  const [recording, setRecording] = useState(false);
+  const [recordSecs, setRecordSecs] = useState(0);
+
   const scrollRef = useRef<HTMLDivElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const recordedStreamRef = useRef<MediaStream | null>(null);
+  const audioChunksRef = useRef<Blob[]>([]);
+  const recordTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   // Este chat también es el "Asistente Bot" del nav (público Y logueado) — muchos
   // de los que entran acá ya son socios activos que quieren preguntar algo (no
   // registrarse). Si ya venían activos ANTES del primer mensaje, no es un
@@ -113,7 +121,7 @@ export const Register: React.FC = () => {
   }, [messages, busy, staged]);
 
   const post = useCallback(
-    async (message: string, file?: File) => {
+    async (message: string, file?: File, replaceId?: string) => {
       setBusy(true);
       try {
         const fd = new FormData();
@@ -121,6 +129,13 @@ export const Register: React.FC = () => {
         fd.append('message', message);
         if (file) fd.append('media', file, file.name);
         const { data } = await axios.post(`${API_BASE_URL}/auth/register-step`, fd);
+        // Nota de voz: reemplaza el "🎤 Nota de voz…" provisorio por lo que el
+        // servidor transcribió, para que confirme que se entendió bien.
+        if (replaceId) {
+          setMessages((p) =>
+            p.map((m) => (m.id === replaceId ? { ...m, text: data.transcript ? `🎤 "${data.transcript}"` : '🎤 Nota de voz' } : m))
+          );
+        }
         setMessages((p) => [
           ...p,
           { id: `b-${Date.now()}`, who: 'bot', text: data.reply, imageUrl: data.mediaAttachment?.dataUrl },
@@ -184,6 +199,86 @@ export const Register: React.FC = () => {
     if (!f) return;
     setStaged({ file: f, previewUrl: f.type.startsWith('image/') ? URL.createObjectURL(f) : undefined });
   };
+
+  // Nota de voz: mismo camino que WhatsApp — el backend ya transcribe cualquier
+  // /auth/register-step con `media` de mimetype audio/* (NiroService.transcribeAudio)
+  // y lo trata como si hubiera sido tecleado. Acá solo falta grabarla y mandarla.
+  const stopRecordTimer = () => {
+    if (recordTimerRef.current) {
+      clearInterval(recordTimerRef.current);
+      recordTimerRef.current = null;
+    }
+  };
+
+  const sendAudio = async (file: File) => {
+    const id = `m-${Date.now()}`;
+    setMessages((p) => [...p, { id, who: 'me', text: '🎤 Nota de voz…' }]);
+    await post('', file, id);
+  };
+
+  const startRecording = async () => {
+    if (busy || recording) return;
+    if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === 'undefined') {
+      setMessages((p) => [
+        ...p,
+        { id: `e-${Date.now()}`, who: 'bot', text: '⚠️ Tu navegador no permite grabar audio acá. Escribí tu respuesta.' },
+      ]);
+      return;
+    }
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+        ? 'audio/webm;codecs=opus'
+        : MediaRecorder.isTypeSupported('audio/mp4')
+          ? 'audio/mp4'
+          : '';
+      const rec = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
+      audioChunksRef.current = [];
+      recordedStreamRef.current = stream;
+      rec.ondataavailable = (e) => {
+        if (e.data.size > 0) audioChunksRef.current.push(e.data);
+      };
+      rec.onstop = () => {
+        recordedStreamRef.current?.getTracks().forEach((t) => t.stop());
+        recordedStreamRef.current = null;
+        if (audioChunksRef.current.length) {
+          const blob = new Blob(audioChunksRef.current, { type: rec.mimeType || 'audio/webm' });
+          const ext = (rec.mimeType || '').includes('mp4') ? 'm4a' : 'webm';
+          sendAudio(new File([blob], `nota_voz.${ext}`, { type: blob.type }));
+        }
+      };
+      rec.start();
+      mediaRecorderRef.current = rec;
+      setRecording(true);
+      setRecordSecs(0);
+      recordTimerRef.current = setInterval(() => setRecordSecs((s) => s + 1), 1000);
+    } catch {
+      setMessages((p) => [
+        ...p,
+        { id: `e-${Date.now()}`, who: 'bot', text: '⚠️ No pude acceder al micrófono. Revisá los permisos del navegador.' },
+      ]);
+    }
+  };
+
+  const stopRecording = () => {
+    mediaRecorderRef.current?.stop();
+    setRecording(false);
+    stopRecordTimer();
+  };
+
+  const cancelRecording = () => {
+    if (mediaRecorderRef.current) {
+      mediaRecorderRef.current.onstop = null; // no auto-enviar
+      mediaRecorderRef.current.stop();
+    }
+    recordedStreamRef.current?.getTracks().forEach((t) => t.stop());
+    recordedStreamRef.current = null;
+    audioChunksRef.current = [];
+    setRecording(false);
+    stopRecordTimer();
+  };
+
+  useEffect(() => () => stopRecordTimer(), []);
 
   const idx = stepIndex(state);
   const pct = done ? 100 : Math.round((idx / STEPS.length) * 100);
@@ -402,49 +497,84 @@ export const Register: React.FC = () => {
                   </div>
                 </div>
               )}
-              <div className="px-2 pt-2 flex items-end gap-1.5">
-                <button
-                  onClick={() => {
-                    fileRef.current?.removeAttribute('capture');
-                    fileRef.current?.click();
-                  }}
-                  className="w-10 h-10 rounded-full hover:bg-muted flex items-center justify-center shrink-0 text-fg-muted"
-                  aria-label="Adjuntar archivo"
-                >
-                  <Paperclip className="w-5 h-5" />
-                </button>
-                <button
-                  onClick={() => {
-                    fileRef.current?.setAttribute('capture', 'environment');
-                    fileRef.current?.click();
-                  }}
-                  className="w-10 h-10 rounded-full hover:bg-muted flex items-center justify-center shrink-0 text-fg-muted"
-                  aria-label="Cámara"
-                >
-                  <Camera className="w-5 h-5" />
-                </button>
-                <textarea
-                  value={input}
-                  onChange={(e) => setInput(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter' && !e.shiftKey) {
-                      e.preventDefault();
-                      send();
-                    }
-                  }}
-                  rows={1}
-                  placeholder="Escribí tu respuesta…"
-                  className="flex-1 min-w-0 resize-none bg-panel border border-line rounded-3xl px-4 py-2.5 text-base text-fg placeholder-fg-muted outline-none focus:border-teal-500 max-h-28"
-                />
-                <button
-                  onClick={send}
-                  disabled={busy || (!input.trim() && !staged)}
-                  className="w-10 h-10 rounded-full bg-teal-600 hover:bg-teal-500 disabled:opacity-40 text-white flex items-center justify-center shrink-0"
-                  aria-label="Enviar"
-                >
-                  <Send className="w-4 h-4" />
-                </button>
-              </div>
+              {recording ? (
+                <div className="px-3 pt-2 pb-1.5 flex items-center gap-3">
+                  <button
+                    onClick={cancelRecording}
+                    className="w-10 h-10 rounded-full hover:bg-muted flex items-center justify-center shrink-0 text-fg-muted"
+                    aria-label="Cancelar grabación"
+                  >
+                    <X className="w-5 h-5" />
+                  </button>
+                  <div className="flex-1 flex items-center gap-2 text-rose-600 dark:text-rose-400 font-semibold text-sm">
+                    <span className="w-2.5 h-2.5 rounded-full bg-rose-500 animate-pulse shrink-0" />
+                    <span>
+                      Grabando… {String(Math.floor(recordSecs / 60)).padStart(2, '0')}:{String(recordSecs % 60).padStart(2, '0')}
+                    </span>
+                  </div>
+                  <button
+                    onClick={stopRecording}
+                    className="w-10 h-10 rounded-full bg-teal-600 hover:bg-teal-500 text-white flex items-center justify-center shrink-0"
+                    aria-label="Enviar nota de voz"
+                  >
+                    <Send className="w-4 h-4" />
+                  </button>
+                </div>
+              ) : (
+                <div className="px-2 pt-2 flex items-end gap-1.5">
+                  <button
+                    onClick={() => {
+                      fileRef.current?.removeAttribute('capture');
+                      fileRef.current?.click();
+                    }}
+                    disabled={busy}
+                    className="w-10 h-10 rounded-full hover:bg-muted flex items-center justify-center shrink-0 text-fg-muted disabled:opacity-40"
+                    aria-label="Adjuntar archivo"
+                  >
+                    <Paperclip className="w-5 h-5" />
+                  </button>
+                  <button
+                    onClick={() => {
+                      fileRef.current?.setAttribute('capture', 'environment');
+                      fileRef.current?.click();
+                    }}
+                    disabled={busy}
+                    className="w-10 h-10 rounded-full hover:bg-muted flex items-center justify-center shrink-0 text-fg-muted disabled:opacity-40"
+                    aria-label="Cámara"
+                  >
+                    <Camera className="w-5 h-5" />
+                  </button>
+                  <button
+                    onClick={startRecording}
+                    disabled={busy}
+                    className="w-10 h-10 rounded-full hover:bg-muted flex items-center justify-center shrink-0 text-fg-muted disabled:opacity-40"
+                    aria-label="Grabar nota de voz"
+                  >
+                    <Mic className="w-5 h-5" />
+                  </button>
+                  <textarea
+                    value={input}
+                    onChange={(e) => setInput(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' && !e.shiftKey) {
+                        e.preventDefault();
+                        send();
+                      }
+                    }}
+                    rows={1}
+                    placeholder="Escribí tu respuesta…"
+                    className="flex-1 min-w-0 resize-none bg-panel border border-line rounded-3xl px-4 py-2.5 text-base text-fg placeholder-fg-muted outline-none focus:border-teal-500 max-h-28"
+                  />
+                  <button
+                    onClick={send}
+                    disabled={busy || (!input.trim() && !staged)}
+                    className="w-10 h-10 rounded-full bg-teal-600 hover:bg-teal-500 disabled:opacity-40 text-white flex items-center justify-center shrink-0"
+                    aria-label="Enviar"
+                  >
+                    <Send className="w-4 h-4" />
+                  </button>
+                </div>
+              )}
             </div>
           )}
         </>

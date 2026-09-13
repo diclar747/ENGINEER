@@ -37,9 +37,10 @@ export class AuthController {
     let mediaBuffer = file?.buffer;
     let mediaMimeType = file?.mimetype;
     let mediaFilename = file?.originalname;
+    let audioTranscript: string | null = null;
     if (file && /^audio\//.test(file.mimetype || '')) {
-      const transcript = await NiroService.transcribeAudio(file.buffer, file.originalname || 'audio.ogg');
-      if (transcript) effectiveBody = effectiveBody ? `${effectiveBody} ${transcript}` : transcript;
+      audioTranscript = await NiroService.transcribeAudio(file.buffer, file.originalname || 'audio.ogg');
+      if (audioTranscript) effectiveBody = effectiveBody ? `${effectiveBody} ${audioTranscript}` : audioTranscript;
       mediaBuffer = undefined;
       mediaMimeType = undefined;
       mediaFilename = undefined;
@@ -67,6 +68,7 @@ export class AuthController {
         fullName: user?.fullName ?? null,
         // ACTIVE => they can log in now with phone + the PIN chosen in the flow
         completed: user?.status === 'ACTIVE',
+        transcript: audioTranscript,
         mediaAttachment: response.mediaAttachment && response.mediaAttachment.kind === 'image' ? {
           filename: response.mediaAttachment.filename,
           mimetype: response.mediaAttachment.mimetype,
