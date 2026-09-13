@@ -113,7 +113,12 @@ export class EmailService {
         </a>
       </p>
       <p style="color:#9ca3af;font-size:12px">
-        El archivo ZIP está protegido con tu PIN de 4 dígitos. El enlace vence el ${data.expiresAt.toLocaleString('es-PY', { timeZone: config.timezone })}.
+        El archivo ZIP está protegido con tu PIN de 4 dígitos (cifrado AES-256). El enlace vence el ${data.expiresAt.toLocaleString('es-PY', { timeZone: config.timezone })}.
+      </p>
+      <p style="color:#9ca3af;font-size:12px">
+        Si al abrirlo tu computadora dice que el archivo está "dañado" o "inválido", no es un error de la descarga: el
+        descompresor nativo de Windows o Mac no soporta cifrado AES-256. Instalá <strong>7-Zip</strong> (Windows,
+        gratis en 7-zip.org) o <strong>Keka</strong> (Mac, gratis en keka.io) y abrilo con esa app usando tu PIN.
       </p>
     `);
     return this.send({ to, subject: 'Bio-Pass — descarga de tu historial completo', template: 'vault_backup', html });

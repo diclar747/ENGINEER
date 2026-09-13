@@ -35,6 +35,9 @@ export const HistoryExport: React.FC = () => {
           <p className="text-xs sm:text-sm text-fg-soft mt-2 leading-relaxed">
             Empaqueta todos tus documentos de identidad, estudios de laboratorio, radiografías, registros de escaneo forense y fichas de rescate en un único archivo <strong>ZIP protegido con tu PIN de 4 dígitos</strong>.
           </p>
+          <p className="text-[11px] text-fg-muted mt-2">
+            Requiere <strong>7-Zip</strong> (Windows) o <strong>Keka</strong> (Mac) para abrirlo — el descompresor nativo del sistema no soporta el cifrado AES-256.
+          </p>
         </div>
 
         {/* Big Button */}
@@ -99,6 +102,16 @@ export const HistoryExport: React.FC = () => {
               <Download className="w-4 h-4" />
               <span>Descargar ZIP</span>
             </a>
+          </div>
+
+          <div className="p-3.5 rounded-2xl bg-amber-50 dark:bg-amber-950/40 border border-amber-500/30 flex items-start gap-2.5 text-[11px] text-amber-800 dark:text-amber-300 leading-relaxed">
+            <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
+            <span>
+              Este ZIP usa cifrado <strong>AES-256</strong>, más fuerte que el clásico. Si tu computadora dice que el
+              archivo está "dañado" al abrirlo, es porque el descompresor nativo de Windows o Mac no soporta AES-256 — no
+              es un error de la descarga. Instalá <strong>7-Zip</strong> (Windows) o <strong>Keka</strong> (Mac), ambos
+              gratis, y abrilo con esa app usando tu PIN.
+            </span>
           </div>
         </div>
       )}
