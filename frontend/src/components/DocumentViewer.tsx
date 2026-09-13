@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { X, ZoomIn, ZoomOut, RotateCw, Download, Printer, Share2, Maximize2, Loader2, FileText, Check } from 'lucide-react';
 
 interface DocumentViewerProps { open: boolean; onClose: () => void; url: string; title?: string; }
@@ -85,8 +86,12 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({ open, onClose, u
   };
 
   const b = 'inline-flex items-center justify-center w-9 h-9 rounded-lg bg-muted/80 hover:bg-muted text-fg border border-line transition-colors disabled:opacity-40';
-  return (
-    <div className="fixed inset-0 z-[100] flex flex-col bg-app/95 backdrop-blur-sm" role="dialog" aria-modal="true" aria-label={title || 'Visor de documento'}>
+  // Portal directo a <body>: si algún ancestro (actual o futuro) tuviera transform/
+  // filter/backdrop-filter, `position: fixed` deja de anclarse al viewport y el
+  // visor queda "encogido" dentro del layout — antes salía como una caja chica con
+  // el sidebar/header de fondo asomando. Montado en <body>, eso no puede pasar.
+  return createPortal(
+    <div className="fixed inset-0 z-[100] flex flex-col bg-app" role="dialog" aria-modal="true" aria-label={title || 'Visor de documento'}>
       <div className="flex items-center gap-1.5 sm:gap-2 px-3 sm:px-4 py-2.5 border-b border-line bg-panel/80">
         <FileText className="w-4 h-4 text-teal-600 dark:text-teal-400 shrink-0" />
         <span className="text-xs sm:text-sm font-bold text-fg truncate flex-1">{title || 'Documento'}</span>
@@ -125,7 +130,8 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({ open, onClose, u
         )}
       </div>
       {!pdf && (<div className="text-center text-[10px] text-fg-muted py-1.5 border-t border-line bg-panel/80 hidden sm:block">Rueda o doble clic para zoom · arrastrá para mover · <kbd>+</kbd>/<kbd>−</kbd> · <kbd>R</kbd> rotar · <kbd>Esc</kbd> cerrar</div>)}
-    </div>
+    </div>,
+    document.body
   );
 };
 export default DocumentViewer;
