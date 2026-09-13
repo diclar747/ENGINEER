@@ -1,17 +1,30 @@
-// PIN "recordado" solo en memoria de la pestaña (nunca en localStorage/sessionStorage).
-// Se pierde al recargar la página o cerrar sesión — el modelo Zero-Knowledge se
-// mantiene entre visitas, pero no obliga a re-tipear el PIN en cada descarga
-// dentro de la misma sesión de navegación.
-let cachedPin: string | null = null;
+// PIN "recordado" solo para esta pestaña/app: sessionStorage, nunca localStorage.
+// A diferencia de una variable en memoria (que se pierde con CUALQUIER recarga —
+// muy común en un PWA de celular, que el sistema operativo descarga y recarga al
+// volver de segundo plano), sessionStorage sobrevive recargas dentro de la misma
+// sesión de navegación y solo se borra al cerrar de verdad la pestaña/app.
+const KEY = 'biopass_pin_session';
 
 export function setSessionPin(pin: string): void {
-  cachedPin = pin;
+  try {
+    sessionStorage.setItem(KEY, pin);
+  } catch {
+    /* Safari privado / storage bloqueado: no hay caché, se repregunta y ya. */
+  }
 }
 
 export function getSessionPin(): string | null {
-  return cachedPin;
+  try {
+    return sessionStorage.getItem(KEY);
+  } catch {
+    return null;
+  }
 }
 
 export function clearSessionPin(): void {
-  cachedPin = null;
+  try {
+    sessionStorage.removeItem(KEY);
+  } catch {
+    /* noop */
+  }
 }
