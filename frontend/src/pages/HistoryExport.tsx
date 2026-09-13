@@ -1,15 +1,38 @@
 import React, { useState } from 'react';
 import { api } from '../utils/api';
-import { Download, ShieldCheck, Lock, Clock, FileArchive, CheckCircle2, AlertTriangle, KeyRound } from 'lucide-react';
+import { Download, ShieldCheck, Lock, Clock, FileArchive, CheckCircle2, AlertTriangle, KeyRound, Loader2 } from 'lucide-react';
 import { PinModal } from '../components/PinModal';
+import { getSessionPin, setSessionPin, clearSessionPin } from '../utils/pinSession';
 
 export const HistoryExport: React.FC = () => {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [exportData, setExportData] = useState<any>(null);
+  const [autoLoading, setAutoLoading] = useState(false);
 
   const handleExport = async (pin: string) => {
     const res = await api.post('/export/full-vault', { pin });
     setExportData(res.data);
+    setSessionPin(pin);
+  };
+
+  // Ya escribió el PIN correcto al iniciar sesión en esta pestaña — no hace
+  // falta repedirlo para generar el ZIP. Si el servidor lo rechaza (p. ej. lo
+  // cambió en otra pestaña), se descarta el caché y se pide de nuevo.
+  const handleDownloadClick = async () => {
+    const cachedPin = getSessionPin();
+    if (!cachedPin) {
+      setIsModalOpen(true);
+      return;
+    }
+    setAutoLoading(true);
+    try {
+      await handleExport(cachedPin);
+    } catch {
+      clearSessionPin();
+      setIsModalOpen(true);
+    } finally {
+      setAutoLoading(false);
+    }
   };
 
   return (
@@ -43,11 +66,12 @@ export const HistoryExport: React.FC = () => {
         {/* Big Button */}
         <div>
           <button
-            onClick={() => setIsModalOpen(true)}
-            className="w-full sm:w-auto px-8 py-4 sm:py-5 rounded-2xl bg-gradient-to-r from-teal-600 to-emerald-600 hover:from-teal-500 hover:to-emerald-500 text-white font-black text-sm sm:text-base shadow-2xl shadow-teal-500/25 hover:scale-105 active:scale-95 transition-all flex items-center justify-center gap-3 mx-auto"
+            onClick={handleDownloadClick}
+            disabled={autoLoading}
+            className="w-full sm:w-auto px-8 py-4 sm:py-5 rounded-2xl bg-gradient-to-r from-teal-600 to-emerald-600 hover:from-teal-500 hover:to-emerald-500 disabled:opacity-60 text-white font-black text-sm sm:text-base shadow-2xl shadow-teal-500/25 hover:scale-105 active:scale-95 transition-all flex items-center justify-center gap-3 mx-auto"
           >
-            <Download className="w-5 h-5 sm:w-6 sm:h-6" />
-            <span>DESCARGAR HISTORIAL COMPLETO</span>
+            {autoLoading ? <Loader2 className="w-5 h-5 sm:w-6 sm:h-6 animate-spin" /> : <Download className="w-5 h-5 sm:w-6 sm:h-6" />}
+            <span>{autoLoading ? 'GENERANDO ZIP…' : 'DESCARGAR HISTORIAL COMPLETO'}</span>
           </button>
         </div>
 

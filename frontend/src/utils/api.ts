@@ -1,4 +1,5 @@
 import axios from 'axios';
+import { clearSessionPin } from './pinSession';
 
 export const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:4000/api';
 
@@ -30,6 +31,7 @@ api.interceptors.response.use(
       const hadToken = !!localStorage.getItem('biopass_token');
       localStorage.removeItem('biopass_token');
       localStorage.removeItem('biopass_user');
+      clearSessionPin();
       const path = window.location.pathname;
       const isPublic = path === '/login' || path.startsWith('/e/') || path.startsWith('/checkout');
       if (hadToken && !isPublic) {

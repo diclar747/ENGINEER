@@ -33,6 +33,7 @@ import { VaultInit } from '../components/VaultInit';
 import { RiskBadges } from '../components/RiskBadges';
 import { Section } from '../components/ui/Layout';
 import { stripAsterisks } from '../utils/textFormat';
+import { getSessionPin, setSessionPin, clearSessionPin } from '../utils/pinSession';
 import type { Medication } from '../types';
 
 /** `currentMedications` puede venir como array (API nueva) o como JSON string (DB). */
@@ -58,6 +59,7 @@ export const Dashboard: React.FC = () => {
   const [uploading, setUploading] = useState(false);
   const [isExportModalOpen, setIsExportModalOpen] = useState(false);
   const [exportResult, setExportResult] = useState<any>(null);
+  const [exportAutoLoading, setExportAutoLoading] = useState(false);
   const [copied, setCopied] = useState(false);
 
   useEffect(() => {
@@ -122,6 +124,25 @@ export const Dashboard: React.FC = () => {
   const handleExportSubmit = async (pin: string) => {
     const res = await api.post('/export/full-vault', { pin });
     setExportResult(res.data);
+    setSessionPin(pin);
+  };
+
+  // Ya lo escribió al iniciar sesión en esta pestaña — no repedirlo acá.
+  const handleDownloadClick = async () => {
+    const cachedPin = getSessionPin();
+    if (!cachedPin) {
+      setIsExportModalOpen(true);
+      return;
+    }
+    setExportAutoLoading(true);
+    try {
+      await handleExportSubmit(cachedPin);
+    } catch {
+      clearSessionPin();
+      setIsExportModalOpen(true);
+    } finally {
+      setExportAutoLoading(false);
+    }
   };
 
   const medications = parseMeds(user?.currentMedications);
@@ -226,11 +247,12 @@ export const Dashboard: React.FC = () => {
           </button>
 
           <button
-            onClick={() => setIsExportModalOpen(true)}
-            className="w-full sm:w-auto flex items-center justify-center gap-1.5 px-5 py-2.5 rounded-xl bg-gradient-to-r from-teal-600 to-emerald-600 hover:from-teal-500 hover:to-emerald-500 text-white text-xs font-black shadow-lg shadow-teal-500/25 transition-all active:scale-95"
+            onClick={handleDownloadClick}
+            disabled={exportAutoLoading}
+            className="w-full sm:w-auto flex items-center justify-center gap-1.5 px-5 py-2.5 rounded-xl bg-gradient-to-r from-teal-600 to-emerald-600 hover:from-teal-500 hover:to-emerald-500 disabled:opacity-60 text-white text-xs font-black shadow-lg shadow-teal-500/25 transition-all active:scale-95"
           >
-            <Download className="w-4 h-4" />
-            <span>Descargar Historial</span>
+            {exportAutoLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
+            <span>{exportAutoLoading ? 'Generando…' : 'Descargar Historial'}</span>
           </button>
         </div>
       </div>

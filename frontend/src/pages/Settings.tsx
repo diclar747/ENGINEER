@@ -5,6 +5,7 @@ import { Section, Btn, inputCls } from '../components/ui/Layout';
 import { PushOptIn } from '../components/PushOptIn';
 import { ClientCrypto } from '../utils/crypto';
 import { Lock, Phone, MapPin, MapPinned, Loader2, Save, Send, CheckCircle2 } from 'lucide-react';
+import { setSessionPin } from '../utils/pinSession';
 
 type GeoState = 'unknown' | 'granted' | 'denied' | 'prompt' | 'unsupported';
 
@@ -109,6 +110,9 @@ export const Settings: React.FC = () => {
       }
       await api.put('/auth/pin', { currentPin, newPin, encryptedMedicalBlob });
       setUser((u: any) => (encryptedMedicalBlob ? { ...u, encryptedMedicalBlob } : u));
+      // El caché en memoria de la exportación tenía el PIN viejo — actualizarlo,
+      // si no la próxima descarga fallaría contra el PIN nuevo hasta re-loguear.
+      setSessionPin(newPin);
       toast.success('PIN actualizado.');
       setCurrentPin('');
       setNewPin('');

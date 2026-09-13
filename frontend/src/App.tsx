@@ -22,6 +22,7 @@ import { PushInvite } from './pages/PushInvite';
 import { AdminLogin } from './pages/AdminLogin';
 import { AdminPanel } from './pages/AdminPanel';
 import { FeedbackProvider } from './components/ui/Feedback';
+import { clearSessionPin } from './utils/pinSession';
 
 /** Redirects to /login when there is no session token. */
 const RequireAuth: React.FC = () => {
@@ -71,6 +72,7 @@ const UserShell: React.FC = () => {
   const logout = () => {
     localStorage.removeItem('biopass_token');
     localStorage.removeItem('biopass_user');
+    clearSessionPin();
     navigate('/login');
   };
   const active = USER_NAV.find((n) => location.pathname.startsWith(n.path));

@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useNavigate, Link, useSearchParams } from 'react-router-dom';
 import { api } from '../utils/api';
 import { rebindPushIfGranted } from '../utils/push';
+import { setSessionPin } from '../utils/pinSession';
 import { Phone, ArrowRight, Loader2, Bot, Lock, HeartPulse, UserPlus } from 'lucide-react';
 
 export const Login: React.FC = () => {
@@ -45,6 +46,9 @@ export const Login: React.FC = () => {
       const res = await api.post('/auth/verify-login', { phoneNumber: phone, pin, code: code || undefined });
       localStorage.setItem('biopass_token', res.data.token);
       localStorage.setItem('biopass_user', JSON.stringify(res.data.user));
+      // Ya lo verificó el backend al loguear — lo recordamos en memoria (nunca en
+      // disco) para no volver a pedirlo en cada descarga dentro de esta sesión.
+      setSessionPin(pin);
       // Si ya había aceptado notificaciones antes (en /login, sin cuenta todavía),
       // esto liga esa suscripción a la cuenta recién identificada. Sin esperar:
       // no debe demorar la entrada al panel.
