@@ -72,6 +72,7 @@ export const Register: React.FC = () => {
 
   const [recording, setRecording] = useState(false);
   const [recordSecs, setRecordSecs] = useState(0);
+  const [willCancel, setWillCancel] = useState(false);
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -79,6 +80,7 @@ export const Register: React.FC = () => {
   const recordedStreamRef = useRef<MediaStream | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
   const recordTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const pointerStartXRef = useRef(0);
   // Este chat también es el "Asistente Bot" del nav (público Y logueado) — muchos
   // de los que entran acá ya son socios activos que quieren preguntar algo (no
   // registrarse). Si ya venían activos ANTES del primer mensaje, no es un
@@ -280,6 +282,27 @@ export const Register: React.FC = () => {
 
   useEffect(() => () => stopRecordTimer(), []);
 
+  // Gesto estilo WhatsApp: mantener presionado el mic para grabar, deslizar el
+  // dedo hacia la izquierda para cancelar, soltar para mandar.
+  const CANCEL_DRAG_PX = 60;
+  const handleMicPointerDown = (e: React.PointerEvent<HTMLButtonElement>) => {
+    if (busy || recording) return;
+    e.currentTarget.setPointerCapture(e.pointerId);
+    pointerStartXRef.current = e.clientX;
+    setWillCancel(false);
+    startRecording();
+  };
+  const handleMicPointerMove = (e: React.PointerEvent<HTMLButtonElement>) => {
+    if (!recording) return;
+    setWillCancel(pointerStartXRef.current - e.clientX > CANCEL_DRAG_PX);
+  };
+  const handleMicPointerUp = (e: React.PointerEvent<HTMLButtonElement>) => {
+    if (!recording) return;
+    if (willCancel) cancelRecording();
+    else stopRecording();
+    setWillCancel(false);
+  };
+
   const idx = stepIndex(state);
   const pct = done ? 100 : Math.round((idx / STEPS.length) * 100);
 
@@ -479,9 +502,22 @@ export const Register: React.FC = () => {
             </div>
           ) : (
             <div
-              className="shrink-0 border-t border-line bg-card"
+              className="shrink-0 border-t border-line bg-card relative"
               style={{ paddingBottom: 'calc(0.5rem + env(safe-area-inset-bottom))' }}
             >
+              {/* Globo flotante mientras graba — mismo botón de mic de siempre abajo,
+                  no se reemplaza el DOM (perdería el pointer capture del gesto). */}
+              {recording && (
+                <div className="absolute left-3 right-3 -top-11 flex items-center justify-between bg-card border border-line rounded-full pl-3.5 pr-4 py-2 shadow-lg animate-fadeIn">
+                  <div className="flex items-center gap-2 text-sm font-bold text-fg tabular-nums">
+                    <span className="w-2.5 h-2.5 rounded-full bg-rose-500 animate-pulse shrink-0" />
+                    {String(Math.floor(recordSecs / 60)).padStart(2, '0')}:{String(recordSecs % 60).padStart(2, '0')}
+                  </div>
+                  <div className={`text-xs font-semibold ${willCancel ? 'text-rose-600 dark:text-rose-400' : 'text-fg-muted'}`}>
+                    {willCancel ? '❌ Soltá para cancelar' : '⟵ Deslizá para cancelar'}
+                  </div>
+                </div>
+              )}
               {staged && (
                 <div className="px-3 pt-2.5">
                   <div className="flex items-center gap-2.5 bg-panel rounded-xl p-2">
@@ -497,84 +533,70 @@ export const Register: React.FC = () => {
                   </div>
                 </div>
               )}
-              {recording ? (
-                <div className="px-3 pt-2 pb-1.5 flex items-center gap-3">
-                  <button
-                    onClick={cancelRecording}
-                    className="w-10 h-10 rounded-full hover:bg-muted flex items-center justify-center shrink-0 text-fg-muted"
-                    aria-label="Cancelar grabación"
-                  >
-                    <X className="w-5 h-5" />
-                  </button>
-                  <div className="flex-1 flex items-center gap-2 text-rose-600 dark:text-rose-400 font-semibold text-sm">
-                    <span className="w-2.5 h-2.5 rounded-full bg-rose-500 animate-pulse shrink-0" />
-                    <span>
-                      Grabando… {String(Math.floor(recordSecs / 60)).padStart(2, '0')}:{String(recordSecs % 60).padStart(2, '0')}
-                    </span>
-                  </div>
-                  <button
-                    onClick={stopRecording}
-                    className="w-10 h-10 rounded-full bg-teal-600 hover:bg-teal-500 text-white flex items-center justify-center shrink-0"
-                    aria-label="Enviar nota de voz"
-                  >
-                    <Send className="w-4 h-4" />
-                  </button>
-                </div>
-              ) : (
-                <div className="px-2 pt-2 flex items-end gap-1.5">
-                  <button
-                    onClick={() => {
-                      fileRef.current?.removeAttribute('capture');
-                      fileRef.current?.click();
-                    }}
-                    disabled={busy}
-                    className="w-10 h-10 rounded-full hover:bg-muted flex items-center justify-center shrink-0 text-fg-muted disabled:opacity-40"
-                    aria-label="Adjuntar archivo"
-                  >
-                    <Paperclip className="w-5 h-5" />
-                  </button>
-                  <button
-                    onClick={() => {
-                      fileRef.current?.setAttribute('capture', 'environment');
-                      fileRef.current?.click();
-                    }}
-                    disabled={busy}
-                    className="w-10 h-10 rounded-full hover:bg-muted flex items-center justify-center shrink-0 text-fg-muted disabled:opacity-40"
-                    aria-label="Cámara"
-                  >
-                    <Camera className="w-5 h-5" />
-                  </button>
-                  <button
-                    onClick={startRecording}
-                    disabled={busy}
-                    className="w-10 h-10 rounded-full hover:bg-muted flex items-center justify-center shrink-0 text-fg-muted disabled:opacity-40"
-                    aria-label="Grabar nota de voz"
-                  >
-                    <Mic className="w-5 h-5" />
-                  </button>
-                  <textarea
-                    value={input}
-                    onChange={(e) => setInput(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter' && !e.shiftKey) {
-                        e.preventDefault();
-                        send();
-                      }
-                    }}
-                    rows={1}
-                    placeholder="Escribí tu respuesta…"
-                    className="flex-1 min-w-0 resize-none bg-panel border border-line rounded-3xl px-4 py-2.5 text-base text-fg placeholder-fg-muted outline-none focus:border-teal-500 max-h-28"
-                  />
+              <div className="px-2 pt-2 flex items-end gap-1.5">
+                <button
+                  onClick={() => {
+                    fileRef.current?.removeAttribute('capture');
+                    fileRef.current?.click();
+                  }}
+                  disabled={busy || recording}
+                  className="w-10 h-10 rounded-full hover:bg-muted flex items-center justify-center shrink-0 text-fg-muted disabled:opacity-40"
+                  aria-label="Adjuntar archivo"
+                >
+                  <Paperclip className="w-5 h-5" />
+                </button>
+                <button
+                  onClick={() => {
+                    fileRef.current?.setAttribute('capture', 'environment');
+                    fileRef.current?.click();
+                  }}
+                  disabled={busy || recording}
+                  className="w-10 h-10 rounded-full hover:bg-muted flex items-center justify-center shrink-0 text-fg-muted disabled:opacity-40"
+                  aria-label="Cámara"
+                >
+                  <Camera className="w-5 h-5" />
+                </button>
+                <textarea
+                  value={input}
+                  onChange={(e) => setInput(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && !e.shiftKey) {
+                      e.preventDefault();
+                      send();
+                    }
+                  }}
+                  disabled={recording}
+                  rows={1}
+                  placeholder={recording ? '' : 'Escribí tu respuesta…'}
+                  className="flex-1 min-w-0 resize-none bg-panel border border-line rounded-3xl px-4 py-2.5 text-base text-fg placeholder-fg-muted outline-none focus:border-teal-500 max-h-28 disabled:opacity-60"
+                />
+                {/* Como en WhatsApp: este botón es Enviar si hay texto/archivo listo, o
+                    Mic (mantener presionado para grabar, soltar para mandar) si no. */}
+                {input.trim() || staged ? (
                   <button
                     onClick={send}
-                    disabled={busy || (!input.trim() && !staged)}
+                    disabled={busy}
                     className="w-10 h-10 rounded-full bg-teal-600 hover:bg-teal-500 disabled:opacity-40 text-white flex items-center justify-center shrink-0"
                     aria-label="Enviar"
                   >
                     <Send className="w-4 h-4" />
                   </button>
-                </div>
-              )}
+                ) : (
+                  <button
+                    onPointerDown={handleMicPointerDown}
+                    onPointerMove={handleMicPointerMove}
+                    onPointerUp={handleMicPointerUp}
+                    onPointerCancel={handleMicPointerUp}
+                    disabled={busy}
+                    className={`w-10 h-10 rounded-full flex items-center justify-center shrink-0 text-white shadow-sm transition-all touch-none select-none disabled:opacity-40 ${
+                      recording ? (willCancel ? 'bg-rose-500 scale-95' : 'bg-teal-600 scale-125') : 'bg-teal-600 hover:bg-teal-500'
+                    }`}
+                    aria-label="Mantené presionado para grabar, soltá para enviar"
+                  >
+                    <Mic className="w-4 h-4" />
+                  </button>
+                )}
+              </div>
             </div>
           )}
         </>
