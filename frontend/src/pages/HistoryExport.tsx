@@ -9,10 +9,35 @@ export const HistoryExport: React.FC = () => {
   const [exportData, setExportData] = useState<any>(null);
   const [autoLoading, setAutoLoading] = useState(false);
 
+  // Forzar la descarga de una: antes había que generar el ZIP y DESPUÉS tocar un
+  // segundo link más abajo para bajarlo de verdad — mucha gente se quedaba en el
+  // primer paso pensando que ya había descargado algo. Trayendo el archivo como
+  // blob y disparando el <a download> nosotros mismos, queda todo en un solo clic
+  // (y evita que el navegador solo "navegue" al archivo en vez de guardarlo).
+  const triggerDownload = async (downloadUrl: string, filename: string) => {
+    const res = await fetch(downloadUrl);
+    if (!res.ok) throw new Error('No se pudo descargar el archivo generado.');
+    const blob = await res.blob();
+    const objectUrl = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = objectUrl;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(objectUrl), 10000);
+  };
+
   const handleExport = async (pin: string) => {
     const res = await api.post('/export/full-vault', { pin });
     setExportData(res.data);
     setSessionPin(pin);
+    try {
+      await triggerDownload(res.data.downloadUrl, res.data.filename);
+    } catch {
+      // El ZIP se generó bien igual — si falla solo la descarga automática (red,
+      // etc.), queda el link manual de la tarjeta de abajo como respaldo.
+    }
   };
 
   // Ya escribió el PIN correcto al iniciar sesión en esta pestaña — no hace
@@ -109,7 +134,7 @@ export const HistoryExport: React.FC = () => {
               <CheckCircle2 className="w-6 h-6" />
             </div>
             <div>
-              <h3 className="text-sm sm:text-base font-bold text-fg">¡Archivo ZIP Cifrado Listo para Descarga!</h3>
+              <h3 className="text-sm sm:text-base font-bold text-fg">¡Listo! La descarga ya arrancó sola.</h3>
               <p className="text-xs text-emerald-600 dark:text-emerald-300">
                 Archivo: {exportData.filename} • Expira el: {new Date(exportData.expiresAt).toLocaleString()}
               </p>
@@ -117,15 +142,14 @@ export const HistoryExport: React.FC = () => {
           </div>
 
           <div className="p-4 bg-panel rounded-2xl border border-line flex flex-col sm:flex-row items-center justify-between gap-3">
-            <span className="text-xs font-mono text-fg-muted break-all">{exportData.downloadUrl}</span>
-            <a
-              href={exportData.downloadUrl}
+            <span className="text-xs text-fg-muted">¿No bajó nada a tu carpeta de Descargas? Probá de nuevo acá:</span>
+            <button
+              onClick={() => triggerDownload(exportData.downloadUrl, exportData.filename)}
               className="w-full sm:w-auto px-6 py-3 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs shadow-md shadow-emerald-600/30 shrink-0 flex items-center justify-center gap-2 transition-colors"
-              download
             >
               <Download className="w-4 h-4" />
               <span>Descargar ZIP</span>
-            </a>
+            </button>
           </div>
 
           <div className="p-3.5 rounded-2xl bg-amber-50 dark:bg-amber-950/40 border border-amber-500/30 flex items-start gap-2.5 text-[11px] text-amber-800 dark:text-amber-300 leading-relaxed">

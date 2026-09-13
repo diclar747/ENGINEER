@@ -121,10 +121,33 @@ export const Dashboard: React.FC = () => {
     setUploading(false);
   };
 
+  // Trae el ZIP como blob y dispara la descarga nosotros mismos — antes había
+  // que tocar un segundo link más abajo para bajarlo de verdad, y mucha gente
+  // se quedaba en el primer paso pensando que ya había descargado algo.
+  const triggerExportDownload = async (downloadUrl: string, filename: string) => {
+    const res = await fetch(downloadUrl);
+    if (!res.ok) throw new Error('No se pudo descargar el archivo generado.');
+    const blob = await res.blob();
+    const objectUrl = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = objectUrl;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(objectUrl), 10000);
+  };
+
   const handleExportSubmit = async (pin: string) => {
     const res = await api.post('/export/full-vault', { pin });
     setExportResult(res.data);
     setSessionPin(pin);
+    try {
+      await triggerExportDownload(res.data.downloadUrl, res.data.filename);
+    } catch {
+      // El ZIP se generó bien igual — si falla solo la descarga automática,
+      // queda el link manual de la tarjeta de abajo como respaldo.
+    }
   };
 
   // Ya lo escribió al iniciar sesión en esta pestaña — no repedirlo acá.
@@ -261,16 +284,15 @@ export const Dashboard: React.FC = () => {
       {exportResult && (
         <div className="bg-emerald-50 dark:bg-emerald-950/60 border border-emerald-500/40 rounded-2xl p-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 animate-fadeIn">
           <div>
-            <p className="text-sm font-bold text-emerald-600 dark:text-emerald-300">📦 Archivo ZIP Cifrado Generado</p>
+            <p className="text-sm font-bold text-emerald-600 dark:text-emerald-300">📦 La descarga ya arrancó sola</p>
             <p className="text-xs text-fg-soft mt-0.5">Contraseña de apertura: Tu PIN de 4 dígitos. Expira en 24 horas.</p>
           </div>
-          <a
-            href={exportResult.downloadUrl}
+          <button
+            onClick={() => triggerExportDownload(exportResult.downloadUrl, exportResult.filename)}
             className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs shadow-md shrink-0"
-            download
           >
-            Descargar Archivo
-          </a>
+            ¿No bajó nada? Reintentar
+          </button>
         </div>
       )}
 
