@@ -30,6 +30,10 @@ export interface InboundMessage {
   mediaFilename?: string;
   /** true si el chat llega por "@lid" (WhatsApp no expone el número real) — ver ACTIVE_LINK_PHONE. */
   isLid?: boolean;
+  /** true si el mensaje ERA una nota de voz pero Niro no devolvió texto (audio
+   *  ilegible, cortado, o el servicio falló) — sin esto, un `body` vacío se lee
+   *  igual que un silencio real y el bot responde como si fuera un saludo. */
+  audioTranscriptionFailed?: boolean;
 }
 
 export interface BotResponse {
@@ -496,6 +500,21 @@ export class BotStateMachine {
       user.language === 'GN' ? 'gn' : user.language === 'PT' ? 'pt' : user.language === 'EN' ? 'en' : 'es';
     const tr = (es: string, gn: string, pt?: string, en?: string) =>
       lang === 'gn' ? gn : lang === 'pt' ? pt ?? es : lang === 'en' ? en ?? es : es;
+
+    // Nota de voz que no se pudo transcribir (audio cortado, ilegible, o falló el
+    // servicio): sin esto, `cleanText` queda vacío y se procesa igual que un
+    // silencio real — cae en "hola"/smalltalk y el bot contesta cualquier cosa
+    // que no tiene nada que ver con lo que la persona realmente dijo.
+    if (msg.audioTranscriptionFailed && !cleanText) {
+      return {
+        replyText: tr(
+          '🎤 No pude entender tu audio (se cortó o no se escuchó bien). ¿Podés escribirlo, o grabarlo de nuevo más cerca del micrófono?',
+          "🎤 Ndaikatui aikuaa nde audio (ojekytĩ térã ndoikuaaporãi). Ehai, térã embojevy grabación.",
+          '🎤 Não consegui entender seu áudio (cortou ou não ficou claro). Pode escrever, ou gravar de novo mais perto do microfone?',
+          "🎤 I couldn't understand your voice note (it cut out or was unclear). Could you type it, or record it again closer to the mic?"
+        ),
+      };
+    }
 
     // ------------------------------------------------------------------------
     // TIMEOUT DE INACTIVIDAD (ver bloque MID_FLOW_STATES más arriba). Si quedó

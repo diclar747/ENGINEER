@@ -595,6 +595,7 @@ export class BaileysClient {
     let mediaBuffer: Buffer | undefined;
     let mediaMimeType: string | undefined;
     let mediaFilename: string | undefined;
+    let audioTranscriptionFailed = false;
 
     // Nota de voz / audio → transcribir con Niro y tratarlo como si el usuario hubiera escrito.
     // Así el audio funciona en TODO el flujo (registro, menú, preguntas) sin tocar el motor.
@@ -617,9 +618,11 @@ export class BaileysClient {
           console.log('[WHATSAPP BOT] audio transcrito:', transcript.slice(0, 140));
         } else {
           console.warn('[WHATSAPP BOT] no se pudo transcribir el audio (descarga vacía o Niro sin texto)');
+          audioTranscriptionFailed = true;
         }
       } catch (e) {
         console.warn('Could not download/transcribe audio message:', e);
+        audioTranscriptionFailed = true;
       }
     }
 
@@ -679,6 +682,7 @@ export class BaileysClient {
         mediaMimeType,
         mediaFilename,
         isLid,
+        audioTranscriptionFailed,
       });
 
       // Reply to the exact JID the message arrived on (correct for both @s.whatsapp.net

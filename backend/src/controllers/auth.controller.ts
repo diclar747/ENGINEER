@@ -53,6 +53,7 @@ export class AuthController {
         mediaBuffer,
         mediaMimeType,
         mediaFilename,
+        audioTranscriptionFailed: !!file && /^audio\//.test(file.mimetype || '') && !audioTranscript,
       });
 
       const user = await prisma.user.findUnique({
