@@ -671,8 +671,14 @@ export class BaileysClient {
     }
 
     // Best-effort "escribiendo…" indicator while the engine works (OCR/vision calls can
-    // take several seconds) — never let a presence hiccup break the actual reply.
+    // take several seconds) — never let a presence hiccup break la respuesta.
     this.sock?.sendPresenceUpdate('composing', remoteJid).catch(() => {});
+
+    // Sin esto no había forma de ver, después del hecho, QUÉ mandó realmente un
+    // usuario (solo se logueaba el audio transcripto, nunca el texto tecleado) —
+    // hacía imposible diagnosticar "el bot respondió cualquier cosa" sin poder
+    // reproducirlo en el momento.
+    console.log(`\n📩 [WHATSAPP INBOUND <- ${remoteJid}]: ${JSON.stringify(body)}${audioTranscriptionFailed ? ' (audio sin transcribir)' : ''}${mediaBuffer ? ' [+adjunto]' : ''}\n----------------------------------`);
 
     try {
       const response = await BotStateMachine.handleMessage({
