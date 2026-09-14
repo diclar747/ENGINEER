@@ -2398,6 +2398,20 @@ export class BotStateMachine {
           };
         }
 
+        // ¿Es una consulta metida en medio del diálogo guiado ("¿tengo algún turno
+        // reservado?", "¿qué medicación estoy tomando?") en vez de la respuesta al
+        // paso pendiente? Antes esto SIEMPRE caía en "no entendí" porque el parser
+        // del paso (horario/nombre/dosis/etc.) trataba de leer la pregunta como si
+        // fuera el dato que pidió — ahora se responde sin perder el borrador, y
+        // se repite la pregunta pendiente para que el usuario sepa que sigue ahí.
+        if (state !== 'ACTIVE_REMIND_CONFIRM' && cleanText && !msg.mediaBuffer) {
+          const midQuery = await MedicationReminderService.answerQuery(user.id, cleanText, lang);
+          if (midQuery) {
+            const stepKey = Object.keys(REMIND_STATE).find((k) => REMIND_STATE[k] === state) || '';
+            return { replyText: `${midQuery}\n\n———\n${remindQuestion(stepKey, draft)}` };
+          }
+        }
+
         if (state === 'ACTIVE_REMIND_NAME') {
           const name = cleanText.replace(/^(se llama|es|el|la|un[ao]?|para)\s+/i, '').trim();
           if (name.length < 2) return { replyText: remindQuestion('name', draft) };
