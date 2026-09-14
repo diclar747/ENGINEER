@@ -2069,16 +2069,24 @@ export class BotStateMachine {
         }
       };
       const advanceRemind = async (d: Partial<ReminderDraft>): Promise<BotResponse> => {
+        // Si pidió avisar con menos de 5 min, se subió a 5 en vez de ignorarlo
+        // en silencio (ver parseReminderRequest) — se lo contamos UNA vez acá,
+        // en vez de mostrarle la pregunta de anticipación como si no hubiera
+        // dicho nada al respecto.
+        const clampNote = d.leadClampedFrom
+          ? `⏱️ _Pediste avisar ${d.leadClampedFrom} minuto${d.leadClampedFrom === 1 ? '' : 's'} antes — reviso cada 5 minutos, así que el mínimo posible es 5. Ajustado._\n\n`
+          : '';
+        if (d.leadClampedFrom) delete d.leadClampedFrom;
         const step = MedicationReminderService.draftNextStep(d);
         await updateState(REMIND_STATE[step] || 'ACTIVE_REMIND_CONFIRM', { rdraft: d });
         if (step === '') {
           return {
             replyText:
-              `📋 *Confirmá el recordatorio:*\n\n${MedicationReminderService.describeDraft(d)}\n\n` +
+              `${clampNote}📋 *Confirmá el recordatorio:*\n\n${MedicationReminderService.describeDraft(d)}\n\n` +
               `*[1]* Sí, guardar   *[2]* No`,
           };
         }
-        return { replyText: remindQuestion(step, d) };
+        return { replyText: `${clampNote}${remindQuestion(step, d)}` };
       };
       const parseTimesLoose = (s: string): string[] => {
         const viaParse = MedicationReminderService.parse(`medic ${s}`)?.times || [];
@@ -2728,11 +2736,11 @@ export class BotStateMachine {
             }
           }
           if (mins !== undefined && mins < 5) {
-            return {
-              replyText:
-                'Reviso los turnos cada 5 minutos, así que no puedo avisarte con menos que eso — pedime al menos ' +
-                '_"5 minutos antes"_, o escribí *LISTO* para que te avise 30 minutos antes por defecto.',
-            };
+            // No lo rechazamos ni repreguntamos — se sube a 5 (el mínimo real, dado
+            // que reviso cada 5 min) y se avisa una sola vez vía advanceRemind().
+            draft.leadMinutes = 5;
+            draft.leadClampedFrom = mins;
+            return advanceRemind(draft);
           }
           if (!mins || mins > 10080) {
             if (await aiAssistStep('lead', cleanText)) return advanceRemind(draft);
