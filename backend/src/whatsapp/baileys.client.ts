@@ -670,6 +670,18 @@ export class BaileysClient {
       }
     }
 
+    // Sin texto, sin adjunto, y no fue un audio que falló al transcribir → no es un
+    // mensaje real del usuario (una reacción, un "mensaje eliminado", un evento de
+    // protocolo — WhatsApp los entrega igual como "mensajes" pero no traen nada
+    // procesable). Antes esto SEGUÍA de largo con body='' y el motor lo trataba como
+    // un silencio real ("hola"/smalltalk) — confirmado en vivo: llegó vacío justo en
+    // medio de un timeout de inactividad y el bot contestó "seguimos" sin que la
+    // persona hubiera escrito nada. Se ignora del todo, sin responder.
+    if (!body.trim() && !mediaBuffer && !audioTranscriptionFailed) {
+      console.log(`[WHATSAPP BOT] Evento sin contenido procesable de ${remoteJid} — ignorado (no es un mensaje real).`);
+      return;
+    }
+
     // Best-effort "escribiendo…" indicator while the engine works (OCR/vision calls can
     // take several seconds) — never let a presence hiccup break la respuesta.
     this.sock?.sendPresenceUpdate('composing', remoteJid).catch(() => {});
