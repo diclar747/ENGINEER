@@ -2006,7 +2006,7 @@ export class BotStateMachine {
             .join('\n') || tr('_Nada cargado._', '_Ndaipóri._');
         const conflicts = medicationConflicts(meds, user!.severeAllergies, user!.contraindicatedMeds);
         const reminders = await prisma.medicationReminder.findMany({
-          where: { userId: user!.id },
+          where: { userId: user!.id, OR: [{ NOT: { kind: 'APPOINTMENT' } }, { whenAt: { gte: new Date() } }] },
           orderBy: { createdAt: 'asc' },
           select: {
             kind: true, scheduleKind: true, medication: true, dose: true, times: true,
@@ -3180,7 +3180,7 @@ export class BotStateMachine {
       ) {
         await updateState('ACTIVE_REMINDER', { rdraft: null });
         const rms = await prisma.medicationReminder.findMany({
-          where: { userId: user.id },
+          where: { userId: user.id, OR: [{ NOT: { kind: 'APPOINTMENT' } }, { whenAt: { gte: new Date() } }] },
           orderBy: { createdAt: 'asc' },
           select: {
             kind: true, scheduleKind: true, medication: true, dose: true, times: true,
