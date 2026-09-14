@@ -1,5 +1,5 @@
 export interface ParsedProfileIntent {
-  intent: 'CHANGE_ALLERGY' | 'CHANGE_CONTACT' | 'CHANGE_ADDRESS' | 'CHANGE_CONDITIONS' | 'UNKNOWN';
+  intent: 'CHANGE_ALLERGY' | 'CHANGE_CONTACT' | 'CHANGE_ADDRESS' | 'CHANGE_CONDITIONS' | 'CHANGE_NAME' | 'CHANGE_CI' | 'UNKNOWN';
   value?: string;
   contactName?: string;
   contactPhone?: string;
@@ -64,6 +64,27 @@ export class NlpHandler {
         intent: 'CHANGE_CONDITIONS',
         value: text,
       };
+    }
+
+    // Corregir el nombre completo — el OCR de la cédula al registrarse a veces lo
+    // lee mal (acentos, apellidos compuestos) y antes no había forma de arreglarlo
+    // después. "Mi nombre es...", "me llamo...", "cambiar/corregir mi nombre a...",
+    // "el nombre correcto es...". Se excluye si menciona "contacto"/"familiar" (eso
+    // ya lo maneja CHANGE_CONTACT más arriba, que también habla de "nombre").
+    if (/\bnombre\b|\bme\s+llamo\b/i.test(clean) && !clean.includes('contacto') && !clean.includes('familiar')) {
+      const m = text.match(
+        /(?:mi\s+nombre(?:\s+completo)?\s+(?:correcto\s+)?(?:es|:)|(?:en\s+realidad\s+)?me\s+llamo|(?:cambiar|corregir|actualizar)\s+(?:mi\s+)?nombre(?:\s+completo)?\s+a|el\s+nombre\s+correcto\s+es)\s*[:]?\s*(.+)/i
+      );
+      const value = (m ? m[1] : '').replace(/[.!]+$/, '').trim();
+      if (value.length >= 3) return { intent: 'CHANGE_NAME', value };
+    }
+
+    // Corregir el número de cédula (mismo problema: OCR al registrarse puede leer
+    // mal un dígito y no había forma de arreglarlo sin volver a registrarse).
+    if (/\bc[eé]dula\b/i.test(clean) && !clean.includes('foto')) {
+      const m = text.match(/c[eé]dula(?:\s+es|\s+correcta\s+es)?\s*[:]?\s*(\d[\d.\-\s]{4,14}\d)/i);
+      const value = m ? m[1].replace(/[^\d]/g, '') : '';
+      if (value.length >= 5) return { intent: 'CHANGE_CI', value };
     }
 
     return { intent: 'UNKNOWN' };

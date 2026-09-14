@@ -2922,7 +2922,9 @@ export class BotStateMachine {
             `• _"Nuevo contacto Carlos Perez 0981999888"_\n` +
             `• _"Cambiar dirección a Avda España 500"_\n` +
             `• _"Ya no tomo Enalapril"_\n` +
-            `• _"Tengo Hipertensión" / "Ya no tengo Diabetes"_\n\n` +
+            `• _"Tengo Hipertensión" / "Ya no tengo Diabetes"_\n` +
+            `• _"Mi nombre es Juan Pérez"_ (si la cédula se leyó mal)\n` +
+            `• _"Mi cédula es 1234567"_\n\n` +
             `_Escribí *LISTO* o *SALIR* para volver al menú._`,
           `✏️ *Emoambue perfil*\n\n_Ehai *LISTO* térã *SALIR* rehóvo._`
         );
@@ -2977,6 +2979,17 @@ export class BotStateMachine {
         if (freeIntent.intent === 'CHANGE_ADDRESS' && freeIntent.value) {
           await prisma.user.update({ where: { id: user.id }, data: { address: freeIntent.value } });
           return { replyText: `✅ *Dirección actualizada:* ${freeIntent.value}` + contMsg };
+        }
+        if (freeIntent.intent === 'CHANGE_NAME' && freeIntent.value) {
+          // El OCR de la cédula al registrarse a veces lee mal el nombre (acentos,
+          // apellidos compuestos) y antes no había forma de corregirlo después.
+          const name = freeIntent.value.replace(/\s+/g, ' ').trim().slice(0, 120);
+          await prisma.user.update({ where: { id: user.id }, data: { fullName: name } });
+          return { replyText: `✅ *Nombre corregido:* ${name}` + contMsg };
+        }
+        if (freeIntent.intent === 'CHANGE_CI' && freeIntent.value) {
+          await prisma.user.update({ where: { id: user.id }, data: { ciNumber: freeIntent.value } });
+          return { replyText: `✅ *Número de cédula corregido:* ${freeIntent.value}` + contMsg };
         }
         if (freeIntent.intent === 'CHANGE_CONDITIONS' && freeIntent.value) {
           const label = await matchConditionLabel(freeIntent.value);
@@ -3228,7 +3241,7 @@ export class BotStateMachine {
       if (
         cleanText === '7' ||
         lc.includes('modificar') ||
-        /\b(cambiar|cambi[aá]|modific\w*|actualiz\w*|corregir|corrig\w*|editar|edit[aá]|arreglar)\b.{0,30}\b(direcci[oó]n|domicilio|alergia|contacto|condici[oó]n|enfermedad|correo|email|tipo\s+de\s+sangre|grupo\s+sangu|datos\s+(de\s+)?(emergencia|personales)|mis\s+datos)\b/.test(lc)
+        /\b(cambiar|cambi[aá]|modific\w*|actualiz\w*|corregir|corrig\w*|editar|edit[aá]|arreglar)\b.{0,30}\b(direcci[oó]n|domicilio|alergia|contacto|condici[oó]n|enfermedad|correo|email|tipo\s+de\s+sangre|grupo\s+sangu|nombre|c[eé]dula|datos\s+(de\s+)?(emergencia|personales)|mis\s+datos)\b/.test(lc)
       ) {
         await updateState('ACTIVE_FREE_UPDATE', {});
         return {
@@ -3238,7 +3251,9 @@ export class BotStateMachine {
             `• _"Nuevo contacto Carlos Perez 0981999888"_\n` +
             `• _"Cambiar dirección a Avda España 500"_\n` +
             `• _"Ya no tomo Enalapril"_\n` +
-            `• _"Tengo Hipertensión" / "Ya no tengo Diabetes"_\n\n` +
+            `• _"Tengo Hipertensión" / "Ya no tengo Diabetes"_\n` +
+            `• _"Mi nombre es Juan Pérez"_ (si la cédula se leyó mal)\n` +
+            `• _"Mi cédula es 1234567"_\n\n` +
             `_Escribí tu mensaje a continuación, o *SALIR* para volver al menú._`,
         };
       }
@@ -3378,6 +3393,17 @@ export class BotStateMachine {
         return {
           replyText: `✅ *Dirección actualizada:* ${parsedIntent.value}`,
         };
+      }
+
+      if (parsedIntent.intent === 'CHANGE_NAME' && parsedIntent.value) {
+        const name = parsedIntent.value.replace(/\s+/g, ' ').trim().slice(0, 120);
+        await prisma.user.update({ where: { id: user.id }, data: { fullName: name } });
+        return { replyText: `✅ *Nombre corregido:* ${name}` };
+      }
+
+      if (parsedIntent.intent === 'CHANGE_CI' && parsedIntent.value) {
+        await prisma.user.update({ where: { id: user.id }, data: { ciNumber: parsedIntent.value } });
+        return { replyText: `✅ *Número de cédula corregido:* ${parsedIntent.value}` };
       }
 
       if (parsedIntent.intent === 'CHANGE_CONDITIONS' && parsedIntent.value) {
