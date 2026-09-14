@@ -898,6 +898,11 @@ export class MedicationReminderService {
       .toLowerCase()
       .normalize('NFD')
       .replace(/[̀-ͯ]/g, '') // sin tildes — el audio transcripto a veces no las trae
+      // "Sí, quiero agendar una cita..." — el "sí" de arranque (muy natural en audio)
+      // tapaba el verbo real que viene después: isRegistrationVerb exige que el
+      // verbo de pedido sea la PRIMERA palabra, así que "sí, quiero..." no
+      // calificaba como pedido de creación y terminaba leyéndose como consulta.
+      .replace(/^\s*(si|s[ií]|bueno|dale|ok|okay|a ver|mira|mire|perfecto)[,.\s]+/, '')
       .trim();
     if (!t) return null;
     // Puerta barata: solo seguimos si el mensaje huele a consulta de medicación/turnos.
