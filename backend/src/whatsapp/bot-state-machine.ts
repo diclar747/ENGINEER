@@ -2543,6 +2543,54 @@ export class BotStateMachine {
       if (subMode.startsWith('ACTIVE_REMIND_')) {
         const draft: Partial<ReminderDraft> = { ...(getTempData().rdraft || {}) };
 
+        // Último recurso cuando la regex del paso NO entendió la respuesta: se la
+        // pasa a la IA (el mismo extractor que ya usa el pedido inicial de
+        // recordatorio) y se toma SOLO el campo de este paso puntual — no pisa
+        // nada más del borrador. Se llama recién después de que la regex ya
+        // falló, así que el camino feliz sigue siendo 100% regex e instantáneo;
+        // esto solo entra a jugar ante una frase rara que el patrón fijo no cubre.
+        const aiAssistStep = async (step: string, text: string): Promise<boolean> => {
+          if (!NiroService.enabled || text.trim().length < 2) return false;
+          const guess = await MedicationReminderService.parseReminderRequest(text);
+          switch (step) {
+            case 'name':
+              if (guess.medication) {
+                draft.medication = guess.medication;
+                return true;
+              }
+              return false;
+            case 'sched':
+              if (guess.scheduleKind === 'INTERVAL' && guess.intervalHours) {
+                draft.scheduleKind = 'INTERVAL';
+                draft.intervalHours = guess.intervalHours;
+                draft.times = [];
+                return true;
+              }
+              if (guess.scheduleKind === 'CLOCK' && guess.times?.length) {
+                draft.scheduleKind = 'CLOCK';
+                draft.times = guess.times;
+                draft.intervalHours = undefined;
+                return true;
+              }
+              return false;
+            case 'when':
+              if (guess.whenAt) {
+                draft.whenAt = guess.whenAt;
+                draft.whenPendingDate = undefined;
+                return true;
+              }
+              return false;
+            case 'lead':
+              if (guess.leadMinutes !== undefined && guess.leadMinutes !== null && guess.leadMinutes >= 5) {
+                draft.leadMinutes = guess.leadMinutes;
+                return true;
+              }
+              return false;
+            default:
+              return false;
+          }
+        };
+
         // "gracias" / "ok" / "dale" en medio del diálogo guiado: no es una
         // respuesta al paso → se acusa amable y se mantiene el estado (sin
         // volcar listas ni tirar "no entendí").
@@ -2604,6 +2652,7 @@ export class BotStateMachine {
             draft.intervalHours = undefined;
             return advanceRemind(draft);
           }
+          if (await aiAssistStep('sched', cleanText)) return advanceRemind(draft);
           return { replyText: '😕 No entendí. Respondé *1*–*5*, o escribí los horarios (ej: _"08:00 y 20:00"_).' };
         }
 
@@ -2656,6 +2705,7 @@ export class BotStateMachine {
             // (no debería pasar: resolveWhen asume hoy) — pedimos la fecha
             return { replyText: '📅 ¿Qué día? (ej: _"mañana"_, _"el 20/10"_, _"el viernes"_)' };
           }
+          if (await aiAssistStep('when', cleanText)) return advanceRemind(draft);
           return { replyText: '📅 No entendí la fecha/hora. Probá: _"mañana 9:00"_, _"15/10 a las 14:30"_, _"el lunes 10:00"_, _"hoy a las 3 de la tarde"_.' };
         }
 
@@ -2684,7 +2734,10 @@ export class BotStateMachine {
                 '_"5 minutos antes"_, o escribí *LISTO* para que te avise 30 minutos antes por defecto.',
             };
           }
-          if (!mins || mins > 10080) return { replyText: remindQuestion('lead', draft) };
+          if (!mins || mins > 10080) {
+            if (await aiAssistStep('lead', cleanText)) return advanceRemind(draft);
+            return { replyText: remindQuestion('lead', draft) };
+          }
           draft.leadMinutes = mins;
           return advanceRemind(draft);
         }
