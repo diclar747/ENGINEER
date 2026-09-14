@@ -78,7 +78,7 @@ async function askNiro(
   // (hacían que la IA respondiera "Bio-Pass no gestiona citas médicas").
   const caps =
     opts.scope === 'MIEMBRO_ACTIVO'
-      ? ' DATO IMPORTANTE (no lo contradigas): Bio-Pass SÍ permite, por WhatsApp (opción 5 del menú), ' +
+      ? ' DATO IMPORTANTE (no lo contradigas): Bio-Pass SÍ permite, por WhatsApp (opción 5 del menú: medicación; opción 6: citas y turnos), ' +
         'programar *recordatorios de toma de medicación* ("cada X horas" o a horas fijas) y *recordatorios de turnos / citas médicas*. ' +
         'NO reserva la cita con el consultorio: solo le avisa al titular antes. ' +
         'El titular puede preguntar "¿qué cita tengo?", "¿cuál es mi próxima toma?", "¿qué estoy tomando?" y el sistema le responde con sus datos reales. ' +
@@ -297,7 +297,8 @@ const PENDING_STEP_LABEL: Record<string, { es: string; pt: string }> = {
   ACTIVE_ASK_CATEGORY: { es: 'Decirme qué tipo de documento mandaste', pt: 'Dizer que tipo de documento você enviou' },
   ACTIVE_LINK_PHONE: { es: 'Confirmar tu número real de WhatsApp', pt: 'Confirmar seu número real de WhatsApp' },
   ACTIVE_FREE_UPDATE: { es: 'Contarme qué querés actualizar de tu ficha', pt: 'Dizer o que você quer atualizar no seu perfil' },
-  ACTIVE_REMINDER: { es: 'Armar tu recordatorio o turno', pt: 'Montar seu lembrete ou consulta' },
+  ACTIVE_REMINDER: { es: 'Recordatorios de medicación', pt: 'Lembretes de medicação' },
+  ACTIVE_APPOINTMENTS: { es: 'Citas y turnos médicos', pt: 'Consultas médicas' },
   ACTIVE_REMIND_NAME: { es: 'Decirme el nombre del medicamento o turno', pt: 'Dizer o nome do medicamento ou consulta' },
   ACTIVE_REMIND_SCHED: { es: 'Decirme cada cuánto lo tomás', pt: 'Dizer de quanto em quanto tempo você toma' },
   ACTIVE_REMIND_LAST: { es: 'Decirme cuándo fue la última toma', pt: 'Dizer quando foi a última dose' },
@@ -1839,6 +1840,7 @@ export class BotStateMachine {
         state === 'ACTIVE_RX_CONFIRM' ||
         state === 'ACTIVE_ASK_CATEGORY' ||
         state === 'ACTIVE_REMINDER' ||
+        state === 'ACTIVE_APPOINTMENTS' ||
         state === 'ACTIVE_FREE_UPDATE' ||
         state === 'ACTIVE_LINK_PHONE' ||
         state.startsWith('ACTIVE_REMIND_') ||
@@ -1868,10 +1870,11 @@ export class BotStateMachine {
             `*[2]* 📄 Cargar *receta* médica\n` +
             `*[3]* 🧪 Cargar *estudio* / evaluación médica\n` +
             `*[4]* 📁 Ver mi *perfil médico*\n` +
-            `*[5]* ⏰ *Recordatorios* de medicación y *turnos*\n` +
-            `*[6]* 🏷️ Descargar Kit de Stickers (3x3 cm) y QR\n` +
-            `*[7]* ✏️ Modificar datos de mi perfil (contacto, dirección, etc.)\n` +
-            `*[8]* 💬 Hablar con soporte\n\n` +
+            `*[5]* ⏰ *Recordatorios de medicación* (horarios de tus remedios)\n` +
+            `*[6]* 🩺 *Citas y turnos médicos*\n` +
+            `*[7]* 🏷️ Descargar Kit de Stickers (3x3 cm) y QR\n` +
+            `*[8]* ✏️ Modificar datos de mi perfil (contacto, dirección, etc.)\n` +
+            `*[9]* 💬 Hablar con soporte\n\n` +
             `🔔 _Escribí *NOTIFICACIONES* para activar alertas push en tu celular._\n` +
             `_Respondé con el número, mandá una foto/PDF, o un audio._`,
           `👋 *Mba'éichapa, ${user!.fullName || 'Titular Bio-Pass'}*\n\n` +
@@ -1881,9 +1884,10 @@ export class BotStateMachine {
             `*[3]* 🧪 Emombe'u *estudio* médico\n` +
             `*[4]* 📁 Ahecha che *perfil médico*\n` +
             `*[5]* ⏰ *Momandu'a* pohã reheve\n` +
-            `*[6]* 🏷️ Kit Stickers (3x3 cm) ha QR\n` +
-            `*[7]* ✏️ Emoambue datos de perfil (contacto, óga renda, etc.)\n` +
-            `*[8]* 💬 Soporte ndive\n\n` +
+            `*[6]* 🩺 *Turno* médico\n` +
+            `*[7]* 🏷️ Kit Stickers (3x3 cm) ha QR\n` +
+            `*[8]* ✏️ Emoambue datos de perfil (contacto, óga renda, etc.)\n` +
+            `*[9]* 💬 Soporte ndive\n\n` +
             `🔔 _Ehai *NOTIFICACIONES* rehóvo emyendy hag̃ua alertas push._\n` +
             `_Embohovái papapy reheve, emondo ta'anga/PDF, térã ñe'ẽ._`
         );
@@ -2052,7 +2056,7 @@ export class BotStateMachine {
 
         const contactBlock = contact
           ? `🚨 *${tr('CONTACTO DE EMERGENCIA', 'CONTACTO DE EMERGENCIA')}:*\n• ${contact.fullName} — 📞 ${contact.phoneNumber}${contact.relationship ? ` (${contact.relationship})` : ''}\n\n`
-          : `🚨 *${tr('CONTACTO DE EMERGENCIA', 'CONTACTO DE EMERGENCIA')}:*\n_${tr('Sin contacto asignado — escribí 7 para agregar uno.', 'Ndaipóri contacto.')}_\n\n`;
+          : `🚨 *${tr('CONTACTO DE EMERGENCIA', 'CONTACTO DE EMERGENCIA')}:*\n_${tr('Sin contacto asignado — escribí 8 para agregar uno.', 'Ndaipóri contacto.')}_\n\n`;
 
         const bloodStr = user!.bloodType ? ` | 🩸 *Grupo:* ${user!.bloodType}` : '';
         const idLine = user!.ciNumber ? `🆔 *Cédula:* ${user!.ciNumber}${bloodStr}` : '';
@@ -2077,7 +2081,7 @@ export class BotStateMachine {
           (conflicts.length ? `\n⚠️ *${tr('Interacción detectada', 'Ejesareko')}:*\n${conflicts.map((c) => `• ${c}`).join('\n')}\n` : '') +
           `\n🌐 *Ficha QR de Rescate:* ${config.publicEmergencyBaseUrl}/${user!.emergencyToken}\n` +
           `🔐 *Acceso Web (con tu PIN):* https://bio-pass.cnid.com.py/\n\n` +
-          tr('_Escribí *7* para modificar datos o *MENU* para volver._', '_Ehai *7* emoambue hag̃ua térã *MENU*._')
+          tr('_Escribí *8* para modificar datos o *MENU* para volver._', '_Ehai *8* emoambue hag̃ua térã *MENU*._')
         );
       };
 
@@ -2128,7 +2132,7 @@ export class BotStateMachine {
         if (step === '') {
           return {
             replyText:
-              `📋 *Confirmá el recordatorio:*\n\n${MedicationReminderService.describeDraft(d)}\n\n` +
+              `📋 *Confirmá ${d.kind === 'APPOINTMENT' ? 'la cita' : 'el recordatorio de medicación'}:*\n\n${MedicationReminderService.describeDraft(d)}\n\n` +
               `*[1]* Sí, guardar   *[2]* No`,
           };
         }
@@ -2165,6 +2169,64 @@ export class BotStateMachine {
         return Array.from(new Set(nums)).sort();
       };
 
+
+      // ---- Dos submenús SEPARADOS: [5] Recordatorios de medicación · [6] Citas y turnos ----
+      // Antes era uno solo ("Recordatorios y turnos") con los ejemplos y la lista
+      // mezclados; cada uno tiene ahora su lista, su numeración ("borrar 2" se refiere
+      // a ESA lista), sus ejemplos y sus instrucciones.
+      const reminderSelect = {
+        id: true, kind: true, scheduleKind: true, medication: true, dose: true, times: true,
+        intervalHours: true, nextDoseAt: true, whenAt: true, endsAt: true, active: true,
+        leadMinutes: true, anchorAt: true,
+      } as const;
+      const listMedReminders = () =>
+        prisma.medicationReminder.findMany({ where: { userId: user!.id, NOT: { kind: 'APPOINTMENT' } }, orderBy: { createdAt: 'asc' }, select: reminderSelect });
+      // Solo citas que todavía no pasaron, de la más cercana a la más lejana.
+      const listAppointments = () =>
+        prisma.medicationReminder.findMany({ where: { userId: user!.id, kind: 'APPOINTMENT', whenAt: { gte: new Date() } }, orderBy: { whenAt: 'asc' }, select: reminderSelect });
+      const medsMenuText = (rows: Awaited<ReturnType<typeof listMedReminders>>): string =>
+        tr(
+          `⏰ *Recordatorios de medicación*\n\n` +
+            (rows.length
+              ? `*Tus medicamentos con horario:*\n${MedicationReminderService.format(rows)}\n\n`
+              : `_Todavía no tenés ningún medicamento con horario._\n\n`) +
+            `➕ *Para agregar uno*, escribime o mandame un audio con el *nombre, la dosis y el horario*:\n` +
+            `• _"Losartán 50 mg a las 8 y a las 20"_\n` +
+            `• _"Ibuprofeno cada 8 horas, tomé hace 1 hora"_\n` +
+            `• _"Amoxicilina cada 8 horas por 7 días"_\n` +
+            `📸 _O mandá la foto de la receta y armo los horarios._\n\n` +
+            `🔔 _Te aviso 10 minutos antes y a la hora de cada toma, por WhatsApp y notificación._\n\n` +
+            (rows.length
+              ? `✏️ *Cambiar:* _"cambiá el horario del 1 a las 9"_ o *editar 1*\n` +
+                `🗑️ *Borrar:* *borrar 1* · ⏸️ *Pausar:* *pausar 1* · ▶️ *activar 1*\n`
+              : '') +
+            `↩️ *LISTO* para volver al menú`,
+          `⏰ *Pohã momandu'a*\n\n` +
+            (rows.length ? `${MedicationReminderService.format(rows)}\n\n` : '') +
+            `➕ Ehai *réra + dosis + aravo*: _"Losartán 50 mg 8 ha 20"_\n\n_*borrar N* · *LISTO*_`
+        );
+      const apptsMenuText = (rows: Awaited<ReturnType<typeof listAppointments>>): string =>
+        tr(
+          `🩺 *Citas y turnos médicos*\n\n` +
+            (rows.length
+              ? `*Tus citas pendientes:*\n${MedicationReminderService.format(rows)}\n\n`
+              : `_No tenés citas pendientes._\n\n`) +
+            `➕ *Para agendar una*, escribime o mandame un audio con *con quién o de qué es, el día y la hora*:\n` +
+            `• _"Cardiólogo el 20/10 a las 10:00"_\n` +
+            `• _"Turno con la Dra. López mañana a las 3 de la tarde"_\n` +
+            `• _"Dentista el jueves a las 9, avisame 2 horas antes"_\n\n` +
+            `🔔 _Te aviso 1 hora antes (o cuando me pidas) y de nuevo 10 minutos antes, por WhatsApp y notificación._\n\n` +
+            (rows.length
+              ? `✏️ *Cambiar:* _"la cita 1 pasó a las 17"_ o *editar 1*\n` + `🗑️ *Cancelar:* *borrar 1*\n`
+              : '') +
+            `↩️ *LISTO* para volver al menú`,
+          `🩺 *Turno médico*\n\n` +
+            (rows.length ? `${MedicationReminderService.format(rows)}\n\n` : '') +
+            `➕ Ehai: _"Cardiólogo 20/10 10:00"_\n\n_*borrar N* · *LISTO*_`
+        );
+      /** Submenú al que se vuelve después de guardar / cancelar algo de este tipo. */
+      const reminderHome = (kind?: string) => (kind === 'APPOINTMENT' ? 'ACTIVE_APPOINTMENTS' : 'ACTIVE_REMINDER');
+
       // =====================================================================
       // INTÉRPRETE DE INTENCIÓN (IA) — ver intent-router.ts.
       // Corre ANTES de las reglas de cada sub-modo: la IA ve el mensaje junto con
@@ -2175,7 +2237,7 @@ export class BotStateMachine {
       // =====================================================================
       const lowerFirst = (s: string) => s.charAt(0).toLowerCase() + s.slice(1);
       // Sub-modos sin datos a medio cargar: si la persona pide otra cosa, se sale solo.
-      const SOFT_MODES = new Set(['ACTIVE_MEMBER', 'ACTIVE_REMINDER', 'ACTIVE_UPLOAD_MED', 'ACTIVE_UPLOAD_RX', 'ACTIVE_UPLOAD_STUDY', 'ACTIVE_EDIT_MENU', 'ACTIVE_FREE_UPDATE']);
+      const SOFT_MODES = new Set(['ACTIVE_MEMBER', 'ACTIVE_REMINDER', 'ACTIVE_APPOINTMENTS', 'ACTIVE_UPLOAD_MED', 'ACTIVE_UPLOAD_RX', 'ACTIVE_UPLOAD_STUDY', 'ACTIVE_EDIT_MENU', 'ACTIVE_FREE_UPDATE']);
       const hardPending = !SOFT_MODES.has(subMode);
       const pendingNote = (): string =>
         hardPending
@@ -2191,23 +2253,22 @@ export class BotStateMachine {
         await updateState(toState, { rdraft: null, pendingUpload: null, pendingDelete: null, _timeoutPromptShown: false });
         return BotStateMachine.handleMessage({ ...msg, body, routed: true });
       };
-      const listForUser = () =>
-        prisma.medicationReminder.findMany({
-          where: { userId: user!.id, OR: [{ NOT: { kind: 'APPOINTMENT' } }, { whenAt: { gte: new Date() } }] },
-          orderBy: { createdAt: 'asc' },
-          select: {
-            id: true, kind: true, scheduleKind: true, medication: true, dose: true, times: true,
-            intervalHours: true, nextDoseAt: true, whenAt: true, endsAt: true, active: true,
-          },
-        });
+      // Lista del CONTEXTO actual, con la misma numeración que la persona ve en pantalla:
+      // en [5] solo medicación, en [6] solo citas; en el resto, medicación y después citas.
+      const listForUser = async () => {
+        if (subMode === 'ACTIVE_REMINDER') return listMedReminders();
+        if (subMode === 'ACTIVE_APPOINTMENTS') return listAppointments();
+        const [m, a] = await Promise.all([listMedReminders(), listAppointments()]);
+        return [...m, ...a];
+      };
 
       // Confirmación de un borrado pedido en lenguaje natural ("borrá el turno del Dr. X").
       if (state === 'ACTIVE_CONFIRM_DELETE' && !msg.mediaBuffer) {
-        const pd = getTempData().pendingDelete as { ids: string[]; label: string } | undefined;
+        const pd = getTempData().pendingDelete as { ids: string[]; label: string; kind?: string } | undefined;
         if (pd?.ids?.length && isAffirmative(cleanText)) {
           const { count } = await prisma.medicationReminder.deleteMany({ where: { userId: user.id, id: { in: pd.ids } } });
-          await updateState('ACTIVE_REMINDER', { pendingDelete: null, rdraft: null });
-          const rest = await listForUser();
+          await updateState(reminderHome(pd.kind), { pendingDelete: null, rdraft: null });
+          const rest = pd.kind === 'APPOINTMENT' ? await listAppointments() : pd.kind === 'MED' ? await listMedReminders() : await listForUser();
           return {
             replyText:
               `🗑️ ${count ? tr(`Listo, borré ${pd.label}.`, `Oĩma, aipe'a ${pd.label}.`) : tr('Ya no estaba guardado.', 'Ndaipóri.')}\n\n` +
@@ -2255,9 +2316,11 @@ export class BotStateMachine {
         const stepDesc = (() => {
           switch (subMode) {
             case 'ACTIVE_MEMBER':
-              return 'Menú principal, sin ninguna pregunta pendiente. Opciones: [1] cargar medicamento [2] cargar receta [3] cargar estudio [4] ver perfil médico [5] recordatorios y turnos [6] stickers y QR [7] modificar datos [8] soporte.';
+              return 'Menú principal, sin ninguna pregunta pendiente. Opciones: [1] cargar medicamento [2] cargar receta [3] cargar estudio [4] ver perfil médico [5] recordatorios de medicación [6] citas y turnos médicos [7] stickers y QR [8] modificar datos [9] soporte.';
             case 'ACTIVE_REMINDER':
-              return 'Submenú de recordatorios y turnos (ya le mostró su lista). Puede dictar un recordatorio o turno nuevo, o escribir "borrar N", "pausar N", "activar N", "editar N".';
+              return 'Opción [5] RECORDATORIOS DE MEDICACIÓN (ya le mostró su lista de medicamentos con horario). Puede dictar un medicamento nuevo con su horario, o "borrar N", "pausar N", "activar N", "editar N" sobre esa lista. Las citas médicas son otra opción ([6]), pero si igual pide agendar una cita, es CREATE_APPOINTMENT.';
+            case 'ACTIVE_APPOINTMENTS':
+              return 'Opción [6] CITAS Y TURNOS MÉDICOS (ya le mostró su lista de citas pendientes). Puede dictar una cita nueva (con quién o de qué, día y hora), o "borrar N", "editar N" sobre esa lista. Un nombre suelto de especialidad o doctor ("cardiólogo", "Dra. López") es CREATE_APPOINTMENT.';
             case 'ACTIVE_REMIND_CONFIRM':
               return `Pregunta pendiente: confirmar si guarda este recordatorio — [1] Sí, guardar / [2] No.\n${MedicationReminderService.describeDraft(ctxDraft)}`;
             case 'ACTIVE_REMIND_EDIT_PICK':
@@ -2345,7 +2408,7 @@ export class BotStateMachine {
                   const { list: newMeds, removed } = removeMedication(meds, hits[0].medication);
                   if (removed.length) await persistMeds(newMeds);
                   const label = hits.map((h) => `*${h.medication}*`).join(', ');
-                  await updateState('ACTIVE_CONFIRM_DELETE', { pendingDelete: { ids: hits.map((h) => h.id), label }, rdraft: null });
+                  await updateState('ACTIVE_CONFIRM_DELETE', { pendingDelete: { ids: hits.map((h) => h.id), label, kind: 'MED' }, rdraft: null });
                   return { replyText: `💊 ${tr(`Anotado que ya no tomás ${label}.`, `Oñeanota.`)}
 
 🗑️ ${tr('¿Borro también su recordatorio para que no te avise más?', "¿Aipe'a avei momandu'a?")}
@@ -2434,8 +2497,9 @@ export class BotStateMachine {
                   }
                 }
               }
+              const listHome = subMode === 'ACTIVE_APPOINTMENTS' || subMode === 'ACTIVE_REMINDER' ? subMode : ctxRows.every((r) => r.kind === 'APPOINTMENT') ? 'ACTIVE_APPOINTMENTS' : 'ACTIVE_REMINDER';
               if (!picked.length) {
-                await updateState('ACTIVE_REMINDER', { rdraft: null });
+                await updateState(listHome, { rdraft: null });
                 return {
                   replyText: ctxRows.length
                     ? `${tr(`😕 No encontré cuál querés ${verb}. Estos son los que tenés:`, '😕 Ndajuhúi. Kóva nde momandu\'a:')}\n\n${MedicationReminderService.format(ctxRows)}\n\n_${tr(`Escribí "${cmd} N" con el número.`, `Ehai "${cmd} N".`)}_`
@@ -2443,7 +2507,7 @@ export class BotStateMachine {
                 };
               }
               if (picked.length > 1 && (!tg.scope || it.intent === 'EDIT_REMINDER')) {
-                await updateState('ACTIVE_REMINDER', { rdraft: null });
+                await updateState(listHome, { rdraft: null });
                 const idxs = picked.map((p) => ctxRows.indexOf(p) + 1);
                 return {
                   replyText: `${tr(`Encontré varios. ¿Cuál querés ${verb}?`, 'Heta ajuhu. Mávapa?')}\n\n${MedicationReminderService.format(ctxRows).split('\n').filter((_, i) => idxs.includes(i + 1)).join('\n')}\n\n_${tr(`Escribí "${cmd} N" con el número.`, `Ehai "${cmd} N".`)}_`,
@@ -2453,8 +2517,8 @@ export class BotStateMachine {
               if (it.intent === 'PAUSE_REMINDER' || it.intent === 'RESUME_REMINDER') {
                 const on = it.intent === 'RESUME_REMINDER';
                 await prisma.medicationReminder.updateMany({ where: { userId: user.id, id: { in: picked.map((p) => p.id) } }, data: { active: on, ...(on ? { lastSentSlot: null } : {}) } });
-                await updateState('ACTIVE_REMINDER', { rdraft: null });
-                const rest = await listForUser();
+                await updateState(reminderHome(picked[0].kind), { rdraft: null });
+                const rest = picked[0].kind === 'APPOINTMENT' ? await listAppointments() : await listMedReminders();
                 return {
                   replyText:
                     (on
@@ -2554,7 +2618,8 @@ export class BotStateMachine {
               }
 
               const label = picked.length === 1 ? `*${picked[0].medication}*` : tr(`${picked.length} recordatorios/turnos`, `${picked.length} momandu'a`);
-              await updateState('ACTIVE_CONFIRM_DELETE', { pendingDelete: { ids: picked.map((p) => p.id), label }, rdraft: null });
+              const delKind = picked.every((p) => p.kind === 'APPOINTMENT') ? 'APPOINTMENT' : picked.every((p) => p.kind !== 'APPOINTMENT') ? 'MED' : undefined;
+              await updateState('ACTIVE_CONFIRM_DELETE', { pendingDelete: { ids: picked.map((p) => p.id), label, kind: delKind }, rdraft: null });
               return {
                 replyText:
                   `🗑️ ${tr(`¿Borro ${label}?`, `¿Aipe'a ${label}?`)}\n` +
@@ -2594,16 +2659,16 @@ export class BotStateMachine {
             case 'UPLOAD_STUDY':
               return redispatch('ACTIVE_MEMBER', '3');
             case 'STICKERS':
-              return redispatch('ACTIVE_MEMBER', '6');
+              return redispatch('ACTIVE_MEMBER', '7');
             case 'SUPPORT':
-              return redispatch('ACTIVE_MEMBER', '8');
+              return redispatch('ACTIVE_MEMBER', '9');
             case 'NOTIFICATIONS':
               return redispatch('ACTIVE_MEMBER', 'NOTIFICACIONES');
             case 'LINK_PHONE':
               return redispatch('ACTIVE_MEMBER', 'VINCULAR');
             case 'EDIT_PROFILE':
               if (subMode.startsWith('ACTIVE_EDIT_') || subMode === 'ACTIVE_FREE_UPDATE') break; // ya está en ese flujo
-              return it.hasDetails ? redispatch('ACTIVE_MEMBER', cleanText) : redispatch('ACTIVE_MEMBER', '7');
+              return it.hasDetails ? redispatch('ACTIVE_MEMBER', cleanText) : redispatch('ACTIVE_MEMBER', '8');
             case 'HEALTH_QUESTION':
             case 'OTHER': {
               if (hardPending) break;
@@ -2622,7 +2687,7 @@ export class BotStateMachine {
       // Un número de menú (1–8) estando en "cargar medicamento/receta/estudio" es
       // elegir otra opción del menú, no el nombre de un fármaco ("3" → "no entendí
       // el medicamento" dos veces seguidas, visto en producción).
-      if (['ACTIVE_UPLOAD_MED', 'ACTIVE_UPLOAD_RX', 'ACTIVE_UPLOAD_STUDY'].includes(subMode) && !msg.mediaBuffer && /^[1-8]$/.test(cleanText)) {
+      if (['ACTIVE_UPLOAD_MED', 'ACTIVE_UPLOAD_RX', 'ACTIVE_UPLOAD_STUDY'].includes(subMode) && !msg.mediaBuffer && /^[1-9]$/.test(cleanText)) {
         await updateState('ACTIVE_MEMBER', { rdraft: null });
         return BotStateMachine.handleMessage({ ...msg, routed: true });
       }
@@ -2633,7 +2698,7 @@ export class BotStateMachine {
         await updateState('ACTIVE_MEMBER', { rdraft: null });
         if (wantsMenu) return { replyText: activeMenu() };
         const isUpload = ['ACTIVE_UPLOAD_MED', 'ACTIVE_UPLOAD_RX', 'ACTIVE_UPLOAD_STUDY', 'ACTIVE_RX_CONFIRM', 'ACTIVE_ASK_CATEGORY'].includes(subMode);
-        const isReminder = subMode === 'ACTIVE_REMINDER' || subMode.startsWith('ACTIVE_REMIND_');
+        const isReminder = subMode === 'ACTIVE_REMINDER' || subMode === 'ACTIVE_APPOINTMENTS' || subMode.startsWith('ACTIVE_REMIND_');
         const isEdit = ['ACTIVE_EDIT_MENU', 'ACTIVE_EDIT_CONTACT', 'ACTIVE_EDIT_EMAIL', 'ACTIVE_EDIT_ADDRESS', 'ACTIVE_EDIT_ALLERGY', 'ACTIVE_EDIT_IDENTITY', 'ACTIVE_FREE_UPDATE'].includes(subMode);
         const body = isUpload
           ? tr(
@@ -2641,7 +2706,9 @@ export class BotStateMachine {
               `✅ *Oĩma! Opavave oñeguarda nde bóveda ñemíme.*`
             )
           : isReminder
-            ? tr(`✅ *¡Listo! Tus recordatorios quedaron guardados.*`, `✅ *Oĩma! Nde momandu'a oñeguarda.*`)
+            ? subMode === 'ACTIVE_APPOINTMENTS' || (getTempData().rdraft || {}).kind === 'APPOINTMENT'
+              ? tr(`✅ *¡Listo! Tus citas quedaron guardadas.*`, `✅ *Oĩma! Nde turno oñeguarda.*`)
+              : tr(`✅ *¡Listo! Tus recordatorios de medicación quedaron guardados.*`, `✅ *Oĩma! Nde momandu'a oñeguarda.*`)
             : isEdit
               ? tr(`✅ *¡Listo! Tus datos quedaron actualizados.*`, `✅ *Oĩma! Nde datos oñembopyahu.*`)
               : tr(`✅ *¡Listo!*`, `✅ *Oĩma!*`);
@@ -2666,7 +2733,7 @@ export class BotStateMachine {
       // y también CORTA el diálogo guiado (Juan quedó atascado en "¿cada cuántas horas?"
       // pidiendo esto y el bot tiraba "no entendí").
       if (!msg.mediaBuffer) {
-        const inRemCtx = subMode === 'ACTIVE_REMINDER' || subMode.startsWith('ACTIVE_REMIND_');
+        const inRemCtx = subMode === 'ACTIVE_REMINDER' || subMode === 'ACTIVE_APPOINTMENTS' || subMode.startsWith('ACTIVE_REMIND_');
         const delScope = bulkReminderDeleteScope(cleanText, inRemCtx);
         if (delScope) {
           const where: { userId: string; kind?: string } = { userId: user.id };
@@ -2967,51 +3034,30 @@ export class BotStateMachine {
         return saveEstudio(buf, pend.name);
       }
 
-      // Sub-modo: recordatorios de medicación
-      if (subMode === 'ACTIVE_REMINDER') {
-        // Si el usuario tira una opción del menú principal (1-8, salvo 5) o "menu"/"perfil",
-        // salimos del submenú y lo procesamos como si viniera del menú — no queda atascado.
-        if (/^[1234678]$/.test(cleanText) || /^(men[uú]|inicio|perfil|hola|buenas?)$/i.test(cleanText)) {
+      // Sub-modos: [5] recordatorios de medicación (ACTIVE_REMINDER) · [6] citas y turnos (ACTIVE_APPOINTMENTS)
+      if (subMode === 'ACTIVE_REMINDER' || subMode === 'ACTIVE_APPOINTMENTS') {
+        const apptMode = subMode === 'ACTIVE_APPOINTMENTS';
+        // Si el usuario tira otra opción del menú principal o "menu"/"perfil", salimos
+        // del submenú y lo procesamos como si viniera del menú — no queda atascado.
+        if ((apptMode ? /^[1-57-9]$/ : /^[1-46-9]$/).test(cleanText) || /^(men[uú]|inicio|perfil|hola|buenas?)$/i.test(cleanText)) {
           await updateState('ACTIVE_MEMBER', { rdraft: null });
           return BotStateMachine.handleMessage(msg);
         }
         // Turnos que ya pasaron de fecha no se muestran más — no aportan nada verlos
         // en la lista (no se puede "reactivar" algo que ya ocurrió). Medicación no
         // se filtra por fecha: un recordatorio pausado sigue siendo relevante.
-        const list = async () =>
-          prisma.medicationReminder.findMany({
-            where: {
-              userId: user!.id,
-              OR: [{ NOT: { kind: 'APPOINTMENT' } }, { whenAt: { gte: new Date() } }],
-            },
-            orderBy: { createdAt: 'asc' },
-            select: {
-              id: true, kind: true, scheduleKind: true, medication: true, dose: true, times: true,
-              intervalHours: true, nextDoseAt: true, whenAt: true, endsAt: true, active: true,
-              leadMinutes: true, anchorAt: true,
-            },
-          });
+        const list = () => (apptMode ? listAppointments() : listMedReminders());
 
         let rows = await list();
-        const showList = (current = rows) => {
-          const body = current.length
-            ? MedicationReminderService.format(current)
-            : tr('_No tenés recordatorios configurados._', '_Ndaipóri momandu\'a._');
-          return (
-            `⏰ *${tr('Recordatorios y turnos', "Momandu'a ha turno")}*\n\n${body}\n\n` +
-            tr(
-              '💊 *Medicación* — escribí o mandá un audio: *nombre + horarios*\n' +
-                '_Ej: "Losartán 50 mg 08:00 y 20:00" o "Ibuprofeno cada 8 horas"_\n' +
-                '📸 _O mandá una foto de la receta/indicación — te armo los horarios solo._\n' +
-                '🩺 *Turno médico* — *"turno con cardiólogo el 15/10 a las 14:30"*\n\n' +
-                '_Borrar: "borrar 2" · Pausar: "pausar 1" · Volver: *LISTO*_',
-              '💊 Pohã: *réra + hora*. 🩺 Turno: *"turno 15/10 14:30"*\n_Ehai *LISTO* rehóvo._'
-            )
-          );
-        };
+        const showList = (current = rows) => (apptMode ? apptsMenuText(current) : medsMenuText(current));
 
         // Foto de la receta / indicación médica → OCR y arma los recordatorios
         // solo (nombre + horario, incluida frecuencia tipo "cada 8 horas").
+        if (msg.mediaBuffer && apptMode) {
+          // En citas no se usan fotos: se procesa como un archivo suelto desde el menú.
+          await updateState('ACTIVE_MEMBER', { rdraft: null });
+          return BotStateMachine.handleMessage({ ...msg, routed: true });
+        }
         if (msg.mediaBuffer) {
           const rx = await OcrAiService.processPrescription(msg.mediaBuffer, msg.mediaFilename || 'receta.jpg');
           const created: string[] = [];
@@ -3061,15 +3107,15 @@ export class BotStateMachine {
         if (cmd) {
           const idx = parseInt(cmd[2], 10) - 1;
           const target = rows[idx];
-          if (!target) return { replyText: tr(`No hay un recordatorio *${idx + 1}*.`, `Ndaipóri momandu'a *${idx + 1}*.`) + '\n\n' + showList() };
+          if (!target) return { replyText: tr(`No hay ${apptMode ? 'una cita' : 'un recordatorio'} *${idx + 1}* en esta lista.`, `Ndaipóri *${idx + 1}*.`) + '\n\n' + showList() };
           const verb = cmd[1].toLowerCase();
           if (/^(borrar|eliminar|quitar|sacar)/.test(verb)) {
             await prisma.medicationReminder.delete({ where: { id: target.id } });
-            return { replyText: tr(`🗑️ Borré el recordatorio de *${target.medication}*.`, `🗑️ Aipe'a *${target.medication}* momandu'a.`) + '\n\n' + MedicationReminderService.format(await list()) };
+            return { replyText: tr(`🗑️ ${apptMode ? 'Cancelé la cita' : 'Borré el recordatorio de'} *${target.medication}*.`, `🗑️ Aipe'a *${target.medication}*.`) + '\n\n' + showList(await list()) };
           }
           const activate = /^(activar|reactivar)/.test(verb);
           await prisma.medicationReminder.update({ where: { id: target.id }, data: { active: activate } });
-          return { replyText: tr(`${activate ? '▶️ Activé' : '⏸️ Pausé'} el recordatorio de *${target.medication}*.`, `*${target.medication}* ${activate ? 'oñemyendy' : 'oñembopyta'}.`) + '\n\n' + MedicationReminderService.format(await list()) };
+          return { replyText: tr(`${activate ? '▶️ Activé' : '⏸️ Pausé'} el aviso de *${target.medication}*.`, `*${target.medication}* ${activate ? 'oñemyendy' : 'oñembopyta'}.`) + '\n\n' + showList(await list()) };
         }
 
         // editar N — carga ese recordatorio como borrador (con `id`, marca de modo
@@ -3080,7 +3126,7 @@ export class BotStateMachine {
         if (editCmd) {
           const idx = parseInt(editCmd[1], 10) - 1;
           const target = rows[idx];
-          if (!target) return { replyText: tr(`No hay un recordatorio *${idx + 1}*.`, `Ndaipóri momandu'a *${idx + 1}*.`) + '\n\n' + showList() };
+          if (!target) return { replyText: tr(`No hay ${apptMode ? 'una cita' : 'un recordatorio'} *${idx + 1}* en esta lista.`, `Ndaipóri *${idx + 1}*.`) + '\n\n' + showList() };
           const editDraft: Partial<ReminderDraft> = {
             id: target.id,
             kind: (target.kind as 'MED' | 'APPOINTMENT') || 'MED',
@@ -3116,7 +3162,14 @@ export class BotStateMachine {
           // ¿Es una consulta ("¿qué cita tengo?", "¿cuál es mi próxima toma?")? Respondela.
           const q = await MedicationReminderService.answerQuery(user.id, cleanText, lang);
           if (q) return { replyText: q };
-          const parsed = await MedicationReminderService.parseReminderRequest(cleanText);
+          // En [6] todo lo que se dicta es una cita ("Cardiólogo el 20/10 a las 10").
+          const parsed = await MedicationReminderService.parseReminderRequest(
+            apptMode && !/\b(turno|cita|consulta)\b/i.test(cleanText) ? `turno ${cleanText}` : cleanText
+          );
+          if (apptMode && parsed.kind !== 'APPOINTMENT') {
+            parsed.kind = 'APPOINTMENT';
+            if (parsed.medication && !parsed.whenAt) parsed.medication = cleanText.trim().slice(0, 80);
+          }
           // Si no salió nada estructurado pero el texto parece un nombre de fármaco
           // (una o dos palabras, sin verbos de pedido ni saludos), lo tomamos como el nombre.
           if (
@@ -3218,8 +3271,8 @@ export class BotStateMachine {
 
         if (state === 'ACTIVE_REMIND_EDIT_PICK') {
           if (/^(cancelar|cancel|no|listo)$/i.test(norm(cleanText))) {
-            await updateState('ACTIVE_REMINDER', { rdraft: null });
-            return { replyText: '👍 No cambié nada. Escribí *VER* para ver tus recordatorios.' };
+            await updateState(reminderHome(draft.kind), { rdraft: null });
+            return { replyText: `👍 No cambié nada. Escribí *VER* para ver ${draft.kind === 'APPOINTMENT' ? 'tus citas' : 'tus recordatorios de medicación'}.` };
           }
           const isAppt = draft.kind === 'APPOINTMENT';
           const fieldMap: Record<string, string> = isAppt
@@ -3361,8 +3414,8 @@ export class BotStateMachine {
 
         if (state === 'ACTIVE_REMIND_CONFIRM') {
           if (isNegative(cleanText)) {
-            await updateState('ACTIVE_REMINDER', { rdraft: null });
-            return { replyText: '👍 Descartado. Escribí de nuevo lo que querés programar, o *LISTO* para volver al menú.' };
+            await updateState(reminderHome(draft.kind), { rdraft: null });
+            return { replyText: `👍 Descartado. Dictame de nuevo ${draft.kind === 'APPOINTMENT' ? 'la cita' : 'el medicamento y su horario'}, o *LISTO* para volver al menú.` };
           }
           if (!isAffirmative(cleanText)) {
             // ¿Una consulta en medio de la confirmación? Respondela sin perder el borrador.
@@ -3375,23 +3428,23 @@ export class BotStateMachine {
             }
             return {
               replyText:
-                `📋 *Confirmá el recordatorio:*\n\n${MedicationReminderService.describeDraft(draft)}\n\n*[1]* Sí, guardar   *[2]* No`,
+                `📋 *Confirmá ${draft.kind === 'APPOINTMENT' ? 'la cita' : 'el recordatorio de medicación'}:*\n\n${MedicationReminderService.describeDraft(draft)}\n\n*[1]* Sí, guardar   *[2]* No`,
             };
           }
           if (draft.id) {
             // Modo edición: se actualiza el registro existente, no se crea uno nuevo.
             await MedicationReminderService.updateFromDraft(draft.id, draft);
-            await updateState('ACTIVE_REMINDER', { rdraft: null });
+            await updateState(reminderHome(draft.kind), { rdraft: null });
             return {
               replyText:
                 `✅ *Actualizado.*\n\n${MedicationReminderService.describeDraft(draft)}\n\n` +
-                `_${tr('Otra edición: "editar N". *VER* para ver todos, o *LISTO* para el menú.', 'Ambue jehai: "editar N". *VER* rehecha hag̃ua opavave.')}_`,
+                `_${tr(`*VER* para ver ${draft.kind === 'APPOINTMENT' ? 'tus citas' : 'tus recordatorios de medicación'}, o *LISTO* para el menú.`, '*VER* rehecha hag̃ua opavave.')}_`,
             };
           }
           await MedicationReminderService.createFromDraft(user.id, draft);
           // Quedamos en el submenú de recordatorios (para "borrar N" / "pausar N" /
           // agregar otro). "1-8" / "menu" / "perfil" salen solos; "LISTO" vuelve al menú.
-          await updateState('ACTIVE_REMINDER', { rdraft: null });
+          await updateState(reminderHome(draft.kind), { rdraft: null });
           const conflicts =
             draft.kind === 'MED'
               ? medicationConflicts([{ name: draft.medication || '', source: 'manual', addedAt: '' }], user.severeAllergies, user.contraindicatedMeds)
@@ -3415,7 +3468,9 @@ export class BotStateMachine {
               `✅ *¡Guardado en tu bóveda!*\n\n${MedicationReminderService.describeDraft(draft)}\n${how}\n` +
               (conflicts.length ? `\n⚠️ ${conflicts.map((c) => `• ${c}`).join('\n')}\n` : '') +
               `\n_${tr(
-                'Agregá otro, escribí *VER* para ver todos tus recordatorios, o *LISTO* para volver al menú.',
+                draft.kind === 'APPOINTMENT'
+                  ? 'Dictame otra cita, escribí *VER* para ver todas tus citas, o *LISTO* para volver al menú.'
+                  : 'Dictame otro medicamento, escribí *VER* para ver todos tus recordatorios de medicación, o *LISTO* para volver al menú.',
                 'Emoĩ ambue, ehai *VER* rehecha hag̃ua opavave, térã *LISTO*.'
               )}_`,
           };
@@ -4333,40 +4388,29 @@ export class BotStateMachine {
       ) {
         return { replyText: await profileSummary() };
       }
+      // [6] Citas y turnos médicos
+      if (
+        cleanText === '6' ||
+        (VIEW.test(lc) && /\b(mis?\s+)?(turnos?|citas?|consultas?)\b/.test(lc)) ||
+        /\b(mis|los|las|cu[aá]les\s+son\s+mis)\s+(turnos?|citas?)\b/.test(lc) ||
+        /^(citas?|turnos?|citas? m[eé]dicas?|turnos? m[eé]dicos?|agenda)$/.test(norm(cleanText))
+      ) {
+        await updateState('ACTIVE_APPOINTMENTS', { rdraft: null });
+        return { replyText: apptsMenuText(await listAppointments()) };
+      }
+      // [5] Recordatorios de medicación
       if (
         cleanText === '5' ||
         lc.includes('recordatorio') ||
         lc.includes('recordar') ||
-        (VIEW.test(lc) && /\b(mis?\s+)?(horarios?|alarmas?|avisos?|turnos?|citas?)\b/.test(lc)) ||
-        /\b(mis?|los|cu[aá]les\s+son\s+mis)\s+(recordatorios?|horarios?|alarmas?|turnos?|citas?)\b/.test(lc)
+        (VIEW.test(lc) && /\b(mis?\s+)?(horarios?|alarmas?|avisos?)\b/.test(lc)) ||
+        /\b(mis?|los|cu[aá]les\s+son\s+mis)\s+(recordatorios?|horarios?|alarmas?)\b/.test(lc)
       ) {
         await updateState('ACTIVE_REMINDER', { rdraft: null });
-        const rms = await prisma.medicationReminder.findMany({
-          where: { userId: user.id, OR: [{ NOT: { kind: 'APPOINTMENT' } }, { whenAt: { gte: new Date() } }] },
-          orderBy: { createdAt: 'asc' },
-          select: {
-            kind: true, scheduleKind: true, medication: true, dose: true, times: true,
-            intervalHours: true, nextDoseAt: true, whenAt: true, endsAt: true, active: true,
-          },
-        });
-        return {
-          replyText:
-            `⏰ *${tr('Recordatorios y turnos', "Momandu'a ha turno")}*\n\n` +
-            (rms.length ? MedicationReminderService.format(rms) + '\n\n' : '') +
-            tr(
-              'Escribí o mandá un *audio* con lo que querés programar:\n' +
-                '💊 _"Losartán 50 mg cada 8 horas, tomé hace 1 hora"_\n' +
-                '💊 _"Metformina 850 mg a las 08:00 y 21:00"_\n' +
-                '🩺 _"turno con traumatólogo el 20/10 a las 10:00, avisame 1 hora antes"_\n' +
-                '📸 _O mandá una foto de la receta._\n\n' +
-                '_Te pregunto lo que falte y confirmás antes de guardar._\n' +
-                '_Borrar: "borrar 2" · Pausar: "pausar 1" · Volver: *LISTO*_',
-              '💊 "Metformina 08:00 ha 21:00" · 🩺 "turno 20/10 10:00"\n_Ehai *LISTO* rehóvo._'
-            ),
-        };
+        return { replyText: medsMenuText(await listMedReminders()) };
       }
       if (
-        cleanText === '6' ||
+        cleanText === '7' ||
         /\b(qr|q\.?r\.?|sticker|stickers|calcoman[ií]a|kit\s+(de\s+)?(emergencia|stickers|rescate)|c[oó]digo\s+(qr|de\s+emergencia|de\s+rescate)|mi\s+c[oó]digo)\b/.test(lc)
       ) {
         const org = user.organizationId
@@ -4388,14 +4432,14 @@ export class BotStateMachine {
         };
       }
       if (
-        cleanText === '7' ||
-        /^(7|editar|modificar|modificar perfil|cambiar perfil|actualizar perfil|editar datos|modificar datos|cambiar datos)$/i.test(norm(cleanText))
+        cleanText === '8' ||
+        /^(8|editar|modificar|modificar perfil|cambiar perfil|actualizar perfil|editar datos|modificar datos|cambiar datos)$/i.test(norm(cleanText))
       ) {
         await updateState('ACTIVE_EDIT_MENU', {});
         return { replyText: await getEditMenuText() };
       }
       if (
-        cleanText === '8' ||
+        cleanText === '9' ||
         lc.includes('soporte') ||
         /\b(hablar\s+con\s+(alguien|una\s+persona|un\s+humano|un\s+agente|un\s+asesor|atenci[oó]n)|atenci[oó]n\s+al\s+cliente|reclamo|queja|necesito\s+ayuda\s+de\s+(alguien|una\s+persona)|contacto\s+humano)\b/.test(lc)
       ) {

@@ -23,7 +23,7 @@ const DEFAULT_BY_SCOPE: Record<PromptScope, string> = {
   MIEMBRO_ACTIVO:
     'El usuario ya es miembro activo. El menú (que ve escribiendo *MENU*) tiene: ' +
     '[1] cargar medicamento, [2] cargar receta, [3] cargar estudio, [4] ver perfil médico, ' +
-    '[5] recordatorios de medicación, [6] descargar Kit QR/stickers, [7] modificar datos de emergencia/alergias, [8] soporte. ' +
+    '[5] recordatorios de medicación, [6] citas y turnos médicos, [7] descargar Kit QR/stickers, [8] modificar datos de emergencia/alergias, [9] soporte. ' +
     'Puede mandar foto, PDF o audio. Para pasos concretos remitilo a esas opciones o a escribir *MENU*.',
 };
 
