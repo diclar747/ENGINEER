@@ -759,7 +759,7 @@ export class MedicationReminderService {
   static async createFromDraft(userId: string, d: Partial<ReminderDraft>) {
     if (d.kind === 'APPOINTMENT') {
       const leadMinutes = d.leadMinutes ?? 30; // sin preferencia del usuario → 30 min por defecto
-      return prisma.medicationReminder.create({
+      const created = await prisma.medicationReminder.create({
         data: {
           userId,
           kind: 'APPOINTMENT',
@@ -772,6 +772,16 @@ export class MedicationReminderService {
           secondLeadMinutes: leadMinutes !== 10 ? 10 : null,
         },
       });
+      if (created.whenAt) {
+        const dtLocal = fmtDateTime(new Date(created.whenAt));
+        PushService.notify(
+          userId,
+          '📅 Cita médica agendada',
+          `Tu turno para "${created.medication}" quedó agendado para el ${dtLocal}. Te avisaremos con anticipación.`,
+          { tag: `reminder-created-${created.id}`, url: '/dashboard' }
+        );
+      }
+      return created;
     }
     const scheduleKind = d.scheduleKind === 'INTERVAL' ? 'INTERVAL' : 'CLOCK';
     const data: any = {
@@ -792,7 +802,14 @@ export class MedicationReminderService {
     } else {
       data.times = JSON.stringify(d.times && d.times.length ? d.times : ['08:00']);
     }
-    return prisma.medicationReminder.create({ data });
+    const created = await prisma.medicationReminder.create({ data });
+    PushService.notify(
+      userId,
+      '⏰ Recordatorio activado',
+      `Recordatorio para "${created.medication}" activado. Te avisaremos en cada toma programada.`,
+      { tag: `reminder-created-${created.id}`, url: '/dashboard' }
+    );
+    return created;
   }
 
   /**
@@ -1163,9 +1180,14 @@ export class MedicationReminderService {
         // Cortesía 24 h antes (salvo que el aviso pedido ya sea de ~1 día).
         if (lead < 1200 && r.lastSentSlot !== 'D-1' && r.lastSentSlot !== 'LEAD' && whenMs - nowMs <= 24 * 3600_000 && whenMs - nowMs > 24 * 3600_000 - 6 * 60_000) {
           const msg = gn
-            ? `📅 *Momandu'a: turno* ko'ẽrõ\n\n*${r.medication}*\n🕒 ${dtLocal}`
-            : `📅 *Recordatorio: turno mañana*\n\n*${r.medication}*\n🕒 ${dtLocal}`;
-          PushService.notify(r.user.id, '📅 Turno mañana', msg, { tag: `reminder-${r.id}`, url: '/dashboard' });
+            ? `📅 *Momandu'a: turno* ko'ẽrõ\n\n🩺 *${r.medication}*\n🕒 ${dtLocal}\n\n_Ehecha nde pasaporte médico bio-pass.cnid.com.py_`
+            : `📅 *Recordatorio: Turno médico mañana*\n\n🩺 *${r.medication}*\n🕒 *Fecha y hora:* ${dtLocal}\n\n_Tené a mano tus estudios y recetas en Bio-Pass._`;
+          PushService.notify(
+            r.user.id,
+            '📅 Turno médico mañana',
+            `Consulta: ${r.medication} · 🕒 ${dtLocal}. Abrí tu pasaporte Bio-Pass.`,
+            { tag: `reminder-${r.id}`, url: '/dashboard', requireInteraction: true }
+          );
           if (await whatsappBot.sendMessage(target, msg)) {
             await prisma.medicationReminder.update({ where: { id: r.id }, data: { lastSentAt: new Date(), lastSentSlot: 'D-1' } });
             sent++;
@@ -1176,9 +1198,14 @@ export class MedicationReminderService {
         const untilLead = whenMs - nowMs - lead * 60_000;
         if (r.lastSentSlot !== 'LEAD' && untilLead <= 150_000 && whenMs - nowMs > -15 * 60_000) {
           const msg = gn
-            ? `📅 *Turno* — *${r.medication}*\n🕒 ${dtLocal}`
-            : `📅 *Tu turno médico*\n\n*${r.medication}*\n🕒 ${dtLocal}\n\n_Faltan ${leadLabel(lead)}. No faltes._`;
-          PushService.notify(r.user.id, '📅 Tu turno médico', msg, { tag: `reminder-${r.id}`, url: '/dashboard', requireInteraction: true });
+            ? `📅 *¡Turno ko'ág̃a!* — *${r.medication}*\n🕒 ${dtLocal}\n\n_Opáta ${leadLabel(lead)}._`
+            : `📅 *¡Tu turno médico es hoy!*\n\n🩺 *${r.medication}*\n🕒 *Hora:* ${dtLocal}\n⏱️ *Faltan:* ${leadLabel(lead)}. No faltes.\n\n_Tu médico puede escanear tu QR para ver tus antecedentes._`;
+          PushService.notify(
+            r.user.id,
+            `📅 Tu turno médico (en ${leadLabel(lead)})`,
+            `Consulta: ${r.medication} · 🕒 ${dtLocal}. Abrí tu ficha médica.`,
+            { tag: `reminder-${r.id}`, url: '/dashboard', requireInteraction: true }
+          );
           if (await whatsappBot.sendMessage(target, msg)) {
             await prisma.medicationReminder.update({
               where: { id: r.id },

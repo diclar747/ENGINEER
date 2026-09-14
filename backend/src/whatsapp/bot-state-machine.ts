@@ -1820,7 +1820,8 @@ export class BotStateMachine {
         state === 'ACTIVE_REMINDER' ||
         state === 'ACTIVE_FREE_UPDATE' ||
         state === 'ACTIVE_LINK_PHONE' ||
-        state.startsWith('ACTIVE_REMIND_')
+        state.startsWith('ACTIVE_REMIND_') ||
+        state.startsWith('ACTIVE_EDIT_')
           ? state
           : 'ACTIVE_MEMBER';
 
@@ -1993,6 +1994,9 @@ export class BotStateMachine {
       };
 
       const profileSummary = async (): Promise<string> => {
+        const contact =
+          user!.emergencyContacts?.[0] ||
+          (await prisma.emergencyContact.findFirst({ where: { userId: user!.id, isPrimary: true } }));
         const studies = await prisma.medicalStudy.findMany({
           where: { userId: user!.id },
           orderBy: [{ studyDate: 'desc' }, { createdAt: 'desc' }],
@@ -2001,7 +2005,7 @@ export class BotStateMachine {
         const est = studies.filter((s) => s.studyType !== 'PRESCRIPTION');
         const rows = (arr: typeof studies): string =>
           arr
-            .slice(0, 8)
+            .slice(0, 5)
             .map((s) => `• ${s.title} — ${(s.studyDate || s.createdAt).toLocaleDateString('es-PY', { timeZone: config.timezone })}`)
             .join('\n') || tr('_Nada cargado._', '_Ndaipóri._');
         const conflicts = medicationConflicts(meds, user!.severeAllergies, user!.contraindicatedMeds);
@@ -2014,18 +2018,45 @@ export class BotStateMachine {
           },
         });
         const remBlock = reminders.length
-          ? `\n⏰ *${tr('Recordatorios y turnos', "Momandu'a")} (${reminders.length}):*\n${MedicationReminderService.format(reminders)}\n`
+          ? `\n⏰ *${tr('Recordatorios y turnos activos', "Momandu'a")} (${reminders.length}):*\n${MedicationReminderService.format(reminders)}\n`
           : '';
+
+        let condStr = tr('Ninguna declarada', 'Ndaipóri');
+        try {
+          const arr = user!.emergencyConditions ? JSON.parse(user!.emergencyConditions) : [];
+          if (Array.isArray(arr) && arr.length) condStr = arr.join(', ');
+        } catch {
+          if (user!.emergencyConditions) condStr = user!.emergencyConditions;
+        }
+
+        const contactBlock = contact
+          ? `🚨 *${tr('CONTACTO DE EMERGENCIA', 'CONTACTO DE EMERGENCIA')}:*\n• ${contact.fullName} — 📞 ${contact.phoneNumber}${contact.relationship ? ` (${contact.relationship})` : ''}\n\n`
+          : `🚨 *${tr('CONTACTO DE EMERGENCIA', 'CONTACTO DE EMERGENCIA')}:*\n_${tr('Sin contacto asignado — escribí 7 para agregar uno.', 'Ndaipóri contacto.')}_\n\n`;
+
+        const bloodStr = user!.bloodType ? ` | 🩸 *Grupo:* ${user!.bloodType}` : '';
+        const idLine = user!.ciNumber ? `🆔 *Cédula:* ${user!.ciNumber}${bloodStr}` : '';
+
         return (
-          `📁 *${tr('TU PERFIL MÉDICO', 'NE PERFIL MÉDICO')}*\n\n` +
-          `💊 *${tr('Medicación actual', "Pohã ko'ág̃agua")} (${meds.length}):*\n` +
-          `${meds.length ? formatMedications(meds, { max: 15 }) : tr('_Sin medicamentos cargados._', '_Ndaipóri pohã._')}\n` +
+          `📁 *${tr('TU PASAPORTE MÉDICO BIO-PASS', 'NE PASAPORTE MÉDICO BIO-PASS')}*\n\n` +
+          `👤 *Titular:* ${user!.fullName || 'Usuario Bio-Pass'}\n` +
+          (idLine ? `${idLine}\n` : '') +
+          (user!.address ? `🏠 *Domicilio:* ${user!.address}\n` : '') +
+          (user!.email ? `📧 *Correo:* ${user!.email}\n` : '') +
+          `\n` +
+          contactBlock +
+          `⚠️ *${tr('ALERTAS CRÍTICAS DE SALUD', 'ALERTAS CRÍTICAS')}:*\n` +
+          `• *Alergias severas:* ${user!.severeAllergies || tr('Ninguna declarada', 'Ndaipóri')}\n` +
+          `• *Condiciones preexistentes:* ${condStr}\n` +
+          (user!.contraindicatedMeds && user!.contraindicatedMeds !== 'Ninguno declarado' ? `• *Medicamentos contraindicados:* ${user!.contraindicatedMeds}\n` : '') +
+          `\n💊 *${tr('Medicación actual', "Pohã ko'ág̃agua")} (${meds.length}):*\n` +
+          `${meds.length ? formatMedications(meds, { max: 10 }) : tr('_Sin medicamentos cargados._', '_Ndaipóri pohã._')}\n` +
           remBlock +
-          `\n📄 *${tr('Recetas', 'Receta')} (${rx.length}):*\n${rows(rx)}\n\n` +
-          `🧪 *${tr('Estudios', 'Estudio')} (${est.length}):*\n${rows(est)}\n` +
-          (conflicts.length ? `\n⚠️ *${tr('Atención', 'Ejesareko')}:*\n${conflicts.map((c) => `• ${c}`).join('\n')}\n` : '') +
-          `\n🔐 ${tr('Ver todo en detalle en la web (con tu PIN)', 'Ahecha opavave webpe (nde PIN reheve)')}: https://bio-pass.cnid.com.py/\n` +
-          tr('_Escribí *MENU* para volver._', '_Ehai *MENU* rehóvo._')
+          `\n📄 *${tr('Recetas guardadas', 'Receta')} (${rx.length}):*\n${rows(rx)}\n\n` +
+          `🧪 *${tr('Estudios médicos', 'Estudio')} (${est.length}):*\n${rows(est)}\n` +
+          (conflicts.length ? `\n⚠️ *${tr('Interacción detectada', 'Ejesareko')}:*\n${conflicts.map((c) => `• ${c}`).join('\n')}\n` : '') +
+          `\n🌐 *Ficha QR de Rescate:* ${config.publicEmergencyBaseUrl}/${user!.emergencyToken}\n` +
+          `🔐 *Acceso Web (con tu PIN):* https://bio-pass.cnid.com.py/\n\n` +
+          tr('_Escribí *7* para modificar datos o *MENU* para volver._', '_Ehai *7* emoambue hag̃ua térã *MENU*._')
         );
       };
 
@@ -2120,6 +2151,7 @@ export class BotStateMachine {
         if (wantsMenu) return { replyText: activeMenu() };
         const isUpload = ['ACTIVE_UPLOAD_MED', 'ACTIVE_UPLOAD_RX', 'ACTIVE_UPLOAD_STUDY', 'ACTIVE_RX_CONFIRM', 'ACTIVE_ASK_CATEGORY'].includes(subMode);
         const isReminder = subMode === 'ACTIVE_REMINDER' || subMode.startsWith('ACTIVE_REMIND_');
+        const isEdit = ['ACTIVE_EDIT_MENU', 'ACTIVE_EDIT_CONTACT', 'ACTIVE_EDIT_EMAIL', 'ACTIVE_EDIT_ADDRESS', 'ACTIVE_EDIT_ALLERGY', 'ACTIVE_EDIT_IDENTITY', 'ACTIVE_FREE_UPDATE'].includes(subMode);
         const body = isUpload
           ? tr(
               `✅ *¡Listo! Todo quedó guardado en tu bóveda cifrada.*\nSolo vos y tu médico pueden verlo ingresando tu PIN.`,
@@ -2127,7 +2159,9 @@ export class BotStateMachine {
             )
           : isReminder
             ? tr(`✅ *¡Listo! Tus recordatorios quedaron guardados.*`, `✅ *Oĩma! Nde momandu'a oñeguarda.*`)
-            : tr(`✅ *¡Listo!*`, `✅ *Oĩma!*`);
+            : isEdit
+              ? tr(`✅ *¡Listo! Tus datos quedaron actualizados.*`, `✅ *Oĩma! Nde datos oñembopyahu.*`)
+              : tr(`✅ *¡Listo!*`, `✅ *Oĩma!*`);
         return { replyText: `${body}\n\n_${tr('Escribí *MENU* para ver las opciones.', 'Ehai *MENU* rehecha hag̃ua opciones.')}_` };
       }
 
@@ -2908,113 +2942,726 @@ export class BotStateMachine {
         return advanceRemind(draft);
       }
 
-      // Sub-modo: actualización inteligente de perfil (alergias, contacto, dirección, medicación).
-      // Antes esto no tenía estado propio: la respuesta del usuario caía en el
-      // menú general y, si la IA/NLP no reconocía la frase, el bot mostraba el
-      // menú completo de nuevo sin avisar — parecía un loop que ignoraba lo escrito.
-      // Ahora se queda en este contexto hasta que el usuario escribe LISTO/SALIR/MENU
-      // (la salida ya la maneja el bloque de arriba, común a todos los sub-modos).
-      if (subMode === 'ACTIVE_FREE_UPDATE') {
-        const helpMsg = tr(
-          `✏️ *Actualización Inteligente de Perfil*\n\n` +
-            `Escribí en lenguaje natural lo que querés actualizar. Ejemplos:\n` +
-            `• _"Cambiar alergia a Penicilina e Ibuprofeno"_\n` +
-            `• _"Nuevo contacto Carlos Perez 0981999888"_\n` +
-            `• _"Cambiar dirección a Avda España 500"_\n` +
-            `• _"Ya no tomo Enalapril"_\n` +
-            `• _"Tengo Hipertensión" / "Ya no tengo Diabetes"_\n` +
-            `• _"Mi nombre es Juan Pérez"_ (si la cédula se leyó mal)\n` +
-            `• _"Mi cédula es 1234567"_\n\n` +
-            `_Escribí *LISTO* o *SALIR* para volver al menú._`,
-          `✏️ *Emoambue perfil*\n\n_Ehai *LISTO* térã *SALIR* rehóvo._`
+      // Helper: Menú estructurado de edición de datos de perfil
+      const getEditMenuText = async (): Promise<string> => {
+        const contact = await prisma.emergencyContact.findFirst({
+          where: { userId: user.id },
+          orderBy: { isPrimary: 'desc' },
+        });
+        let condStr = 'Ninguna declarada';
+        try {
+          const arr = user.emergencyConditions ? JSON.parse(user.emergencyConditions) : [];
+          if (Array.isArray(arr) && arr.length) condStr = arr.join(', ');
+        } catch {
+          if (user.emergencyConditions) condStr = user.emergencyConditions;
+        }
+
+        return (
+          `✏️ *Modificación de Datos de Perfil*\n\n` +
+          `¿Qué dato querés modificar?\n\n` +
+          `*[1]* 👥 *Contacto de Emergencia*\n` +
+          `   _Actual: ${contact ? `${contact.fullName} (${contact.phoneNumber})` : 'Sin asignar'}_\n` +
+          `*[2]* 📧 *Correo Electrónico*\n` +
+          `   _Actual: ${user.email || 'Sin asignar'}_\n` +
+          `*[3]* 📍 *Dirección / Domicilio*\n` +
+          `   _Actual: ${user.address || 'Sin asignar'}_\n` +
+          `*[4]* ⚠️ *Alergias Severas*\n` +
+          `   _Actual: ${user.severeAllergies || 'Ninguna declarada'}_\n` +
+          `*[5]* 🩺 *Condiciones Médicas*\n` +
+          `   _Actual: ${condStr}_\n` +
+          `*[6]* 👤 *Nombre o Cédula*\n` +
+          `   _Actual: ${user.fullName || 'Sin registrar'} · CI: ${user.ciNumber || 'Sin registrar'}_\n` +
+          `*[7]* 🩸 *Grupo Sanguíneo*\n` +
+          `   _Actual: ${user.bloodType || 'Sin registrar'}_\n` +
+          `*[8]* ✍️ *Otro cambio libre*\n\n` +
+          `👉 *Elegí un número (1 al 8)* o escribí/mandá un audio con lo que querés cambiar.\n` +
+          `_Escribí *SALIR* para volver al menú principal._`
         );
+      };
 
-        if (!cleanText && !msg.mediaBuffer) return { replyText: helpMsg };
+      // Helper: Procesador universal de actualización de perfil
+      const handleProfileUpdate = async (input: string, silentFallback: boolean = false): Promise<BotResponse | null> => {
+        const raw = (input || '').trim();
+        if (!raw) {
+          if (silentFallback) return null;
+          await updateState('ACTIVE_EDIT_MENU', {});
+          return { replyText: await getEditMenuText() };
+        }
 
-        // Después de un cambio exitoso NO se repiten los 4 ejemplos genéricos —
-        // eso mezclaba temas (confirmabas un contacto y te volvía a ofrecer
-        // "cambiar alergia a Penicilina"). Solo un cierre corto y específico.
-        const contMsg = tr(
-          `\n\n_¿Algo más? Escribí otro cambio, o *LISTO* / *SALIR* para volver al menú._`,
-          `\n\n_Ambue mba'e? Ehai *LISTO* térã *SALIR* rehóvo._`
-        );
-
-        const stop = cleanText.match(/^\s*(?:ya no (?:tomo|uso)|dej[eé] de (?:tomar|usar)|sacar|quitar|eliminar|borrar)\s+(.{2,})/i);
-        if (stop) {
-          const { list, removed } = removeMedication(meds, stop[1].trim());
+        // 1. Quitar medicación: "ya no tomo X", "dejé de tomar X", "sacar X"
+        const stopMatch = raw.match(/^\s*(?:ya no (?:tomo|uso)|dej[eé] de (?:tomar|usar)|sacar|quitar|eliminar|borrar)\s+(.{2,})/i);
+        if (stopMatch) {
+          const { list, removed } = removeMedication(meds, stopMatch[1].trim());
           if (removed.length) {
             await persistMeds(list);
+            await updateState('ACTIVE_MEMBER', {});
             return {
-              replyText: tr(`✅ Saqué de tu medicación: *${removed.join(', ')}*`, `✅ Aipe'a ne pohãgui: *${removed.join(', ')}*`) +
-                contMsg,
+              replyText:
+                `✅ Saqué de tu medicación: *${removed.join(', ')}*\n\n` +
+                `_Escribí *MENU* para ver las opciones principales._`,
+            };
+          }
+          if (!silentFallback) {
+            return {
+              replyText: `No encontré "*${stopMatch[1].trim()}*" en tu lista de medicación activa. Escribí *4* para ver tu perfil médico.`,
             };
           }
         }
 
-        const freeIntent = NlpHandler.parseIntent(cleanText);
-        if (freeIntent.intent === 'CHANGE_ALLERGY' && freeIntent.value) {
-          await prisma.user.update({ where: { id: user.id }, data: { severeAllergies: freeIntent.value } });
+        // 2. Interpretar comando mediante NlpHandler (heurística + Niro AI)
+        const parsed = await NlpHandler.parseIntentAsync(raw);
+
+        // Contacto de emergencia
+        if (parsed.intent === 'CHANGE_CONTACT') {
+          if (parsed.isIntentOnly || (!parsed.contactName && !parsed.contactPhone)) {
+            await updateState('ACTIVE_EDIT_CONTACT', {});
+            const cur = await prisma.emergencyContact.findFirst({
+              where: { userId: user.id },
+              orderBy: { isPrimary: 'desc' },
+            });
+            return {
+              replyText:
+                `👥 *Modificar Contacto de Emergencia*\n\n` +
+                (cur ? `Contacto actual: *${cur.fullName}* (${cur.phoneNumber})\n\n` : '') +
+                `👉 Indicame el *Nombre* y *Teléfono* del nuevo contacto de emergencia (podés escribirlo o enviar un audio).\n` +
+                `_Ejemplo: "María López 0981123456"_\n\n` +
+                `_Escribí *SALIR* para cancelar._`,
+            };
+          }
+
+          if (parsed.contactPhone && parsed.contactName) {
+            await prisma.emergencyContact.deleteMany({ where: { userId: user.id } });
+            await prisma.emergencyContact.create({
+              data: {
+                userId: user.id,
+                fullName: parsed.contactName,
+                phoneNumber: parsed.contactPhone,
+                relationship: parsed.contactRelationship || 'Contacto',
+                isPrimary: true,
+              },
+            });
+            await updateState('ACTIVE_MEMBER', {});
+            return {
+              replyText:
+                `✅ *Contacto de emergencia actualizado con éxito:*\n\n` +
+                `👤 *Nombre:* ${parsed.contactName}\n` +
+                `📞 *Teléfono:* ${parsed.contactPhone}\n` +
+                (parsed.contactRelationship ? `🤝 *Relación:* ${parsed.contactRelationship}\n` : '') +
+                `\n_Tu perfil público de rescate ya refleja este cambio._\n\n` +
+                `_Escribí *MENU* para ver las opciones principales._`,
+            };
+          }
+
+          if (parsed.contactName && !parsed.contactPhone) {
+            await updateState('ACTIVE_EDIT_CONTACT', { editPendingName: parsed.contactName });
+            return {
+              replyText:
+                `👤 *Contacto:* ${parsed.contactName}\n\n` +
+                `📞 Por favor indicame su *número de teléfono* (ej: 0981123456) para guardarlo:\n\n` +
+                `_Escribí *SALIR* para cancelar._`,
+            };
+          }
+
+          if (parsed.contactPhone && !parsed.contactName) {
+            const cur = await prisma.emergencyContact.findFirst({
+              where: { userId: user.id },
+              orderBy: { isPrimary: 'desc' },
+            });
+            if (cur) {
+              await prisma.emergencyContact.update({
+                where: { id: cur.id },
+                data: { phoneNumber: parsed.contactPhone },
+              });
+              await updateState('ACTIVE_MEMBER', {});
+              return {
+                replyText:
+                  `✅ *Teléfono de emergencia actualizado con éxito:*\n\n` +
+                  `👤 *Nombre:* ${cur.fullName}\n` +
+                  `📞 *Teléfono:* ${parsed.contactPhone}\n\n` +
+                  `_Tu perfil público de rescate ya refleja este cambio._\n\n` +
+                  `_Escribí *MENU* para ver las opciones principales._`,
+              };
+            }
+            await updateState('ACTIVE_EDIT_CONTACT', { editPendingPhone: parsed.contactPhone });
+            return {
+              replyText:
+                `📞 *Teléfono:* ${parsed.contactPhone}\n\n` +
+                `👉 Por favor decime el *Nombre y Apellido* de esta persona:\n\n` +
+                `_Escribí *SALIR* para cancelar._`,
+            };
+          }
+        }
+
+        // Correo electrónico
+        if (parsed.intent === 'CHANGE_EMAIL') {
+          if (parsed.isIntentOnly || !parsed.value) {
+            await updateState('ACTIVE_EDIT_EMAIL', {});
+            return {
+              replyText:
+                `📧 *Modificar Correo Electrónico*\n\n` +
+                `Correo actual: *${user.email || 'Sin asignar'}*\n\n` +
+                `👉 Escribí tu nueva dirección de correo electrónico (ej: tu-nombre@gmail.com).\n\n` +
+                `_Escribí *SALIR* para cancelar._`,
+            };
+          }
+          await prisma.user.update({
+            where: { id: user.id },
+            data: { email: parsed.value },
+          });
+          await updateState('ACTIVE_MEMBER', {});
           return {
-            replyText: `✅ *Alergia actualizada en tiempo real:*\n"${freeIntent.value}"\n\nTu perfil público de rescate ya refleja este cambio.` + contMsg,
+            replyText:
+              `✅ *Correo electrónico actualizado con éxito:*\n` +
+              `📧 ${parsed.value}\n\n` +
+              `_Escribí *MENU* para ver las opciones principales._`,
           };
         }
-        if (freeIntent.intent === 'CHANGE_CONTACT' && freeIntent.contactName) {
-          // Sin teléfono NO se guarda (antes caía en el placeholder "0981000000" sin avisar).
-          if (!freeIntent.contactPhone) {
-            return { replyText: `📞 Decime también el *teléfono* de ${freeIntent.contactName} para guardar el contacto (con código de área).` + contMsg };
+
+        // Dirección / Domicilio
+        if (parsed.intent === 'CHANGE_ADDRESS') {
+          if (parsed.isIntentOnly || !parsed.value) {
+            await updateState('ACTIVE_EDIT_ADDRESS', {});
+            return {
+              replyText:
+                `📍 *Modificar Dirección / Domicilio*\n\n` +
+                `Dirección actual: *${user.address || 'Sin asignar'}*\n\n` +
+                `👉 Escribí tu nueva dirección o domicilio (ej: Avda. España 1234 c/ Brasil, Asunción).\n\n` +
+                `_Escribí *SALIR* para cancelar._`,
+            };
           }
+          await prisma.user.update({
+            where: { id: user.id },
+            data: { address: parsed.value },
+          });
+          await updateState('ACTIVE_MEMBER', {});
+          return {
+            replyText:
+              `✅ *Dirección actualizada con éxito:*\n` +
+              `📍 ${parsed.value}\n\n` +
+              `_Escribí *MENU* para ver las opciones principales._`,
+          };
+        }
+
+        // Alergias severas
+        if (parsed.intent === 'CHANGE_ALLERGY') {
+          if (parsed.isIntentOnly || !parsed.value) {
+            await updateState('ACTIVE_EDIT_ALLERGY', {});
+            return {
+              replyText:
+                `⚠️ *Modificar Alergias Severas*\n\n` +
+                `Alergias actuales: *${user.severeAllergies || 'Ninguna declarada'}*\n\n` +
+                `👉 Escribí a qué medicamentos o sustancias tenés alergia (o "Ninguna").\n\n` +
+                `_Escribí *SALIR* para cancelar._`,
+            };
+          }
+          await prisma.user.update({
+            where: { id: user.id },
+            data: { severeAllergies: parsed.value },
+          });
+          await updateState('ACTIVE_MEMBER', {});
+          return {
+            replyText:
+              `✅ *Alergias actualizadas en tiempo real:*\n` +
+              `⚠️ ${parsed.value}\n\n` +
+              `Tu perfil público de rescate ya refleja este cambio.\n\n` +
+              `_Escribí *MENU* para ver las opciones principales._`,
+          };
+        }
+
+        // Grupo sanguíneo
+        if (parsed.intent === 'CHANGE_BLOOD_TYPE') {
+          if (parsed.isIntentOnly || !parsed.value) {
+            await updateState('ACTIVE_EDIT_BLOOD', {});
+            return {
+              replyText:
+                `🩸 *Modificar Grupo Sanguíneo*\n\n` +
+                `Grupo actual: *${user.bloodType || 'Sin registrar'}*\n\n` +
+                `👉 Escribí tu grupo sanguíneo (ej: *O+*, *O-*, *A+*, *A-*, *B+*, *B-*, *AB+*, *AB-*).\n\n` +
+                `_Escribí *SALIR* para cancelar._`,
+            };
+          }
+          await prisma.user.update({
+            where: { id: user.id },
+            data: { bloodType: parsed.value },
+          });
+          await updateState('ACTIVE_MEMBER', {});
+          return {
+            replyText:
+              `✅ *Grupo sanguíneo actualizado con éxito:*\n` +
+              `🩸 ${parsed.value}\n\n` +
+              `_Escribí *MENU* para ver las opciones principales._`,
+          };
+        }
+
+        // Nombre
+        if (parsed.intent === 'CHANGE_NAME') {
+          if (parsed.isIntentOnly || !parsed.value) {
+            await updateState('ACTIVE_EDIT_IDENTITY', {});
+            return {
+              replyText:
+                `👤 *Modificar Nombre Completo*\n\n` +
+                `Nombre actual: *${user.fullName || 'Sin registrar'}*\n\n` +
+                `👉 Escribí tu nombre completo correcto.\n\n` +
+                `_Escribí *SALIR* para cancelar._`,
+            };
+          }
+          const cleanName = parsed.value.replace(/\s+/g, ' ').trim().slice(0, 120);
+          await prisma.user.update({
+            where: { id: user.id },
+            data: { fullName: cleanName },
+          });
+          await updateState('ACTIVE_MEMBER', {});
+          return {
+            replyText:
+              `✅ *Nombre corregido con éxito:*\n` +
+              `👤 ${cleanName}\n\n` +
+              `_Escribí *MENU* para ver las opciones principales._`,
+          };
+        }
+
+        // Cédula de identidad
+        if (parsed.intent === 'CHANGE_CI') {
+          if (parsed.isIntentOnly || !parsed.value) {
+            await updateState('ACTIVE_EDIT_IDENTITY', {});
+            return {
+              replyText:
+                `👤 *Modificar Cédula de Identidad*\n\n` +
+                `Cédula actual: *${user.ciNumber || 'Sin registrar'}*\n\n` +
+                `👉 Escribí tu número de cédula (sólo dígitos).\n\n` +
+                `_Escribí *SALIR* para cancelar._`,
+            };
+          }
+          await prisma.user.update({
+            where: { id: user.id },
+            data: { ciNumber: parsed.value },
+          });
+          await updateState('ACTIVE_MEMBER', {});
+          return {
+            replyText:
+              `✅ *Cédula de identidad corregida con éxito:*\n` +
+              `🪪 ${parsed.value}\n\n` +
+              `_Escribí *MENU* para ver las opciones principales._`,
+          };
+        }
+
+        // Condiciones médicas
+        if (parsed.intent === 'CHANGE_CONDITIONS' && parsed.value) {
+          const label = await matchConditionLabel(parsed.value);
+          if (label) {
+            const remove = isRemoveConditionCmd(parsed.value);
+            const next = await applyConditionChange(user.id, user.emergencyConditions, label, remove);
+            await updateState('ACTIVE_MEMBER', {});
+            return {
+              replyText:
+                `✅ *Condiciones médicas actualizadas${remove ? ` — se sacó "${label}"` : ` — se agregó "${label}"`}:*\n\n` +
+                (next.length ? next.map((c) => `• ${c}`).join('\n') : '_Ninguna declarada_') +
+                `\n\n_Escribí *MENU* para ver las opciones principales._`,
+            };
+          }
+        }
+
+        if (silentFallback) return null;
+
+        await updateState('ACTIVE_EDIT_MENU', {});
+        return {
+          replyText:
+            `🤔 No pude identificar qué dato específico deseás modificar.\n\n` +
+            (await getEditMenuText()),
+        };
+      };
+
+      // Sub-modo: Menú de selección de qué dato modificar
+      if (subMode === 'ACTIVE_EDIT_MENU') {
+        if (cleanText === '1' || /\b(contacto|familiar|tel[eé]fono|avisar)\b/i.test(lc)) {
+          await updateState('ACTIVE_EDIT_CONTACT', {});
+          const contact = await prisma.emergencyContact.findFirst({
+            where: { userId: user.id },
+            orderBy: { isPrimary: 'desc' },
+          });
+          return {
+            replyText:
+              `👥 *Modificar Contacto de Emergencia*\n\n` +
+              `Contacto actual:\n` +
+              (contact ? `👤 ${contact.fullName}\n📞 ${contact.phoneNumber}` : `_Sin contacto asignado_`) +
+              `\n\n👉 Escribí o mandá un audio con el *Nombre* y *Teléfono* del nuevo contacto.\n` +
+              `_Ejemplo: "María López 0981123456"_\n\n` +
+              `_Escribí *SALIR* para volver al menú._`,
+          };
+        }
+        if (cleanText === '2' || /\b(correo|email|mail)\b/i.test(lc)) {
+          await updateState('ACTIVE_EDIT_EMAIL', {});
+          return {
+            replyText:
+              `📧 *Modificar Correo Electrónico*\n\n` +
+              `Correo actual: *${user.email || 'Sin asignar'}*\n\n` +
+              `👉 Escribí tu nueva dirección de correo (ej: tu-nombre@gmail.com).\n\n` +
+              `_Escribí *SALIR* para volver al menú._`,
+          };
+        }
+        if (cleanText === '3' || /\b(direcci[oó]n|domicilio|casa|vivo)\b/i.test(lc)) {
+          await updateState('ACTIVE_EDIT_ADDRESS', {});
+          return {
+            replyText:
+              `📍 *Modificar Dirección / Domicilio*\n\n` +
+              `Dirección actual: *${user.address || 'Sin asignar'}*\n\n` +
+              `👉 Escribí tu nueva dirección o domicilio (ej: Avda. España 1234 c/ Brasil, Asunción).\n\n` +
+              `_Escribí *SALIR* para volver al menú._`,
+          };
+        }
+        if (cleanText === '4' || /\b(alergia|al[eé]rgic[oa])\b/i.test(lc)) {
+          await updateState('ACTIVE_EDIT_ALLERGY', {});
+          return {
+            replyText:
+              `⚠️ *Modificar Alergias Severas*\n\n` +
+              `Alergias actuales: *${user.severeAllergies || 'Ninguna declarada'}*\n\n` +
+              `👉 Escribí a qué sustancias o medicamentos tenés alergia (ej: Penicilina, Ibuprofeno, Maní).\n` +
+              `_Si no tenés ninguna, escribí "Ninguna"._\n\n` +
+              `_Escribí *SALIR* para volver al menú._`,
+          };
+        }
+        if (cleanText === '5' || /\b(condici[oó]n|enfermedad|patolog[ií]a)\b/i.test(lc)) {
+          await updateState('ACTIVE_EDIT_CONDITIONS', {});
+          let condStr = '_Ninguna declarada_';
+          try {
+            const arr = user.emergencyConditions ? JSON.parse(user.emergencyConditions) : [];
+            if (Array.isArray(arr) && arr.length) condStr = arr.map((c: string) => `• ${c}`).join('\n');
+          } catch {
+            if (user.emergencyConditions) condStr = `• ${user.emergencyConditions}`;
+          }
+          return {
+            replyText:
+              `🩺 *Condiciones Médicas / Preexistencias*\n\n` +
+              `Condiciones actuales:\n${condStr}\n\n` +
+              `👉 Escribí lo que querés agregar o quitar.\n` +
+              `_Ejemplos: "Tengo Hipertensión", "Agregar Diabetes", "Ya no tengo Asma"_\n\n` +
+              `_Escribí *SALIR* para volver al menú._`,
+          };
+        }
+        if (cleanText === '6' || /\b(nombre|c[eé]dula|identidad|apellido)\b/i.test(lc)) {
+          await updateState('ACTIVE_EDIT_IDENTITY', {});
+          return {
+            replyText:
+              `👤 *Modificar Nombre o Cédula*\n\n` +
+              `Datos actuales:\n` +
+              `• Nombre: *${user.fullName || 'Sin registrar'}*\n` +
+              `• Cédula: *${user.ciNumber || 'Sin registrar'}*\n\n` +
+              `👉 Escribí tu nombre completo correcto o tu número de cédula.\n\n` +
+              `_Escribí *SALIR* para volver al menú._`,
+          };
+        }
+        if (cleanText === '7' || /\b(sangre|grupo\s+sangu|tipo\s+de\s+sangre)\b/i.test(lc)) {
+          await updateState('ACTIVE_EDIT_BLOOD', {});
+          return {
+            replyText:
+              `🩸 *Modificar Grupo Sanguíneo*\n\n` +
+              `Grupo actual: *${user.bloodType || 'Sin registrar'}*\n\n` +
+              `👉 Escribí tu grupo sanguíneo (ej: *O+*, *O-*, *A+*, *A-*, *B+*, *B-*, *AB+*, *AB-*).\n\n` +
+              `_Escribí *SALIR* para volver al menú._`,
+          };
+        }
+        if (cleanText === '8' || /\botro|libre|escribir\b/i.test(lc)) {
+          await updateState('ACTIVE_FREE_UPDATE', {});
+          return {
+            replyText:
+              `✍️ *Modificación de Perfil*\n\n` +
+              `Escribí o mandá un audio con lo que querés actualizar.\n` +
+              `_Ejemplo: "Nuevo contacto Sofía 0983111222" o "Cambiar dirección a Barrio Jara"_\n\n` +
+              `_Escribí *SALIR* para cancelar._`,
+          };
+        }
+
+        // Si escribió directamente el cambio (ej: "mi mama Maria 0981123456" o audio)
+        const updateRes = await handleProfileUpdate(cleanText);
+        if (updateRes) return updateRes;
+      }
+
+      // Sub-modo: Modificar Contacto de Emergencia
+      if (subMode === 'ACTIVE_EDIT_CONTACT') {
+        const tempData = getTempData();
+        const pendingName = tempData?.editPendingName;
+        const pendingPhone = tempData?.editPendingPhone;
+
+        const parsed = await NlpHandler.parseIntentAsync(cleanText);
+        let name = parsed.contactName;
+        let phone = parsed.contactPhone;
+        const relationship = parsed.contactRelationship;
+
+        const phoneOnly = cleanText.match(/^(\+?\d[\d\s.-]{6,14}\d)$/);
+        if (phoneOnly) {
+          phone = phoneOnly[1].replace(/[^\d+]/g, '');
+        }
+
+        if (phone && (name || pendingName)) {
+          const finalName = (name || pendingName).trim();
           await prisma.emergencyContact.deleteMany({ where: { userId: user.id } });
           await prisma.emergencyContact.create({
             data: {
               userId: user.id,
-              fullName: freeIntent.contactName,
-              phoneNumber: freeIntent.contactPhone,
+              fullName: finalName,
+              phoneNumber: phone,
+              relationship: relationship || 'Contacto',
               isPrimary: true,
             },
           });
+          await updateState('ACTIVE_MEMBER', { editPendingName: null, editPendingPhone: null });
           return {
-            replyText: `✅ *Contacto de emergencia actualizado:*\n👤 ${freeIntent.contactName}\n📞 ${freeIntent.contactPhone}` + contMsg,
+            replyText:
+              `✅ *Contacto de emergencia guardado con éxito:*\n\n` +
+              `👤 *Nombre:* ${finalName}\n` +
+              `📞 *Teléfono:* ${phone}\n` +
+              (relationship ? `🤝 *Relación:* ${relationship}\n` : '') +
+              `\n_Tu perfil público de rescate ya refleja este cambio._\n\n` +
+              `_Escribí *MENU* para ver las opciones principales._`,
           };
         }
-        if (freeIntent.intent === 'CHANGE_ADDRESS' && freeIntent.value) {
-          await prisma.user.update({ where: { id: user.id }, data: { address: freeIntent.value } });
-          return { replyText: `✅ *Dirección actualizada:* ${freeIntent.value}` + contMsg };
-        }
-        if (freeIntent.intent === 'CHANGE_NAME' && freeIntent.value) {
-          // El OCR de la cédula al registrarse a veces lee mal el nombre (acentos,
-          // apellidos compuestos) y antes no había forma de corregirlo después.
-          const name = freeIntent.value.replace(/\s+/g, ' ').trim().slice(0, 120);
-          await prisma.user.update({ where: { id: user.id }, data: { fullName: name } });
-          return { replyText: `✅ *Nombre corregido:* ${name}` + contMsg };
-        }
-        if (freeIntent.intent === 'CHANGE_CI' && freeIntent.value) {
-          await prisma.user.update({ where: { id: user.id }, data: { ciNumber: freeIntent.value } });
-          return { replyText: `✅ *Número de cédula corregido:* ${freeIntent.value}` + contMsg };
-        }
-        if (freeIntent.intent === 'CHANGE_CONDITIONS' && freeIntent.value) {
-          const label = await matchConditionLabel(freeIntent.value);
-          if (label) {
-            const remove = isRemoveConditionCmd(freeIntent.value);
-            const next = await applyConditionChange(user.id, user.emergencyConditions, label, remove);
+
+        if (phone && !name && !pendingName) {
+          const existing = await prisma.emergencyContact.findFirst({
+            where: { userId: user.id },
+            orderBy: { isPrimary: 'desc' },
+          });
+          if (existing) {
+            await prisma.emergencyContact.update({
+              where: { id: existing.id },
+              data: { phoneNumber: phone },
+            });
+            await updateState('ACTIVE_MEMBER', {});
             return {
               replyText:
-                `✅ *Condiciones médicas actualizadas${remove ? ` — se sacó "${label}"` : ` — se agregó "${label}"`}:*\n` +
-                (next.length ? next.map((c) => `• ${c}`).join('\n') : '_Ninguna declarada_') +
-                contMsg,
+                `✅ *Teléfono de emergencia actualizado con éxito:*\n\n` +
+                `👤 *Nombre:* ${existing.fullName}\n` +
+                `📞 *Teléfono:* ${phone}\n\n` +
+                `_Tu perfil público de rescate ya refleja este cambio._\n\n` +
+                `_Escribí *MENU* para ver las opciones principales._`,
             };
           }
+          await updateState('ACTIVE_EDIT_CONTACT', { editPendingPhone: phone });
+          return {
+            replyText:
+              `📞 *Teléfono registrado:* ${phone}\n\n` +
+              `👉 Ahora decime el *Nombre y Apellido* de esta persona:\n\n` +
+              `_O escribí *SALIR* para cancelar._`,
+          };
         }
 
-        // No reconocido: NUNCA cae al menú general en silencio — se queda en el
-        // mismo contexto y reintenta, mostrando de nuevo los ejemplos válidos.
+        const cleanedName = cleanText
+          .replace(/^(el|la|mi|nombre|contacto|se llama|es)\s+/i, '')
+          .replace(/[.!]+$/, '')
+          .trim();
+
+        if (cleanedName.length >= 3 && !/\d/.test(cleanedName)) {
+          if (pendingPhone) {
+            await prisma.emergencyContact.deleteMany({ where: { userId: user.id } });
+            await prisma.emergencyContact.create({
+              data: {
+                userId: user.id,
+                fullName: cleanedName,
+                phoneNumber: pendingPhone,
+                relationship: 'Contacto',
+                isPrimary: true,
+              },
+            });
+            await updateState('ACTIVE_MEMBER', { editPendingName: null, editPendingPhone: null });
+            return {
+              replyText:
+                `✅ *Contacto de emergencia guardado con éxito:*\n\n` +
+                `👤 *Nombre:* ${cleanedName}\n` +
+                `📞 *Teléfono:* ${pendingPhone}\n\n` +
+                `_Tu perfil público de rescate ya refleja este cambio._\n\n` +
+                `_Escribí *MENU* para ver las opciones principales._`,
+            };
+          }
+
+          await updateState('ACTIVE_EDIT_CONTACT', { editPendingName: cleanedName });
+          return {
+            replyText:
+              `👤 *Nombre registrado:* ${cleanedName}\n\n` +
+              `👉 Ahora escribí su *número de teléfono* (con código de área o celular, ej: 0981123456):\n\n` +
+              `_O escribí *SALIR* para cancelar._`,
+          };
+        }
+
         return {
-          replyText: tr(
-            `😕 No entendí ese cambio. Probá con una de estas formas:\n\n` +
-              `• _"Cambiar alergia a ..."_\n• _"Nuevo contacto Nombre Teléfono"_\n• _"Cambiar dirección a ..."_\n• _"Ya no tomo ..."_\n\n` +
-              `_Escribí *LISTO* o *SALIR* para volver al menú sin cambiar nada._`,
-            `😕 Ndaikũmbýi upe. _Ehai *LISTO* térã *SALIR* rehóvo._`
-          ),
+          replyText:
+            `Por favor, indicame el *Nombre y Teléfono* del contacto de emergencia.\n` +
+            `_Ejemplo: "María López 0981123456"_\n\n` +
+            `_Escribí *SALIR* para cancelar._`,
         };
+      }
+
+      // Sub-modo: Modificar Correo
+      if (subMode === 'ACTIVE_EDIT_EMAIL') {
+        const emailMatch = cleanText.match(/([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})/);
+        if (emailMatch) {
+          const newEmail = emailMatch[1].toLowerCase().trim();
+          await prisma.user.update({
+            where: { id: user.id },
+            data: { email: newEmail },
+          });
+          await updateState('ACTIVE_MEMBER', {});
+          return {
+            replyText:
+              `✅ *Correo electrónico actualizado con éxito:*\n` +
+              `📧 ${newEmail}\n\n` +
+              `_Escribí *MENU* para volver al menú principal._`,
+          };
+        }
+        return {
+          replyText:
+            `⚠️ El texto no parece una dirección de correo válida.\n` +
+            `Por favor escribí tu correo en formato *nombre@ejemplo.com*.\n\n` +
+            `_Escribí *SALIR* para volver sin guardar._`,
+        };
+      }
+
+      // Sub-modo: Modificar Dirección
+      if (subMode === 'ACTIVE_EDIT_ADDRESS') {
+        const address = cleanText
+          .replace(/^(mi dirección es|mi direccion es|vivo en|direccion|dirección|domicilio)\s*[:]?\s*/i, '')
+          .trim();
+        if (address.length >= 4) {
+          await prisma.user.update({
+            where: { id: user.id },
+            data: { address },
+          });
+          await updateState('ACTIVE_MEMBER', {});
+          return {
+            replyText:
+              `✅ *Dirección actualizada con éxito:*\n` +
+              `📍 ${address}\n\n` +
+              `_Escribí *MENU* para volver al menú principal._`,
+          };
+        }
+        return {
+          replyText:
+            `Por favor escribí una dirección válida (calle, número y/o ciudad).\n\n` +
+            `_Escribí *SALIR* para volver sin guardar._`,
+        };
+      }
+
+      // Sub-modo: Modificar Alergias
+      if (subMode === 'ACTIVE_EDIT_ALLERGY') {
+        let allergy = cleanText
+          .replace(/^(mis alergias son|mi alergia es|alergias?|tengo alergia a|soy al[eé]rgico a)\s*[:]?\s*/i, '')
+          .trim();
+        if (allergy.length >= 2) {
+          if (/^(ninguna|no tengo|ninguno|nada|sin alergias?)$/i.test(allergy)) {
+            allergy = 'Ninguna declarada';
+          }
+          await prisma.user.update({
+            where: { id: user.id },
+            data: { severeAllergies: allergy },
+          });
+          await updateState('ACTIVE_MEMBER', {});
+          return {
+            replyText:
+              `✅ *Alergias actualizadas en tiempo real:*\n` +
+              `⚠️ ${allergy}\n\n` +
+              `Tu perfil público de rescate ya refleja este cambio.\n\n` +
+              `_Escribí *MENU* para volver al menú principal._`,
+          };
+        }
+        return {
+          replyText:
+            `Por favor indicame tus alergias (ej: "Penicilina e Ibuprofeno") o escribí "Ninguna".\n\n` +
+            `_Escribí *SALIR* para volver sin guardar._`,
+        };
+      }
+
+      // Sub-modo: Modificar Condiciones
+      if (subMode === 'ACTIVE_EDIT_CONDITIONS') {
+        const label = await matchConditionLabel(cleanText);
+        if (label) {
+          const remove = isRemoveConditionCmd(cleanText);
+          const next = await applyConditionChange(user.id, user.emergencyConditions, label, remove);
+          await updateState('ACTIVE_MEMBER', {});
+          return {
+            replyText:
+              `✅ *Condiciones médicas actualizadas${remove ? ` — se sacó "${label}"` : ` — se agregó "${label}"`}:*\n\n` +
+              (next.length ? next.map((c) => `• ${c}`).join('\n') : '_Ninguna declarada_') +
+              `\n\n_Escribí *MENU* para volver al menú principal._`,
+          };
+        }
+        return {
+          replyText:
+            `No identifiqué la condición médica. Podés indicar por ejemplo:\n` +
+            `• _"Tengo Hipertensión"_\n• _"Agregar Diabetes"_\n• _"Ya no tengo Asma"_\n\n` +
+            `_Escribí *SALIR* para volver sin guardar._`,
+        };
+      }
+
+      // Sub-modo: Modificar Identidad (Nombre o CI)
+      if (subMode === 'ACTIVE_EDIT_IDENTITY') {
+        const digitsOnly = cleanText.replace(/[^\d]/g, '');
+        if (digitsOnly.length >= 5 && digitsOnly.length <= 12) {
+          await prisma.user.update({
+            where: { id: user.id },
+            data: { ciNumber: digitsOnly },
+          });
+          await updateState('ACTIVE_MEMBER', {});
+          return {
+            replyText:
+              `✅ *Cédula de identidad actualizada con éxito:*\n` +
+              `🪪 ${digitsOnly}\n\n` +
+              `_Escribí *MENU* para volver al menú principal._`,
+          };
+        }
+
+        const nameCandidate = cleanText
+          .replace(/^(mi nombre es|me llamo|nombre correcto|nombre)\s*[:]?\s*/i, '')
+          .replace(/[.!]+$/, '')
+          .trim();
+
+        if (nameCandidate.length >= 3 && !/\d/.test(nameCandidate)) {
+          const name = nameCandidate.slice(0, 120);
+          await prisma.user.update({
+            where: { id: user.id },
+            data: { fullName: name },
+          });
+          await updateState('ACTIVE_MEMBER', {});
+          return {
+            replyText:
+              `✅ *Nombre corregido con éxito:*\n` +
+              `👤 ${name}\n\n` +
+              `_Escribí *MENU* para volver al menú principal._`,
+          };
+        }
+
+        return {
+          replyText:
+            `Por favor escribí tu nombre completo o tu número de cédula (sólo dígitos).\n\n` +
+            `_Escribí *SALIR* para cancelar._`,
+        };
+      }
+
+      // Sub-modo: Modificar Grupo Sanguíneo
+      if (subMode === 'ACTIVE_EDIT_BLOOD') {
+        const btMatch = cleanText.match(/\b(o|a|b|ab)\s*([+-]|positivo|negativo)\b/i);
+        if (btMatch) {
+          const sign = /pos/i.test(btMatch[2]) || btMatch[2] === '+' ? '+' : '-';
+          const bloodType = `${btMatch[1].toUpperCase()}${sign}`;
+          await prisma.user.update({
+            where: { id: user.id },
+            data: { bloodType },
+          });
+          await updateState('ACTIVE_MEMBER', {});
+          return {
+            replyText:
+              `✅ *Grupo sanguíneo actualizado con éxito:* ${bloodType}\n\n` +
+              `_Escribí *MENU* para volver al menú principal._`,
+          };
+        }
+        return {
+          replyText:
+            `Por favor indicá tu grupo sanguíneo válido (ej: *O+*, *O-*, *A+*, *A-*, *B+*, *B-*, *AB+*, *AB-*).\n\n` +
+            `_Escribí *SALIR* para cancelar._`,
+        };
+      }
+
+      // Sub-modo: Actualización libre de perfil
+      if (subMode === 'ACTIVE_FREE_UPDATE') {
+        const updateRes = await handleProfileUpdate(cleanText);
+        if (updateRes) return updateRes;
       }
 
       // Sub-modo: vincular el número real para poder entrar a la web. Algunos
@@ -3133,6 +3780,16 @@ export class BotStateMachine {
         };
       }
 
+      // Detección en lenguaje natural de modificación de perfil antes del menú general:
+      const isProfileEditIntent =
+        /\b(cambiar|cambi[aá]|modific\w*|actualiz\w*|corregir|corrig\w*|editar|edit[aá]|nuevo\s+contacto|nueva\s+alergia|nuevo\s+correo|nueva\s+direcci[oó]n|nuevo\s+tel[eé]fono)\b/i.test(lc) &&
+        !/\b(record\w*|alarma|aviso|turno|cita|horario|medicament|remedio|pastilla|receta|estudio|an[aá]lisis)\b/i.test(lc);
+
+      if (!wantsView && !wantsLoad && isProfileEditIntent) {
+        const editRes = await handleProfileUpdate(cleanText);
+        if (editRes) return editRes;
+      }
+
       // Menú numerado
       if (
         cleanText === '1' ||
@@ -3240,22 +3897,10 @@ export class BotStateMachine {
       }
       if (
         cleanText === '7' ||
-        lc.includes('modificar') ||
-        /\b(cambiar|cambi[aá]|modific\w*|actualiz\w*|corregir|corrig\w*|editar|edit[aá]|arreglar)\b.{0,30}\b(direcci[oó]n|domicilio|alergia|contacto|condici[oó]n|enfermedad|correo|email|tipo\s+de\s+sangre|grupo\s+sangu|nombre|c[eé]dula|datos\s+(de\s+)?(emergencia|personales)|mis\s+datos)\b/.test(lc)
+        /^(7|editar|modificar|modificar datos|cambiar datos|datos de emergencia|actualizar datos|editar perfil|modificar perfil|cambiar perfil)$/i.test(norm(cleanText))
       ) {
-        await updateState('ACTIVE_FREE_UPDATE', {});
-        return {
-          replyText: `✏️ *Actualización Inteligente de Perfil:*\n\n` +
-            `Escribí en lenguaje natural lo que querés actualizar. Ejemplos:\n` +
-            `• _"Cambiar alergia a Penicilina e Ibuprofeno"_\n` +
-            `• _"Nuevo contacto Carlos Perez 0981999888"_\n` +
-            `• _"Cambiar dirección a Avda España 500"_\n` +
-            `• _"Ya no tomo Enalapril"_\n` +
-            `• _"Tengo Hipertensión" / "Ya no tengo Diabetes"_\n` +
-            `• _"Mi nombre es Juan Pérez"_ (si la cédula se leyó mal)\n` +
-            `• _"Mi cédula es 1234567"_\n\n` +
-            `_Escribí tu mensaje a continuación, o *SALIR* para volver al menú._`,
-        };
+        await updateState('ACTIVE_EDIT_MENU', {});
+        return { replyText: await getEditMenuText() };
       }
       if (
         cleanText === '8' ||
@@ -3354,70 +3999,9 @@ export class BotStateMachine {
         };
       }
 
-      // Natural Language Processing of incoming text
-      const parsedIntent = NlpHandler.parseIntent(cleanText);
-      if (parsedIntent.intent === 'CHANGE_ALLERGY' && parsedIntent.value) {
-        await prisma.user.update({
-          where: { id: user.id },
-          data: { severeAllergies: parsedIntent.value },
-        });
-        return {
-          replyText: `✅ *Alergia actualizada en tiempo real:*\n"${parsedIntent.value}"\n\nTu perfil público de rescate ya refleja este cambio.`,
-        };
-      }
-
-      if (parsedIntent.intent === 'CHANGE_CONTACT' && parsedIntent.contactName) {
-        // Sin teléfono NO se guarda (antes caía en el placeholder "0981000000" sin avisar).
-        if (!parsedIntent.contactPhone) {
-          return { replyText: `📞 Decime también el *teléfono* de ${parsedIntent.contactName} para guardar el contacto (con código de área).` };
-        }
-        await prisma.emergencyContact.deleteMany({ where: { userId: user.id } });
-        await prisma.emergencyContact.create({
-          data: {
-            userId: user.id,
-            fullName: parsedIntent.contactName,
-            phoneNumber: parsedIntent.contactPhone,
-            isPrimary: true,
-          },
-        });
-        return {
-          replyText: `✅ *Contacto de emergencia actualizado:*\n👤 ${parsedIntent.contactName}\n📞 ${parsedIntent.contactPhone}`,
-        };
-      }
-
-      if (parsedIntent.intent === 'CHANGE_ADDRESS' && parsedIntent.value) {
-        await prisma.user.update({
-          where: { id: user.id },
-          data: { address: parsedIntent.value },
-        });
-        return {
-          replyText: `✅ *Dirección actualizada:* ${parsedIntent.value}`,
-        };
-      }
-
-      if (parsedIntent.intent === 'CHANGE_NAME' && parsedIntent.value) {
-        const name = parsedIntent.value.replace(/\s+/g, ' ').trim().slice(0, 120);
-        await prisma.user.update({ where: { id: user.id }, data: { fullName: name } });
-        return { replyText: `✅ *Nombre corregido:* ${name}` };
-      }
-
-      if (parsedIntent.intent === 'CHANGE_CI' && parsedIntent.value) {
-        await prisma.user.update({ where: { id: user.id }, data: { ciNumber: parsedIntent.value } });
-        return { replyText: `✅ *Número de cédula corregido:* ${parsedIntent.value}` };
-      }
-
-      if (parsedIntent.intent === 'CHANGE_CONDITIONS' && parsedIntent.value) {
-        const label = await matchConditionLabel(parsedIntent.value);
-        if (label) {
-          const remove = isRemoveConditionCmd(parsedIntent.value);
-          const next = await applyConditionChange(user.id, user.emergencyConditions, label, remove);
-          return {
-            replyText:
-              `✅ *Condiciones médicas actualizadas${remove ? ` — se sacó "${label}"` : ` — se agregó "${label}"`}:*\n` +
-              (next.length ? next.map((c) => `• ${c}`).join('\n') : '_Ninguna declarada_'),
-          };
-        }
-      }
+      // Heurística y procesamiento de lenguaje natural para actualización de perfil
+      const profileResult = await handleProfileUpdate(cleanText, true);
+      if (profileResult) return profileResult;
 
       {
         const ai = await askNiro(cleanText, { name: user.fullName || undefined, scope: 'MIEMBRO_ACTIVO' });
