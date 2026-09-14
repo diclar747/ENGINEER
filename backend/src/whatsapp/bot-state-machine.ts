@@ -3384,11 +3384,33 @@ export class BotStateMachine {
         const parsed = await NlpHandler.parseIntentAsync(cleanText);
         let name = parsed.contactName;
         let phone = parsed.contactPhone;
-        const relationship = parsed.contactRelationship;
+        let relationship = parsed.contactRelationship;
 
-        const phoneOnly = cleanText.match(/^(\+?\d[\d\s.-]{6,14}\d)$/);
-        if (phoneOnly) {
-          phone = phoneOnly[1].replace(/[^\d+]/g, '');
+        // Fallback directo en ACTIVE_EDIT_CONTACT si el usuario envió número y/o nombre
+        const phoneMatch = cleanText.match(/(\+?\d[\d\s.-]{6,14}\d)/);
+        if (!phone && phoneMatch) {
+          phone = phoneMatch[1].replace(/[^\d+]/g, '');
+        }
+
+        if (!relationship) {
+          const relMatch = cleanText.match(
+            /\b(madre|mam[aá]|padre|pap[aá]|espos[ao]|herman[ao]|hij[ao]|t[ií][ao]|prim[ao]|pareja|novi[ao]|amig[ao]|vecin[ao]|familiar)\b/i
+          );
+          if (relMatch) {
+            relationship = relMatch[1].charAt(0).toUpperCase() + relMatch[1].slice(1).toLowerCase();
+          }
+        }
+
+        if (!name && phoneMatch) {
+          const textWithoutPhone = cleanText.replace(phoneMatch[0], '');
+          const cleaned = textWithoutPhone
+            .replace(/\b(es|mi|su|el|la|se\s+llama|llamado|llamada|nombre|contacto|de|para|emergencia|tel[eé]fono|celular|n[uú]mero|madre|mam[aá]|padre|pap[aá]|espos[ao]|herman[ao]|hij[ao]|t[ií][ao]|prim[ao]|pareja|novi[ao]|amig[ao]|vecin[ao]|familiar)\b/gi, ' ')
+            .replace(/[^\p{L}\s]/gu, '')
+            .replace(/\s+/g, ' ')
+            .trim();
+          if (cleaned.length >= 2) {
+            name = cleaned;
+          }
         }
 
         if (phone && (name || pendingName)) {

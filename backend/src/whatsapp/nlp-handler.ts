@@ -63,6 +63,7 @@ export class NlpHandler {
       clean.includes('contacto') ||
       clean.includes('familiar') ||
       clean.includes('avisar') ||
+      /\b(madre|mam[aá]|padre|pap[aá]|espos[ao]|herman[ao]|hij[ao]|t[ií][ao]|prim[ao]|pareja|novi[ao]|amig[ao]|vecin[ao])\b/i.test(clean) ||
       /\b(cambiar|cambi[aá]|modificar|actualizar|editar|nuevo|nueva)\b.{0,35}\b(n[uú]mero|tel[eé]fono|nombre|persona|contacto|familiar|quien\s+llamar)\b.{0,35}\b(emergencia|urgencia|rescate|llamar)\b/i.test(
         clean
       ) ||
