@@ -992,7 +992,10 @@ export class MedicationReminderService {
       /\bmi(s)?\s+(proxim\w*\s+)?(turno|cita|consulta)/.test(t) ||
       /\b(alguna|algun|una|algo\s+de)\s+(cita|turno|consulta)/.test(t);
     if (mentionsAppt && asksAppt && !isRegistrationVerb && !isEditVerb && !this.parseAppointment(text)) {
-      const nextAppt = appts.find((r) => new Date(r.whenAt!).getTime() > now.getTime() - 3600_000);
+      // Estrictamente en el futuro — un turno que ya pasó no es "tu próximo turno"
+      // aunque haya sido hace 5 minutos (antes toleraba hasta 1 hora de margen,
+      // lo que hacía decir "tu próximo turno" de algo que ya había pasado hacía rato).
+      const nextAppt = appts.find((r) => new Date(r.whenAt!).getTime() > now.getTime());
       if (!nextAppt) return '🩺 No tenés turnos agendados.';
       return `🩺 *Tu próximo turno:*\n*${nextAppt.medication}*\n📅 ${fmtDateTime(new Date(nextAppt.whenAt!))}\nTe voy a avisar ${leadLabel(apptLead(nextAppt.leadMinutes))} antes.`;
     }
@@ -1191,7 +1194,10 @@ export class MedicationReminderService {
             }
           }
         }
-        if (whenMs < nowMs - 3600_000) {
+        // Se desactiva a los 20 min de pasado (poco más que la ventana de gracia de
+        // 15 min del aviso principal, arriba) — antes eran 60 min, y quedaba mostrándose
+        // "activo" en la lista mucho después de haber pasado de verdad.
+        if (whenMs < nowMs - 20 * 60_000) {
           await prisma.medicationReminder.update({ where: { id: r.id }, data: { active: false } });
         }
         continue;
