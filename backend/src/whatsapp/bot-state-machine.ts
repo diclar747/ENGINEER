@@ -234,6 +234,66 @@ function isResetCmd(text: string): boolean {
   return /^(reiniciar|reinicio|reiniciar todo|empezar de nuevo|empezar de cero|empezar de vuelta|volver a empezar|comenzar de nuevo|arrancar de nuevo|de nuevo|otra vez|start over|restart|reset|cancelar|salir|menu|menu principal|inicio|volver al inicio)$/.test(t);
 }
 
+// ============================================================================
+// TIMEOUT DE INACTIVIDAD — si alguien queda a mitad de un paso (registro o un
+// sub-flujo de miembro activo: cargar un documento, armar un recordatorio…) y
+// desaparece, no se lo deja clavado esperando esa misma respuesta para
+// siempre. A los 5 minutos sin mensajes, el PRÓXIMO mensaje que mande — sea
+// cual sea — dispara un saludo con dónde había quedado y la opción de seguir
+// ahí o empezar de nuevo, en vez de reprocesar ese mensaje como si fuera la
+// respuesta a una pregunta que quizás ya ni recuerda.
+// ============================================================================
+const IDLE_TIMEOUT_MS = 5 * 60 * 1000;
+
+/** Pasos "a mitad de camino": tienen datos parciales que se pierden si se reinicia sin avisar. */
+const MID_FLOW_STATES = new Set([
+  'STEP1B_TERMS', 'STEP1C_LINK_NUM', 'STEP2_DOCUMENT', 'STEP2_CONFIRM_CI', 'STEP3_CONTACT',
+  'STEP4_ADDRESS', 'STEP5_EMAIL', 'STEP6_CONDITIONS', 'STEP6_OTHER_TEXT', 'STEP6B_BLOOD',
+  'STEP7_PIN', 'STEP7B_RECOVERY', 'STEP8_PAYMENT',
+  'ACTIVE_UPLOAD_MED', 'ACTIVE_UPLOAD_RX', 'ACTIVE_UPLOAD_STUDY', 'ACTIVE_RX_CONFIRM', 'ACTIVE_ASK_CATEGORY',
+  'ACTIVE_LINK_PHONE', 'ACTIVE_FREE_UPDATE',
+  'ACTIVE_REMINDER', 'ACTIVE_REMIND_NAME', 'ACTIVE_REMIND_SCHED', 'ACTIVE_REMIND_LAST',
+  'ACTIVE_REMIND_DOSE', 'ACTIVE_REMIND_WHEN', 'ACTIVE_REMIND_LEAD', 'ACTIVE_REMIND_CONFIRM',
+]);
+
+const PENDING_STEP_LABEL: Record<string, { es: string; pt: string }> = {
+  STEP1B_TERMS: { es: 'Aceptar los Términos y Condiciones', pt: 'Aceitar os Termos e Condições' },
+  STEP1C_LINK_NUM: { es: 'Confirmar tu número de WhatsApp', pt: 'Confirmar seu número de WhatsApp' },
+  STEP2_DOCUMENT: { es: 'Subir la foto de tu cédula', pt: 'Enviar a foto do seu documento' },
+  STEP2_CONFIRM_CI: { es: 'Confirmar los datos de tu cédula', pt: 'Confirmar os dados do seu documento' },
+  STEP3_CONTACT: { es: 'Cargar tu contacto de emergencia', pt: 'Cadastrar seu contato de emergência' },
+  STEP4_ADDRESS: { es: 'Escribir tu dirección', pt: 'Informar seu endereço' },
+  STEP5_EMAIL: { es: 'Escribir tu email', pt: 'Informar seu email' },
+  STEP6_CONDITIONS: { es: 'Elegir tus condiciones médicas y alergias', pt: 'Escolher suas condições médicas e alergias' },
+  STEP6_OTHER_TEXT: { es: 'Contarme tus condiciones o alergias', pt: 'Contar suas condições ou alergias' },
+  STEP6B_BLOOD: { es: 'Elegir tu grupo sanguíneo', pt: 'Escolher seu tipo sanguíneo' },
+  STEP7_PIN: { es: 'Elegir tu PIN de seguridad de 4 dígitos', pt: 'Escolher seu PIN de segurança de 4 dígitos' },
+  STEP7B_RECOVERY: { es: 'Confirmar tu Clave de Recuperación', pt: 'Confirmar sua Chave de Recuperação' },
+  STEP8_PAYMENT: { es: 'Elegir tu plan de pago', pt: 'Escolher seu plano de pagamento' },
+  ACTIVE_UPLOAD_MED: { es: 'Subir la foto o PDF de tu medicamento', pt: 'Enviar a foto ou PDF do seu medicamento' },
+  ACTIVE_UPLOAD_RX: { es: 'Subir la foto de tu receta', pt: 'Enviar a foto da sua receita' },
+  ACTIVE_UPLOAD_STUDY: { es: 'Subir tu estudio o análisis', pt: 'Enviar seu exame ou análise' },
+  ACTIVE_RX_CONFIRM: { es: 'Confirmar los medicamentos leídos de tu receta', pt: 'Confirmar os medicamentos lidos da receita' },
+  ACTIVE_ASK_CATEGORY: { es: 'Decirme qué tipo de documento mandaste', pt: 'Dizer que tipo de documento você enviou' },
+  ACTIVE_LINK_PHONE: { es: 'Confirmar tu número real de WhatsApp', pt: 'Confirmar seu número real de WhatsApp' },
+  ACTIVE_FREE_UPDATE: { es: 'Contarme qué querés actualizar de tu ficha', pt: 'Dizer o que você quer atualizar no seu perfil' },
+  ACTIVE_REMINDER: { es: 'Armar tu recordatorio o turno', pt: 'Montar seu lembrete ou consulta' },
+  ACTIVE_REMIND_NAME: { es: 'Decirme el nombre del medicamento o turno', pt: 'Dizer o nome do medicamento ou consulta' },
+  ACTIVE_REMIND_SCHED: { es: 'Decirme cada cuánto lo tomás', pt: 'Dizer de quanto em quanto tempo você toma' },
+  ACTIVE_REMIND_LAST: { es: 'Decirme cuándo fue la última toma', pt: 'Dizer quando foi a última dose' },
+  ACTIVE_REMIND_DOSE: { es: 'Decirme la dosis', pt: 'Dizer a dose' },
+  ACTIVE_REMIND_WHEN: { es: 'Decirme el día y hora del turno', pt: 'Dizer o dia e a hora da consulta' },
+  ACTIVE_REMIND_LEAD: { es: 'Decirme con cuánta anticipación avisar', pt: 'Dizer com quanta antecedência avisar' },
+  ACTIVE_REMIND_CONFIRM: { es: 'Confirmar el recordatorio (Sí / No)', pt: 'Confirmar o lembrete (Sim / Não)' },
+};
+
+/** Descripción corta de "en qué pregunta había quedado" para el mensaje de timeout. */
+function pendingStepLabel(state: string, lang: 'es' | 'gn' | 'pt' | 'en'): string {
+  const entry = PENDING_STEP_LABEL[state];
+  if (!entry) return lang === 'pt' ? 'Completar o passo em que você estava' : 'Completar el paso donde estabas';
+  return lang === 'pt' ? entry.pt : entry.es;
+}
+
 /**
  * "borra los recordatorios y turnos" / "eliminá todos mis turnos" / "borrá todo".
  * Baja MASIVA de recordatorios. Devuelve el alcance o null si no aplica.
@@ -423,6 +483,13 @@ export class BotStateMachine {
 
     const state = user.onboardingState;
 
+    // Marca de actividad — se usa para el timeout de inactividad de más abajo.
+    // Se lee ANTES de pisarla (así idleMs mide el hueco real) y se persiste ya
+    // mismo, sin esperar; no debe demorar ni romper la respuesta si falla.
+    const lastInteractionAt = user.lastInteractionAt;
+    const now = new Date();
+    prisma.user.update({ where: { id: user.id }, data: { lastInteractionAt: now } }).catch(() => undefined);
+
     // Idioma del usuario. `tr()` toma ES y GN siempre; PT/EN son opcionales y, si
     // falta la traducción de un texto puntual, cae a ES (nunca deja el mensaje vacío).
     const lang: 'es' | 'gn' | 'pt' | 'en' =
@@ -430,10 +497,70 @@ export class BotStateMachine {
     const tr = (es: string, gn: string, pt?: string, en?: string) =>
       lang === 'gn' ? gn : lang === 'pt' ? pt ?? es : lang === 'en' ? en ?? es : es;
 
+    // ------------------------------------------------------------------------
+    // TIMEOUT DE INACTIVIDAD (ver bloque MID_FLOW_STATES más arriba). Si quedó
+    // a mitad de un paso y no contestó nada en 5+ minutos, el próximo mensaje
+    // no se reprocesa como respuesta a la pregunta pendiente — primero se le
+    // avisa dónde había quedado y se le da a elegir seguir ahí o arrancar de
+    // nuevo. `awaitingTimeoutChoice` recuerda que ya se lo preguntamos, para
+    // no repetir el aviso en cada mensaje mientras decide.
+    // ------------------------------------------------------------------------
+    const timeoutTempData = getTempData();
+    const isMidFlowState = MID_FLOW_STATES.has(state);
+    const awaitingTimeoutChoice = !!timeoutTempData._timeoutPromptShown;
+    let forceRestartFromTimeout = false;
+
+    if (isMidFlowState && !awaitingTimeoutChoice && lastInteractionAt && now.getTime() - lastInteractionAt.getTime() > IDLE_TIMEOUT_MS) {
+      await updateState(state, { _timeoutPromptShown: true });
+      return {
+        replyText:
+          `👋 ${tr('¡Hola de nuevo!', "Mba'éichapa jey!", 'Olá de novo!', 'Hi again!')} ` +
+          tr(
+            'Pasó un buen rato sin noticias tuyas — habías quedado en:',
+            "Are heta ohasa nde reikuaaukái'ỹre — reime hague:",
+            'Faz um tempo sem novidades suas — você tinha ficado em:',
+            "It's been a while — you were at:"
+          ) +
+          `\n\n📍 *${pendingStepLabel(state, lang)}*\n\n` +
+          tr(
+            '*[1]* Seguir donde quedé\n*[2]* Empezar de nuevo',
+            "*[1]* Asegui upégui\n*[2]* Ñepyrũ jey",
+            '*[1]* Continuar de onde parei\n*[2]* Começar de novo',
+            '*[1]* Continue where I left off\n*[2]* Start over'
+          ),
+      };
+    }
+
+    if (isMidFlowState && awaitingTimeoutChoice) {
+      if (isAffirmative(cleanText) || isSmallTalk(cleanText) || isAck(cleanText)) {
+        // "Seguir donde quedé" — se limpia el flag (en memoria, para que el
+        // resto de este mismo request ya lo vea resuelto) y se le recuerda la
+        // pregunta pendiente sin reprocesar este mensaje como si fuera datos.
+        timeoutTempData._timeoutPromptShown = false;
+        user.onboardingData = JSON.stringify(timeoutTempData);
+        return {
+          replyText:
+            `👍 ${tr('Dale, seguimos.', "Néike, jasegi.", 'Beleza, vamos continuar.', "Sure, let's continue.")}\n\n📍 *${pendingStepLabel(state, lang)}*`,
+        };
+      }
+      if (isNegative(cleanText) || isResetCmd(cleanText)) {
+        // "Empezar de nuevo" — se deja pasar al comando global de reinicio de
+        // más abajo, que ya sabe resetear bien según user.status.
+        forceRestartFromTimeout = true;
+      } else {
+        // Ni sí ni no: lo más probable es que ya esté respondiendo la
+        // pregunta pendiente directamente — no se lo interrumpe, se limpia el
+        // flag y se deja que el procesamiento normal de este mismo mensaje
+        // siga más abajo con sus datos intactos.
+        timeoutTempData._timeoutPromptShown = false;
+        user.onboardingData = JSON.stringify(timeoutTempData);
+      }
+    }
+
     // Comando global — funciona en CUALQUIER paso del registro: "reiniciar",
     // "empezar de nuevo", "volver a empezar", "menu", "cancelar", "de nuevo"…
     // Para un miembro ACTIVO no se borra nada: se lo lleva a su menú.
-    if (isResetCmd(cleanText)) {
+    if (isResetCmd(cleanText) || forceRestartFromTimeout) {
       if (user.status === 'ACTIVE') {
         // Miembro activo: no se toca su ficha. Se lo deja en el menú.
         await updateState('ACTIVE_MEMBER', {});
@@ -2402,13 +2529,18 @@ export class BotStateMachine {
         // reservado?", "¿qué medicación estoy tomando?") en vez de la respuesta al
         // paso pendiente? Antes esto SIEMPRE caía en "no entendí" porque el parser
         // del paso (horario/nombre/dosis/etc.) trataba de leer la pregunta como si
-        // fuera el dato que pidió — ahora se responde sin perder el borrador, y
-        // se repite la pregunta pendiente para que el usuario sepa que sigue ahí.
+        // fuera el dato que pidió — ahora se responde directo. NO se repite el menú
+        // de opciones del paso pendiente (eso solo confundía: "pregunté otra cosa,
+        // ¿por qué me tira un menú de horarios?") — un aviso al pie, sin presionar,
+        // alcanza para que sepa que el borrador sigue ahí si quiere retomarlo.
         if (state !== 'ACTIVE_REMIND_CONFIRM' && cleanText && !msg.mediaBuffer) {
           const midQuery = await MedicationReminderService.answerQuery(user.id, cleanText, lang);
           if (midQuery) {
-            const stepKey = Object.keys(REMIND_STATE).find((k) => REMIND_STATE[k] === state) || '';
-            return { replyText: `${midQuery}\n\n———\n${remindQuestion(stepKey, draft)}` };
+            const label = pendingStepLabel(state, lang);
+            const lower = label.charAt(0).toLowerCase() + label.slice(1);
+            return {
+              replyText: `${midQuery}\n\n_(Seguís cargando algo pendiente — ${lower} cuando quieras, o escribí *LISTO* para dejarlo.)_`,
+            };
           }
         }
 

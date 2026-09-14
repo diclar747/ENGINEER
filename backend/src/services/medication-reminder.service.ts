@@ -939,7 +939,7 @@ export class MedicationReminderService {
       /\b(alguna|algun|una|algo\s+de)\s+(cita|turno|consulta)/.test(t);
     if (mentionsAppt && asksAppt && !isRegistrationVerb && !isEditVerb && !this.parseAppointment(text)) {
       const nextAppt = appts.find((r) => new Date(r.whenAt!).getTime() > now.getTime() - 3600_000);
-      if (!nextAppt) return '🩺 No tenés turnos agendados. Para agendar uno decime, por ejemplo: _"turno con cardiólogo el 20/10 a las 10:00"_.';
+      if (!nextAppt) return '🩺 No tenés turnos agendados.';
       return `🩺 *Tu próximo turno:*\n*${nextAppt.medication}*\n📅 ${fmtDateTime(new Date(nextAppt.whenAt!))}\nTe voy a avisar ${leadLabel(apptLead(nextAppt.leadMinutes))} antes.`;
     }
 

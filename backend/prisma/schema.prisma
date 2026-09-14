@@ -115,7 +115,8 @@ model User {
   // WhatsApp Bot State Engine
   onboardingState       String              @default("UNREGISTERED") // REGISTERING_WELCOME, REGISTERING_CI, etc.
   onboardingData        String?             // Temporary JSON buffer during conversational registration
-  
+  lastInteractionAt     DateTime?           // Último mensaje entrante procesado — usado para detectar abandono a mitad de un paso
+
   status                UserStatus          @default(PENDING_PAYMENT)
 
   failedPinAttempts     Int                 @default(0)
