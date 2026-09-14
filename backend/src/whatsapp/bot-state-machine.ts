@@ -2071,24 +2071,16 @@ export class BotStateMachine {
         }
       };
       const advanceRemind = async (d: Partial<ReminderDraft>): Promise<BotResponse> => {
-        // Si pidió avisar con menos de 5 min, se subió a 5 en vez de ignorarlo
-        // en silencio (ver parseReminderRequest) — se lo contamos UNA vez acá,
-        // en vez de mostrarle la pregunta de anticipación como si no hubiera
-        // dicho nada al respecto.
-        const clampNote = d.leadClampedFrom
-          ? `⏱️ _Pediste avisar ${d.leadClampedFrom} minuto${d.leadClampedFrom === 1 ? '' : 's'} antes — reviso cada 5 minutos, así que el mínimo posible es 5. Ajustado._\n\n`
-          : '';
-        if (d.leadClampedFrom) delete d.leadClampedFrom;
         const step = MedicationReminderService.draftNextStep(d);
         await updateState(REMIND_STATE[step] || 'ACTIVE_REMIND_CONFIRM', { rdraft: d });
         if (step === '') {
           return {
             replyText:
-              `${clampNote}📋 *Confirmá el recordatorio:*\n\n${MedicationReminderService.describeDraft(d)}\n\n` +
+              `📋 *Confirmá el recordatorio:*\n\n${MedicationReminderService.describeDraft(d)}\n\n` +
               `*[1]* Sí, guardar   *[2]* No`,
           };
         }
-        return { replyText: `${clampNote}${remindQuestion(step, d)}` };
+        return { replyText: remindQuestion(step, d) };
       };
       const parseTimesLoose = (s: string): string[] => {
         const viaParse = MedicationReminderService.parse(`medic ${s}`)?.times || [];
@@ -2635,7 +2627,7 @@ export class BotStateMachine {
               }
               return false;
             case 'lead':
-              if (guess.leadMinutes !== undefined && guess.leadMinutes !== null && guess.leadMinutes >= 5) {
+              if (guess.leadMinutes !== undefined && guess.leadMinutes !== null && guess.leadMinutes >= 1) {
                 draft.leadMinutes = guess.leadMinutes;
                 return true;
               }
@@ -2800,13 +2792,6 @@ export class BotStateMachine {
               if (h) mins = Math.round(parseFloat(h[1].replace(',', '.')) * 60);
               else if (mm) mins = +mm[1];
             }
-          }
-          if (mins !== undefined && mins < 5) {
-            // No lo rechazamos ni repreguntamos — se sube a 5 (el mínimo real, dado
-            // que reviso cada 5 min) y se avisa una sola vez vía advanceRemind().
-            draft.leadMinutes = 5;
-            draft.leadClampedFrom = mins;
-            return advanceRemind(draft);
           }
           if (!mins || mins > 10080) {
             if (await aiAssistStep('lead', cleanText)) return advanceRemind(draft);

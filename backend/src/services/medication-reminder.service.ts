@@ -29,10 +29,6 @@ export interface ReminderDraft {
   whenAt?: string; // ISO — turno (APPOINTMENT)
   whenPendingDate?: string; // YYYY-MM-DD — fecha del turno ya dada, esperando la hora
   leadMinutes?: number;
-  /** Si pidió avisar con menos de 5 min (el cron revisa cada 5) se sube a 5 en
-   *  vez de ignorarlo — acá queda el valor ORIGINAL que pidió, para avisarle
-   *  una vez que se lo ajustamos en vez de fingir que no dijo nada. */
-  leadClampedFrom?: number;
   endsAt?: string; // ISO — fin del tratamiento ("por 3 días")
 }
 
@@ -619,12 +615,7 @@ export class MedicationReminderService {
         }
         const lm = parseInt(String(ai.leadMinutes), 10);
         if (lm >= 1 && lm <= 10080) {
-          if (lm < 5) {
-            draft.leadMinutes = 5;
-            draft.leadClampedFrom = lm;
-          } else {
-            draft.leadMinutes = lm;
-          }
+          draft.leadMinutes = lm;
         }
         if (ai.durationDays && Number(ai.durationDays) >= 1 && Number(ai.durationDays) <= 999) {
           draft.endsAt = new Date(Date.now() + Math.min(Number(ai.durationDays), MAX_TREATMENT_DAYS) * 86400_000).toISOString();
@@ -704,14 +695,7 @@ export class MedicationReminderService {
           const n = lm[1] === 'media' ? 0.5 : /^un/.test(lm[1]) ? 1 : parseFloat(lm[1].replace(',', '.'));
           if (!isNaN(n)) {
             const mins = /^min/.test(lm[2]) ? Math.round(n) : /^d/.test(lm[2]) ? Math.round(n * 1440) : Math.round(n * 60);
-            if (mins >= 1 && mins <= 10080) {
-              if (mins < 5) {
-                draft.leadMinutes = 5;
-                draft.leadClampedFrom = mins;
-              } else {
-                draft.leadMinutes = mins;
-              }
-            }
+            if (mins >= 1 && mins <= 10080) draft.leadMinutes = mins;
           }
         }
       }
@@ -1114,7 +1098,7 @@ export class MedicationReminderService {
   }
 
   /**
-   * Tick del CRON (cada 5 min): dispara los recordatorios cuya hora cae en la ventana
+   * Tick del CRON (cada 1 min): dispara los recordatorios cuya hora cae en la ventana
    * y que no se enviaron ya en ese slot. Si el bot de WhatsApp está desconectado, no
    * hace nada (los recordatorios no avanzan → se reintentan en el próximo tick).
    */

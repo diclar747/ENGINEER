@@ -25,15 +25,22 @@ export class CronService {
       if (removed) console.log(`🧹 [CRON JOB] Purged ${removed} stale OTP codes.`);
     });
 
-    // Every 5 minutes: dispatch medication-reminder alerts whose time is due.
-    cron.schedule('*/5 * * * *', async () => {
-      await MedicationReminderService.tick().catch((e) => console.warn('[CRON] reminder tick error:', e?.message));
+    // Cada minuto: turnos/medicación cuyo aviso ya toca. Antes era cada 5 min —
+    // eso obligaba a un piso artificial de "mínimo 5 min de anticipación" y podía
+    // demorar hasta 5 min un aviso que ya estaba vencido. Con 1 min de por medio,
+    // el piso baja a 1 min real y la demora máxima también.
+    cron.schedule('* * * * *', async () => {
+      const sent = await MedicationReminderService.tick().catch((e) => {
+        console.warn('[CRON] reminder tick error:', e?.message);
+        return 0;
+      });
+      if (sent) console.log(`⏰ [CRON] recordatorios enviados: ${sent}`);
     });
 
     // Seed default AI prompts once (editable afterwards in /admin → IA).
     AiPromptService.seed().catch(() => {});
 
-    console.log('⏰ CRON: renovaciones (08:00 diario) + OTP (horario) + recordatorios de medicación (cada 5 min)');
+    console.log('⏰ CRON: renovaciones (08:00 diario) + OTP (horario) + recordatorios de medicación (cada 1 min)');
   }
 
   public static async runSubscriptionCheck(): Promise<{ checked: number; notificationsSent: number; purged: number }> {
