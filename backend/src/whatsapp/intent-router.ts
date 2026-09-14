@@ -26,6 +26,9 @@ export const BOT_INTENTS = [
   'CREATE_APPOINTMENT',
   'CREATE_MED_REMINDER',
   'DELETE_REMINDER',
+  'PAUSE_REMINDER',
+  'RESUME_REMINDER',
+  'EDIT_REMINDER',
   'MARK_TAKEN',
   'CANCEL',
   'THANKS',
@@ -134,6 +137,8 @@ INTENCIONES (elegí UNA):
 - CREATE_APPOINTMENT: quiere agendar / que le recuerden una cita, turno o consulta médica ("tengo turno con el cardiólogo el jueves a las 10", "recordame la cita de mañana a las 14", "haceme recordar que tengo cita a las 23 con el doctor Arial"). Afirmación con fecha/hora = CREATE; pregunta = QUERY.
 - CREATE_MED_REMINDER: quiere un recordatorio para tomar un medicamento ("Losartán a las 8 y a las 20", "ibuprofeno cada 8 horas, tomé hace una hora").
 - DELETE_REMINDER: quiere borrar/cancelar un recordatorio o turno ya guardado. target.index = número de la lista de arriba si identificás cuál es (aunque lo escriba distinto o con errores); target.name = nombre si lo menciona; target.scope = "ALL" (todo), "MEDS" (todos los de medicación) o "APPOINTMENTS" (todos los turnos) si pide borrar varios.
+- PAUSE_REMINDER / RESUME_REMINDER: quiere pausar (dejar de recibir avisos sin borrar) o volver a activar un recordatorio. Mismo target que DELETE_REMINDER.
+- EDIT_REMINDER: quiere CAMBIAR algo de un recordatorio o turno que YA existe en la lista ("cambiá el horario del losartán a las 9 y a las 21", "mi turno con el dentista pasó a las 17", "avisame 30 minutos antes del turno"). target identifica cuál; los datos nuevos van en appointment / med.
 - MARK_TAKEN: avisa que ya tomó un medicamento ("ya tomé", "recién tomé el ibuprofeno").
 - CANCEL: quiere salir / dejar lo que estaba haciendo / dice que fue un error ("salir", "salí", "cancelar", "olvidalo", "fue por error", "no quiero nada", "dejalo"). Si el bot espera un Sí/No y dice "no", es ANSWER_CURRENT_STEP.
 - THANKS: solo agradece o confirma que leyó ("gracias", "ok gracias", "perfecto", "dale").
@@ -205,9 +210,12 @@ function canonicalIntent(rawIntent: string, a: any, m: any): BotIntent | null {
   const has = (re: RegExp) => re.test(up);
   const appt = has(/APPOINT|CITA|TURNO|CONSULT|MEETING/);
   const med = has(/MED|DOSE|PILL|DRUG|REMEDIO/);
+  if ((appt || med || has(/REMINDER/)) && has(/EDIT|CHANGE|UPDATE|MODIF|RESCHEDUL|MOVE/)) return 'EDIT_REMINDER';
   if (appt && has(/QUERY|LIST|CHECK|GET|SHOW|VIEW|ASK|SEARCH|FIND|PENDING/)) return 'QUERY_APPOINTMENTS';
   if (appt && has(/CREATE|REMIND|SCHEDULE|ADD|BOOK|SET|NEW|REGISTER|SAVE/)) return 'CREATE_APPOINTMENT';
   if (has(/DELETE|REMOVE|CANCEL_REMINDER|CANCEL_APPOINT/)) return 'DELETE_REMINDER';
+  if (has(/PAUSE|DISABLE|MUTE|SILENC/)) return 'PAUSE_REMINDER';
+  if (has(/RESUME|ENABLE|ACTIVAT|REACTIV/)) return 'RESUME_REMINDER';
   if (med && has(/CREATE|REMIND|SCHEDULE|ADD|SET|NEW/)) return 'CREATE_MED_REMINDER';
   if (med && has(/QUERY|LIST|CHECK|GET|SHOW|VIEW|ASK/)) return 'QUERY_MEDS';
   if (has(/REMINDER/) && has(/QUERY|LIST|SHOW|VIEW|GET/)) return 'QUERY_REMINDERS';
@@ -281,8 +289,12 @@ export function refineInterpretation(it: Interpretation, text: string, opts: { i
   if (out.intent === 'QUERY_REMINDERS' && mentionsAppt && !/\b(recordatorios?|alarmas?|remedios?|medicaci|pastillas?)\b/.test(t)) {
     out.intent = 'QUERY_APPOINTMENTS';
   }
+  const mentionsMeds = /\b(medicamentos?|medicacion\w*|remedios?|pastillas?)\b/.test(t);
+  if ((out.intent === 'QUERY_APPOINTMENTS' || out.intent === 'QUERY_MEDS') && mentionsAppt && mentionsMeds) {
+    out.intent = 'QUERY_REMINDERS';
+  }
   if (
-    out.intent === 'QUERY_REMINDERS' &&
+    out.intent === 'QUERY_REMINDERS' && !mentionsAppt &&
     /\b(tom[aoe]r?|toma|remedios?|pastillas?|medicaci\w*|medicamentos?|dosis)\b/.test(t) &&
     /\b(ahora|hoy|proxim\w*|toca|falta|que\s+tengo\s+que|a\s+que\s+hora)\b/.test(t)
   ) {
@@ -291,6 +303,12 @@ export function refineInterpretation(it: Interpretation, text: string, opts: { i
   if (out.intent === 'QUERY_APPOINTMENTS' && !out.dateFilter) {
     if (/\bhoy\b/.test(t)) out.dateFilter = 'today';
     else if (/\bmanana\b/.test(t) && !/\b(de|por)\s+la\s+manana\b/.test(t) && !/\bpasado\s+manana\b/.test(t)) out.dateFilter = 'tomorrow';
+  }
+  if (/\b(notificaci\w*|alertas?|push)\b/.test(t) && ['RESUME_REMINDER', 'PAUSE_REMINDER', 'OTHER', 'HEALTH_QUESTION', 'MENU'].includes(out.intent) && !out.target.name && !out.target.index) {
+    out.intent = 'NOTIFICATIONS';
+  }
+  if ((out.intent === 'CREATE_MED_REMINDER' || out.intent === 'CREATE_APPOINTMENT') && /\b(cambi\w*|modific\w*|mov[eé]\w*|reprogram\w*|corregi\w*|actualiz\w*|ya no es|paso a|pasa a)\b/.test(t)) {
+    out.intent = 'EDIT_REMINDER';
   }
   if (
     (out.intent === 'UPLOAD_MED' || out.intent === 'QUERY_MEDS') &&
@@ -307,6 +325,42 @@ export function refineInterpretation(it: Interpretation, text: string, opts: { i
     else if (asks) out.intent = 'QUERY_APPOINTMENTS';
   }
   return out;
+}
+
+const EMPTY_SLOTS = {
+  dateFilter: null,
+  appointment: { description: null, date: null, time: null, leadMinutes: null },
+  med: { name: null, dose: null, times: [], intervalHours: null, lastTakenMinutesAgo: null, durationDays: null },
+  target: { index: null, name: null, scope: null },
+  hasDetails: false,
+} as const;
+
+/**
+ * Vía rápida SIN IA para las preguntas más comunes y sin ambigüedad ("¿tengo alguna
+ * cita pendiente?", "¿qué medicamento tengo que tomar?, ¿hay horarios registrados?").
+ * Niro llegó a tardar 12 s en esas. Es conservadora: ante cualquier verbo de alta,
+ * borrado o una hora concreta, devuelve null y decide la IA.
+ */
+export function quickIntent(text: string): Interpretation | null {
+  const t = plain(text).replace(/[¿?¡!.,;:]+/g, ' ').replace(/\s+/g, ' ').trim();
+  if (!t || t.split(' ').length > 30) return null;
+  const asks =
+    /[?¿]/.test(text) ||
+    /^(tengo|tenes|hay|cual(es)?|que|cuando|a que hora|me (podes|podrias|puedes|pasas|decis)|podrias|podes|puedes|pasame|decime|dime|mostrame|muestrame|listame|quiero saber|quisiera saber|me gustaria saber|necesito saber|verifica\w*|fijate|revisa\w*|consulta\w*)\b/.test(t) ||
+    /\b(si tengo|tengo alg\w*|hay alg\w*|registrad\w*|pendientes?|agendad\w*|programad\w*)\b/.test(t);
+  if (!asks) return null;
+  if (/\b(agend[ae]\w*|reserv[ae]\w*|anot[ae]\w*|record[aá]\w*|recuerd[ae]\w*|avis[ae]\w*|program[ae]\b|programame|registr[ae]\b|registrame|sac[ae]r|tendre|voy a tener|cancel\w*|borr\w*|elimin\w*|cambi\w*|mov[ae]r|agreg\w*|carg\w*|sub[ie]\w*|ya tome|tome\b|editar|pausa\w*)\b/.test(t)) return null;
+  if (/\b(a las? \d|\d{1,2}:\d{2}|\d{1,2} ?hs\b|cada \d)/.test(t)) return null;
+  const appt = /\b(citas?|turnos?|consultas?)\b/.test(t);
+  const med = /\b(medicamentos?|medicacion\w*|remedios?|pastillas?|tomar|toma|tomas|dosis)\b/.test(t);
+  if (appt && med) return { intent: 'QUERY_REMINDERS', ...EMPTY_SLOTS, med: { ...EMPTY_SLOTS.med, times: [] } };
+  if (appt) {
+    const dateFilter = /\bhoy\b/.test(t) ? 'today' : /\bmanana\b/.test(t) && !/\b(de|por) la manana\b/.test(t) && !/\bpasado manana\b/.test(t) ? 'tomorrow' : null;
+    if (/\bpasado manana\b/.test(t)) return null; // que la IA resuelva la fecha
+    return { intent: 'QUERY_APPOINTMENTS', ...EMPTY_SLOTS, dateFilter, med: { ...EMPTY_SLOTS.med, times: [] } };
+  }
+  if (med) return { intent: 'QUERY_MEDS', ...EMPTY_SLOTS, med: { ...EMPTY_SLOTS.med, times: [] } };
+  return null;
 }
 
 /** Distancia de edición (para "Arial" ≈ "Ariel", "Cerdan" ≈ "Cerdán"). */
@@ -341,7 +395,13 @@ export class IntentRouter {
   }
 
   static async interpret(text: string, ctx: IntentContext): Promise<Interpretation | null> {
-    if (!this.enabled || !worthInterpreting(text)) return null;
+    if (!worthInterpreting(text)) return null;
+    const quick = quickIntent(text);
+    if (quick) {
+      console.log(`[INTENT] vía rápida ${JSON.stringify(text.slice(0, 120))} → ${quick.intent}`);
+      return quick;
+    }
+    if (!this.enabled) return null;
     const started = Date.now();
     const out = await NiroService.chat(
       [

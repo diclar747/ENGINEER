@@ -25,7 +25,8 @@ vi.mock('../whatsapp/baileys.client', () => ({
     },
   },
 }));
-vi.mock('../services/push.service', () => ({ PushService: { notify: vi.fn() } }));
+const push = vi.hoisted(() => ({ calls: [] as string[] }));
+vi.mock('../services/push.service', () => ({ PushService: { notify: async (_u: string, title: string) => { push.calls.push(title); return 1; } } }));
 vi.mock('../services/niro.service', () => ({ NiroService: { enabled: false, extractFields: vi.fn() } }));
 
 import { MedicationReminderService, parseTreatmentEnd } from '../services/medication-reminder.service';
@@ -486,5 +487,82 @@ describe('tick — avisos de turno (sin spam)', () => {
     for (let i = 0; i < 4; i++) await MedicationReminderService.tick();
     expect(bot.sent.length).toBe(1);
     bot.connected = false;
+  });
+});
+
+describe('tick — medicación con horario fijo', () => {
+  const PY = 'America/Asuncion';
+  const med = (times: string[], over: any = {}) => ({
+    id: 'm1', kind: 'MED', scheduleKind: 'CLOCK', medication: 'Losartán', dose: '50 mg', times: JSON.stringify(times),
+    leadMinutes: 10, lastSentSlot: null, active: true, endsAt: null,
+    user: { id: 'u1', phoneNumber: '595981000000', whatsappJid: null, status: 'ACTIVE', language: 'ES' },
+    ...over,
+  });
+  const hhmmIn = (min: number) => new Date(Date.now() + min * 60_000).toLocaleTimeString('en-GB', { timeZone: PY, hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
+
+  it('pre-aviso exactamente 10 min antes (no 13) y por WhatsApp + push', async () => {
+    bot.connected = true; bot.sent = []; push.calls = [];
+    db.reminders = [med([hhmmIn(13)])];
+    await MedicationReminderService.tick();
+    expect(bot.sent.length).toBe(0); // a 13 min todavía no
+    db.reminders = [med([hhmmIn(10)])];
+    await MedicationReminderService.tick();
+    await MedicationReminderService.tick();
+    expect(bot.sent.length).toBe(1);
+    expect(bot.sent[0]).toMatch(/En 10 minutos toca tu medicación/);
+    expect(push.calls).toEqual(['⏰ Se acerca tu medicación']);
+    bot.connected = false;
+  });
+
+  it('dos horarios cercanos: cada aviso sale UNA vez (antes se repetían)', async () => {
+    bot.connected = true; bot.sent = []; push.calls = [];
+    // 08:00 ya pasó hace 1 min (toca "es hora") y 08:10 está a 9 min (toca pre-aviso)
+    const r = med([hhmmIn(-1), hhmmIn(9)]);
+    db.reminders = [r];
+    for (let i = 0; i < 5; i++) await MedicationReminderService.tick();
+    expect(bot.sent.filter((x) => /Es hora de tomar/.test(x)).length).toBe(1);
+    expect(bot.sent.filter((x) => /toca tu medicación/.test(x)).length).toBe(1);
+    expect(bot.sent.length).toBe(2);
+    bot.connected = false;
+  });
+
+  it('formato viejo de marca ("HH:MM|fecha") no reenvía el aviso ya mandado', async () => {
+    bot.connected = true; bot.sent = [];
+    const slot = hhmmIn(-2);
+    const today = new Date().toLocaleDateString('en-CA', { timeZone: PY });
+    db.reminders = [med([slot], { lastSentSlot: `${slot}|${today}` })];
+    await MedicationReminderService.tick();
+    expect(bot.sent.length).toBe(0);
+    bot.connected = false;
+  });
+
+  it('WhatsApp desconectado → el aviso sale igual por push, una sola vez', async () => {
+    bot.connected = false; bot.sent = []; push.calls = [];
+    db.reminders = [med([hhmmIn(0)])];
+    await MedicationReminderService.tick();
+    await MedicationReminderService.tick();
+    expect(bot.sent.length).toBe(0);
+    expect(push.calls).toEqual(['⏰ Hora de tu medicación']);
+  });
+});
+
+describe('medicationOverviewText', () => {
+  it('lista todos los horarios, lo que falta hoy y cómo avisa', async () => {
+    db.user = { currentMedications: JSON.stringify([{ name: 'Aspirina' }]) };
+    db.reminders = [
+      { kind: 'MED', scheduleKind: 'CLOCK', medication: 'Losartán', dose: '50 mg', times: '["08:00","20:00"]', leadMinutes: 10, active: true, endsAt: null },
+      { kind: 'MED', scheduleKind: 'INTERVAL', medication: 'Ibuprofeno', dose: null, times: '[]', intervalHours: 8, nextDoseAt: new Date(Date.now() + 3600_000), leadMinutes: 10, active: true, endsAt: null },
+    ];
+    const r = await MedicationReminderService.medicationOverviewText('u1');
+    expect(r).toMatch(/Tus medicamentos con horario \(2\)/);
+    expect(r).toMatch(/Losartán\* \(50 mg\)[\s\S]*08:00 y 20:00, todos los días/);
+    expect(r).toMatch(/Ibuprofeno[\s\S]*cada 8 h/);
+    expect(r).toMatch(/10 minutos antes y a la hora/);
+    expect(r).toMatch(/sin horario de aviso:\* Aspirina/);
+  });
+  it('sin horarios → lo dice claro', async () => {
+    db.user = { currentMedications: null };
+    db.reminders = [];
+    expect(await MedicationReminderService.medicationOverviewText('u1')).toMatch(/No tenés medicamentos con horario registrados/);
   });
 });

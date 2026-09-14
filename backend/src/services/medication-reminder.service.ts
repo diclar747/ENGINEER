@@ -286,6 +286,113 @@ function fmtApptDay(d: Date, from: Date = new Date()): string {
 }
 
 export class MedicationReminderService {
+  /**
+   * Respuesta a "¿qué medicamentos tengo que tomar?", "¿hay horarios registrados?":
+   * TODOS los medicamentos con horario (fijo o cada N horas), lo que falta tomar hoy,
+   * la próxima toma y cómo se avisa. `name` = pregunta por uno puntual ("¿a qué hora
+   * tomo el losartán?"). Hora de Paraguay.
+   */
+  static async medicationOverviewText(userId: string, name: string | null = null, opts: { onlyNext?: boolean } = {}): Promise<string> {
+    const now = new Date();
+    const [u, rows] = await Promise.all([
+      prisma.user.findUnique({ where: { id: userId }, select: { currentMedications: true } }),
+      prisma.medicationReminder.findMany({ where: { userId, kind: 'MED' }, orderBy: { createdAt: 'asc' } }),
+    ]);
+    const dayOf = (x: Date) => x.toLocaleDateString('en-CA', { timeZone: TZ() });
+    const when = (d: Date) => {
+      const hh = fmtHHMM(d);
+      if (dayOf(d) === dayOf(now)) return `hoy ${hh}`;
+      if (dayOf(d) === dayOf(new Date(now.getTime() + 86_400_000))) return `mañana ${hh}`;
+      return `${d.toLocaleDateString('es-PY', { timeZone: TZ(), day: '2-digit', month: '2-digit' })} ${hh}`;
+    };
+    const joinTimes = (ts: string[]) => (ts.length <= 1 ? ts.join('') : `${ts.slice(0, -1).join(', ')} y ${ts[ts.length - 1]}`);
+    /** Tomas de las próximas 24 h de un recordatorio activo. */
+    const nextDoses = (r: (typeof rows)[number]): Date[] => {
+      if (!r.active) return [];
+      if (r.scheduleKind === 'INTERVAL') {
+        if (!r.nextDoseAt || !r.intervalHours) return [];
+        const out: Date[] = [];
+        for (let t = new Date(r.nextDoseAt).getTime(); t < now.getTime() + 86_400_000; t += r.intervalHours * 3600_000) out.push(new Date(t));
+        return out;
+      }
+      let ts: string[] = [];
+      try {
+        ts = JSON.parse(r.times || '[]');
+      } catch {
+        /* noop */
+      }
+      return ts
+        .map((hm) => {
+          const [hh, mm] = hm.split(':').map(Number);
+          let at = todayAtLocal(hh, mm, now);
+          if (at.getTime() < now.getTime() - 5 * 60_000) at = new Date(at.getTime() + 86_400_000);
+          return at;
+        })
+        .sort((a, b) => a.getTime() - b.getTime());
+    };
+    const describe = (r: (typeof rows)[number]): string => {
+      const title = `*${r.medication}*${r.dose ? ` (${r.dose})` : ''}`;
+      if (!r.active) return `• ${title} — 🔕 aviso pausado`;
+      const nx = nextDoses(r)[0];
+      const until = r.endsAt ? ` · hasta el ${new Date(r.endsAt).toLocaleDateString('es-PY', { timeZone: TZ(), day: '2-digit', month: '2-digit' })}` : '';
+      if (r.scheduleKind === 'INTERVAL') {
+        return `• ${title}\n      🔁 ${intervalLabel(r.intervalHours || 8)}${until}${nx ? ` · próxima: ${when(nx)}` : ''}`;
+      }
+      let ts: string[] = [];
+      try {
+        ts = JSON.parse(r.times || '[]');
+      } catch {
+        /* noop */
+      }
+      return `• ${title}\n      ⏰ ${joinTimes(ts)}, todos los días${until}${nx ? ` · próxima: ${when(nx)}` : ''}`;
+    };
+
+    if (name) {
+      const hit = rows.filter((r) => normName(r.medication).includes(normName(name)) || normName(name).includes(normName(r.medication)));
+      if (hit.length) {
+        const nx = hit.flatMap(nextDoses).sort((a, b) => a.getTime() - b.getTime())[0];
+        return (
+          hit.map(describe).join('\n') +
+          (nx ? `\n\n⏭️ Te toca ${when(nx)} (en ${humanIn(nx.getTime() - now.getTime())}). Te aviso ${leadLabel(Math.max(1, hit[0].leadMinutes || 10))} antes y a la hora.` : '')
+        );
+      }
+    }
+
+    const loaded = parseMedications(u?.currentMedications ?? null).filter(
+      (m) => !rows.some((r) => normName(r.medication).includes(normName(m.name)) || normName(m.name).includes(normName(r.medication)))
+    );
+    const loadedBlock = loaded.length ? `\n\n📋 *Cargados en tu ficha, sin horario de aviso:* ${loaded.map((m) => m.name).join(', ')}` : '';
+    if (!rows.length) {
+      return (
+        `💊 *No tenés medicamentos con horario registrados.*${loadedBlock}\n\n` +
+        `_Para que te avise, decime por ejemplo: "Losartán 50 mg a las 8 y a las 20" o "ibuprofeno cada 8 horas"._`
+      );
+    }
+
+    const upcoming = rows
+      .flatMap((r) => nextDoses(r).map((at) => ({ at, label: `${r.medication}${r.dose ? ` (${r.dose})` : ''}` })))
+      .sort((a, b) => a.at.getTime() - b.at.getTime());
+    const todayLeft = upcoming.filter((x) => dayOf(x.at) === dayOf(now));
+    const active = rows.filter((r) => r.active);
+    const leads = Array.from(new Set(active.map((r) => Math.max(1, r.leadMinutes || 10))));
+    let nextBlock = '';
+    if (todayLeft.length) {
+      nextBlock =
+        `\n\n⏭️ *Te falta tomar hoy:*\n` +
+        todayLeft
+          .slice(0, 8)
+          .map((x, i) => `${i === 0 ? '👉' : '•'} ${fmtHHMM(x.at)} — ${x.label}${i === 0 ? ` _(en ${humanIn(x.at.getTime() - now.getTime())})_` : ''}`)
+          .join('\n');
+    } else if (upcoming.length) {
+      nextBlock = `\n\n✅ Por hoy no te queda ninguna toma.\n⏭️ La próxima: *${upcoming[0].label}* — ${when(upcoming[0].at)}`;
+    }
+    const howBlock = active.length
+      ? `\n\n🔔 Te aviso ${leads.length === 1 ? `${leadLabel(leads[0])} antes` : 'antes'} y a la hora de cada toma, por WhatsApp y notificación.`
+      : '';
+    if (opts.onlyNext) return (nextBlock + howBlock).trim();
+    return `💊 *Tus medicamentos con horario (${rows.length}):*\n\n${rows.map(describe).join('\n')}${nextBlock}${howBlock}${loadedBlock}`;
+  }
+
   /** Fecha local de Paraguay ("2026-09-15" + "10:00") → instante real. null si es inválida. */
   static localDateTime(dateKey: string, hhmm: string): Date | null {
     const dm = dateKey.match(/^(\d{4})-(\d{2})-(\d{2})$/);
@@ -1247,12 +1354,27 @@ export class MedicationReminderService {
    * hace nada (los recordatorios no avanzan → se reintentan en el próximo tick).
    */
   static async tick(): Promise<number> {
-    if (!whatsappBot.getStatus().connected) {
-      return 0;
-    }
+    // WhatsApp caído NO frena los avisos: la notificación push sale igual. Antes el
+    // tick cortaba acá y no avisaba por NINGÚN canal mientras el bot estaba offline.
+    const waUp = whatsappBot.getStatus().connected;
     const { minutes: nowMin, date } = nowLocal();
     const nowMs = Date.now();
     let sent = 0;
+
+    /** Manda por WhatsApp y push en paralelo. true = le llegó por al menos un canal. */
+    const deliver = async (
+      userId: string,
+      target: string,
+      waText: string,
+      push: { title: string; body: string; opts: Parameters<typeof PushService.notify>[3] }
+    ): Promise<boolean> => {
+      const [pushed, wa] = await Promise.all([
+        Promise.resolve(PushService.notify(userId, push.title, push.body, push.opts)).then((n) => n || 0, () => 0),
+        waUp ? whatsappBot.sendMessage(target, waText) : Promise.resolve(false),
+      ]);
+      if (!wa && pushed) console.warn(`⏰ [CRON] WhatsApp no disponible — aviso entregado solo por push (${push.title})`);
+      return wa || pushed > 0;
+    };
 
     const reminders = await prisma.medicationReminder.findMany({
       where: { active: true },
@@ -1269,8 +1391,7 @@ export class MedicationReminderService {
           const msg = gnEnd
             ? `✅ *${r.medication}* — opa pe tratamiento. Ndorohechavéima momandu'a.`
             : `✅ Terminó el tratamiento de *${r.medication}*. No te aviso más por este. _Si seguís tomándolo, escribí *5* y cargalo de nuevo._`;
-          PushService.notify(r.user.id, '✅ Tratamiento terminado', msg, { tag: `reminder-${r.id}` });
-          if (await whatsappBot.sendMessage(r.user.whatsappJid || r.user.phoneNumber, msg)) {
+          if (await deliver(r.user.id, r.user.whatsappJid || r.user.phoneNumber, msg, { title: '✅ Tratamiento terminado', body: msg, opts: { tag: `reminder-${r.id}` } })) {
             await prisma.medicationReminder.update({ where: { id: r.id }, data: { active: false, lastSentSlot: 'ENDED' } });
             sent++;
           }
@@ -1314,33 +1435,35 @@ export class MedicationReminderService {
           const msg = gn
             ? `📅 *Momandu'a: turno* ko'ẽrõ\n\n🩺 *${r.medication}*\n🕒 ${dtLocal}\n\n_Ehecha nde pasaporte médico bio-pass.cnid.com.py_`
             : `📅 *Recordatorio: Turno médico mañana*\n\n🩺 *${r.medication}*\n🕒 *Fecha y hora:* ${dtLocal}\n\n_Tené a mano tus estudios y recetas en Bio-Pass._`;
-          PushService.notify(
-            r.user.id,
-            '📅 Turno médico mañana',
-            `Consulta: ${r.medication} · 🕒 ${dtLocal}. Abrí tu pasaporte Bio-Pass.`,
-            { tag: `reminder-${r.id}`, url: '/dashboard', requireInteraction: true }
-          );
-          if (await whatsappBot.sendMessage(target, msg)) {
+          if (
+            await deliver(r.user.id, target, msg, {
+              title: '📅 Turno médico mañana',
+              body: `Consulta: ${r.medication} · 🕒 ${dtLocal}. Abrí tu pasaporte Bio-Pass.`,
+              opts: { tag: `reminder-${r.id}`, url: '/dashboard', requireInteraction: true },
+            })
+          ) {
             await markSent('D-1');
             sent++;
           }
           continue;
         }
-        const mainDue = untilAppt - lead * 60_000 <= 150_000 && inGrace;
-        const secondDue = !!lead2 && untilAppt - lead2 * 60_000 <= 150_000 && inGrace;
+        // Tolerancia de 30 s (el tick corre cada minuto): el aviso sale a la hora
+        // pedida, no 2–3 minutos antes.
+        const mainDue = untilAppt - lead * 60_000 <= 30_000 && inGrace;
+        const secondDue = !!lead2 && untilAppt - lead2 * 60_000 <= 30_000 && inGrace;
         // Aviso principal: `leadMinutes` antes (con tolerancia hasta la hora del turno).
         // Si para cuando sale ya tocaba también el segundo aviso, va UN solo mensaje.
         if (!sentTags.has('LEAD') && !sentTags.has('LEAD2') && mainDue) {
           const msg = gn
             ? `📅 *Turno* — *${r.medication}*\n🕒 ${dtLocal}\n\n_${faltan}._`
             : `📅 *Recordatorio de tu turno médico*\n\n🩺 *${r.medication}*\n🕒 *Cuándo:* ${fmtApptDay(new Date(r.whenAt))}\n⏱️ *Faltan:* ${faltan}. No faltes.\n\n_Tu médico puede escanear tu QR para ver tus antecedentes._`;
-          PushService.notify(
-            r.user.id,
-            `📅 Tu turno médico (faltan ${faltan})`,
-            `Consulta: ${r.medication} · 🕒 ${dtLocal}. Abrí tu ficha médica.`,
-            { tag: `reminder-${r.id}`, url: '/dashboard', requireInteraction: true }
-          );
-          if (await whatsappBot.sendMessage(target, msg)) {
+          if (
+            await deliver(r.user.id, target, msg, {
+              title: `📅 Tu turno médico (faltan ${faltan})`,
+              body: `Consulta: ${r.medication} · 🕒 ${dtLocal}. Abrí tu ficha médica.`,
+              opts: { tag: `reminder-${r.id}`, url: '/dashboard', requireInteraction: true },
+            })
+          ) {
             await (secondDue ? markSent('LEAD', 'LEAD2') : markSent('LEAD'));
             sent++;
           }
@@ -1351,8 +1474,7 @@ export class MedicationReminderService {
           const msg2 = gn
             ? `📅 *Momandu'a: turno*\n\n*${r.medication}*\n🕒 ${dtLocal}`
             : `📅 *Tu turno está por empezar*\n\n🩺 *${r.medication}*\n🕒 ${fmtApptDay(new Date(r.whenAt))}\n\n_Faltan ${faltan}. No faltes._`;
-          PushService.notify(r.user.id, '📅 Tu turno médico', msg2, { tag: `reminder-${r.id}-2`, url: '/dashboard', requireInteraction: true });
-          if (await whatsappBot.sendMessage(target, msg2)) {
+          if (await deliver(r.user.id, target, msg2, { title: '📅 Tu turno médico', body: msg2, opts: { tag: `reminder-${r.id}-2`, url: '/dashboard', requireInteraction: true } })) {
             await markSent('LEAD', 'LEAD2');
             sent++;
           }
@@ -1373,15 +1495,14 @@ export class MedicationReminderService {
         const dueTag = new Date(nd).toISOString();
         const preTag = `PRE:${dueTag}`;
 
-        // Pre-aviso `leadMinutes` antes.
+        // Pre-aviso `leadMinutes` antes (a la hora pedida, no 2–3 min antes).
         if (r.lastSentSlot !== preTag && r.lastSentSlot !== dueTag) {
           const untilPre = nd - nowMs - lead * 60_000;
-          if (untilPre <= 150_000 && untilPre > -150_000) {
+          if (untilPre <= 30_000 && untilPre > -180_000 && nd - nowMs > 60_000) {
             const msg = gn
               ? `⏰ *Momandu'a: ${leadLabel(lead)} rupi*\n\n*${r.medication}*${r.dose ? ` (${r.dose})` : ''} — ${fmtHHMM(new Date(nd))}.`
               : `⏰ *En ${leadLabel(lead)} toca tu medicación*\n\n*${r.medication}*${r.dose ? ` (${r.dose})` : ''} a las ${fmtHHMM(new Date(nd))}.`;
-            PushService.notify(r.user.id, '⏰ Se acerca tu medicación', msg, { tag: `reminder-${r.id}`, url: '/dashboard' });
-            if (await whatsappBot.sendMessage(target, msg)) {
+            if (await deliver(r.user.id, target, msg, { title: '⏰ Se acerca tu medicación', body: msg, opts: { tag: `reminder-${r.id}`, url: '/dashboard' } })) {
               await prisma.medicationReminder.update({ where: { id: r.id }, data: { lastSentAt: new Date(), lastSentSlot: preTag } });
               sent++;
             }
@@ -1395,8 +1516,7 @@ export class MedicationReminderService {
             const msg = gn
               ? `⏰ *Momandu'a pohã*\n\nHi'ára reipuru hag̃ua *${r.medication}*${r.dose ? ` (${r.dose})` : ''}.\n\n_Ehai *YA TOMÉ* rejapo rire._`
               : `⏰ *Recordatorio de medicación*\n\nEs hora de tomar *${r.medication}*${r.dose ? ` (${r.dose})` : ''}.\n\n_Cuando la tomes escribí *YA TOMÉ* y recalculo la próxima._`;
-            PushService.notify(r.user.id, '⏰ Hora de tu medicación', msg, { tag: `reminder-${r.id}`, url: '/dashboard', requireInteraction: true });
-            if (await whatsappBot.sendMessage(target, msg)) {
+            if (await deliver(r.user.id, target, msg, { title: '⏰ Hora de tu medicación', body: msg, opts: { tag: `reminder-${r.id}`, url: '/dashboard', requireInteraction: true } })) {
               const next = this.computeNextDose(new Date(nd), r.intervalHours, new Date());
               await prisma.medicationReminder.update({
                 where: { id: r.id },
@@ -1420,44 +1540,59 @@ export class MedicationReminderService {
       } catch {
         continue;
       }
+      // Avisos YA mandados HOY de este recordatorio: "2026-09-14#PRE:08:00,08:00,PRE:20:00".
+      // Antes se guardaba uno solo y el siguiente lo pisaba: con dos horarios cercanos
+      // (ej. 20:00 y 20:15) el pre-aviso del segundo borraba la marca del primero y el
+      // "es hora de tomar" de las 20:00 se volvía a mandar.
+      const dayTags = (() => {
+        const raw = r.lastSentSlot || '';
+        const [d, list] = raw.split('#');
+        if (d === date && list !== undefined) return new Set(list.split(',').filter(Boolean));
+        const legacy = raw.match(/^(PRE10:)?(\d{2}:\d{2})\|(\d{4}-\d{2}-\d{2})$/); // formato viejo "08:00|2026-09-14"
+        if (legacy && legacy[3] === date) return new Set([legacy[1] ? `PRE:${legacy[2]}` : legacy[2]]);
+        return new Set<string>();
+      })();
+      const markDay = (tag: string) => {
+        dayTags.add(tag);
+        return prisma.medicationReminder.update({
+          where: { id: r.id },
+          data: { lastSentAt: new Date(), lastSentSlot: `${date}#${Array.from(dayTags).join(',')}` },
+        });
+      };
 
       for (const slot of slots) {
         const [sh, sm] = slot.split(':').map(Number);
         if (Number.isNaN(sh) || Number.isNaN(sm)) continue;
         const slotMin = sh * 60 + sm;
 
-        // Pre-aviso `leadMinutes` antes (ventana de 5 min alrededor).
+        // Pre-aviso `leadMinutes` antes — sale a la hora justa (tolera 3 min de atraso
+        // del tick). Antes la ventana arrancaba 3 min ANTES: con el tick de cada minuto
+        // "En 10 minutos toca tu medicación" llegaba 13 minutos antes.
         const toLead = slotMin - nowMin;
-        if (toLead >= lead - 2 && toLead <= lead + 3) {
-          const preTag = `PRE10:${slot}|${date}`;
-          if (r.lastSentSlot !== preTag) {
-            const preMsg = gn
-              ? `⏰ *Momandu'a: ${leadLabel(lead)} rupi*\n\n*${r.medication}*${r.dose ? ` (${r.dose})` : ''} — ${slot}.`
-              : `⏰ *En ${leadLabel(lead)} toca tu medicación*\n\n*${r.medication}*${r.dose ? ` (${r.dose})` : ''} a las ${slot}.\n\n_Preparala con tiempo._`;
-            PushService.notify(r.user.id, '⏰ Se acerca tu medicación', preMsg, { tag: `reminder-${r.id}`, url: '/dashboard' });
-            if (await whatsappBot.sendMessage(target, preMsg)) {
-              await prisma.medicationReminder.update({ where: { id: r.id }, data: { lastSentAt: new Date(), lastSentSlot: preTag } });
-              sent++;
-            }
-            break;
+        const preTag = `PRE:${slot}`;
+        const mainTag = slot;
+        if (toLead > 0 && toLead <= lead && toLead >= lead - 3 && !dayTags.has(preTag) && !dayTags.has(mainTag)) {
+          const preMsg = gn
+            ? `⏰ *Momandu'a: ${leadLabel(lead)} rupi*\n\n*${r.medication}*${r.dose ? ` (${r.dose})` : ''} — ${slot}.`
+            : `⏰ *En ${leadLabel(toLead)} toca tu medicación*\n\n*${r.medication}*${r.dose ? ` (${r.dose})` : ''} a las ${slot}.\n\n_Preparala con tiempo._`;
+          if (await deliver(r.user.id, target, preMsg, { title: '⏰ Se acerca tu medicación', body: preMsg, opts: { tag: `reminder-${r.id}`, url: '/dashboard' } })) {
+            await markDay(preTag);
+            sent++;
           }
+          continue;
         }
 
         // Aviso a la hora — ventana [0, 30] min (tolera que el bot haya estado caído).
         const diff = nowMin - slotMin;
-        if (diff < 0 || diff > 30) continue;
-        const tag = `${slot}|${date}`;
-        if (r.lastSentSlot === tag) continue;
+        if (diff < 0 || diff > 30 || dayTags.has(mainTag)) continue;
 
         const msg = gn
           ? `⏰ *Momandu'a pohã*\n\nHi'ára reipuru hag̃ua *${r.medication}*${r.dose ? ` (${r.dose})` : ''}.\n\n_Ehai *MENU* rehecha hag̃ua opciones._`
-          : `⏰ *Recordatorio de medicación*\n\nEs hora de tomar *${r.medication}*${r.dose ? ` (${r.dose})` : ''}.\n\n_Cuidá tu salud. Escribí *MENU* para ver tus opciones._`;
-        PushService.notify(r.user.id, '⏰ Hora de tu medicación', msg, { tag: `reminder-${r.id}`, url: '/dashboard', requireInteraction: true });
-        if (await whatsappBot.sendMessage(target, msg)) {
-          await prisma.medicationReminder.update({ where: { id: r.id }, data: { lastSentAt: new Date(), lastSentSlot: tag } });
+          : `⏰ *Recordatorio de medicación*\n\nEs hora de tomar *${r.medication}*${r.dose ? ` (${r.dose})` : ''}${diff > 2 ? ` (era a las ${slot})` : ''}.\n\n_Cuidá tu salud. Escribí *MENU* para ver tus opciones._`;
+        if (await deliver(r.user.id, target, msg, { title: '⏰ Hora de tu medicación', body: msg, opts: { tag: `reminder-${r.id}`, url: '/dashboard', requireInteraction: true } })) {
+          await markDay(mainTag);
           sent++;
         }
-        break; // un envío por reminder por tick
       }
     }
     if (sent) console.log(`⏰ [CRON] ${sent} recordatorio(s) de medicación enviado(s).`);

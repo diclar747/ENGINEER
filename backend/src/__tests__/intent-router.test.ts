@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 
 vi.mock('../services/niro.service', () => ({ NiroService: { enabled: false, chat: vi.fn() } }));
 
-import { normalizeInterpretation, worthInterpreting, nowInParaguay, refineInterpretation, nameMatches } from '../whatsapp/intent-router';
+import { normalizeInterpretation, worthInterpreting, nowInParaguay, refineInterpretation, nameMatches, quickIntent } from '../whatsapp/intent-router';
 
 describe('worthInterpreting', () => {
   it('no gasta IA en opciones de menú, horas sueltas ni comandos exactos', () => {
@@ -85,5 +85,49 @@ describe('nameMatches', () => {
   it('no confunde cosas distintas', () => {
     expect(nameMatches('doctor Arial', 'Consulta con el Dr. Cerdán')).toBe(false);
     expect(nameMatches('el turno', 'Cardiólogo')).toBe(false);
+  });
+});
+
+describe('quickIntent — preguntas comunes sin esperar a la IA', () => {
+  it('audio real: "¿Algún medicamento que tengo que tomar, hay algunos horarios registrados o no?" → QUERY_MEDS', () => {
+    expect(quickIntent('¿Algún medicamento que tengo que tomar, hay algunos horarios registrados o no?')?.intent).toBe('QUERY_MEDS');
+  });
+  it('citas', () => {
+    expect(quickIntent('Podría pasarme si tengo alguna cita pendiente, por favor.')?.intent).toBe('QUERY_APPOINTMENTS');
+    expect(quickIntent('pasame si tengo alguna cita pendiesnte')?.intent).toBe('QUERY_APPOINTMENTS');
+    expect(quickIntent('¿tengo turno mañana?')?.dateFilter).toBe('tomorrow');
+    expect(quickIntent('me gustaría saber si tengo alguna cita hoy')?.dateFilter).toBe('today');
+  });
+  it('citas y remedios juntos → QUERY_REMINDERS', () => {
+    expect(quickIntent('¿qué citas y remedios tengo?')?.intent).toBe('QUERY_REMINDERS');
+  });
+  it('NO se mete con altas, borrados, horas concretas ni "ya tomé"', () => {
+    for (const t of [
+      'tengo turno con el dentista el jueves a las 16',
+      'recordame tomar losartan a las 8',
+      'borrá la cita del doctor',
+      'ya tomé el remedio',
+      'quiero agendar una cita',
+      'ibuprofeno cada 8 horas',
+      'hola',
+      '¿qué citas tengo pasado mañana?',
+    ]) expect(quickIntent(t)).toBeNull();
+  });
+});
+
+describe('refineInterpretation — cambios sobre algo existente', () => {
+  it('"cambiá el horario del losartán a las 9 y a las 21" como CREATE → EDIT_REMINDER', () => {
+    const it = normalizeInterpretation({ intent: 'CREATE_MED_REMINDER', med: { name: 'losartán', times: ['09:00', '21:00'] } })!;
+    expect(refineInterpretation(it, 'cambiá el horario del losartán a las 9 y a las 21').intent).toBe('EDIT_REMINDER');
+  });
+  it('nombres inventados de pausa/edición', () => {
+    expect(normalizeInterpretation({ intent: 'PAUSE_MED_REMINDER' })?.intent).toBe('PAUSE_REMINDER');
+    expect(normalizeInterpretation({ intent: 'RESCHEDULE_APPOINTMENT' })?.intent).toBe('EDIT_REMINDER');
+  });
+});
+
+describe('refineInterpretation — notificaciones', () => {
+  it('"quiero activar las notificaciones" como RESUME_REMINDER → NOTIFICATIONS', () => {
+    expect(refineInterpretation(normalizeInterpretation({ intent: 'RESUME_REMINDER' })!, 'quiero activar las notificaciones').intent).toBe('NOTIFICATIONS');
   });
 });

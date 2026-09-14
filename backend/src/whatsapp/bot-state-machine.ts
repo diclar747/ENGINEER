@@ -86,10 +86,12 @@ async function askNiro(
       : ' DATO IMPORTANTE (no lo contradigas): además de la ficha médica de emergencia por QR y de guardar medicamentos/recetas/estudios, ' +
         'Bio-Pass —una vez que la persona se registra— permite programar por WhatsApp *recordatorios de toma de medicación* y *recordatorios de turnos / citas médicas* ' +
         '(no reserva la cita con el consultorio, solo avisa antes). Si preguntan por esto, confirmá que sí y sugerí registrarse (menos de 3 minutos).';
-  return NiroService.chat([
+  const out = await NiroService.chat([
     { role: 'system', content: system + caps + (opts.name ? ` El usuario se llama ${opts.name}.` : '') },
     { role: 'user', content: userText.trim() },
   ]);
+  // WhatsApp usa *negrita* (un asterisco); el "**texto**" de markdown se ve con asteriscos sueltos.
+  return out ? out.replace(/\*\*(.+?)\*\*/g, '*$1*').replace(/^#{1,6}\s+/gm, '') : out;
 }
 
 /** Traduce por código de idioma explícito (ES/GN/PT/EN). PT/EN caen a ES si faltan. */
@@ -2246,7 +2248,7 @@ export class BotStateMachine {
         !/[?¿]/.test(cleanText) &&
         !/\b(cita|turno|consulta|recordatorio|borr\w*|elimin\w*|cancel\w*|sal[ií]r?|menu|perfil|error|olvid\w*|equivoqu\w*|tengo|hay|ayuda|soporte)\b/.test(norm(cleanText));
 
-      if (!msg.routed && !msg.mediaBuffer && cleanText && !shortStepAnswer && IntentRouter.enabled) {
+      if (!msg.routed && !msg.mediaBuffer && cleanText && !shortStepAnswer) {
         const ctxRows = await listForUser();
         const stepKey = Object.keys(REMIND_STATE).find((k) => REMIND_STATE[k] === subMode);
         const ctxDraft: Partial<ReminderDraft> = getTempData().rdraft || {};
@@ -2281,6 +2283,20 @@ export class BotStateMachine {
               return `Modificando datos del perfil: ${pendingStepLabel(subMode, lang)} (si manda el dato nuevo, es ANSWER_CURRENT_STEP).`;
           }
         })();
+        // "¿a qué hora me toca la metformina?" — pregunta que nombra un medicamento que
+        // tiene registrado: se contesta directo, sin IA (el modelo la mandó al perfil).
+        {
+          const nt = norm(cleanText);
+          const askedMed = ctxRows.find((r) => r.kind !== 'APPOINTMENT' && nameMatches(cleanText, r.medication));
+          if (
+            askedMed &&
+            (/[?¿]/.test(cleanText) || /\b(a que hora|cuando|me toca|tengo que tomar|debo tomar|horario)\b/.test(nt)) &&
+            !/\b(cambi\w*|modific\w*|borr\w*|elimin\w*|paus\w*|activ\w*|ya no|ya tome|tome|agreg\w*|carg\w*|record\w*|avis\w*|cada \d|a las \d)\b/.test(nt)
+          ) {
+            await leaveSoftMode();
+            return { replyText: (await MedicationReminderService.medicationOverviewText(user.id, askedMed.medication)) + pendingNote() };
+          }
+        }
         const ctxList = MedicationReminderService.format(ctxRows).split('\n').filter(Boolean);
         const itRaw = await IntentRouter.interpret(cleanText, { step: stepDesc, reminders: ctxList });
         const it = itRaw ? refineInterpretation(itRaw, cleanText, { inUploadMed: subMode === 'ACTIVE_UPLOAD_MED' }) : null;
@@ -2293,18 +2309,50 @@ export class BotStateMachine {
             }
             case 'QUERY_REMINDERS': {
               await leaveSoftMode();
+              // "¿a qué hora me toca la metformina?" → solo ese medicamento, no todo.
+              const namedMed = ctxRows.find((r) => r.kind !== 'APPOINTMENT' && (nameMatches(it.med.name || '', r.medication) || nameMatches(cleanText, r.medication)));
+              if (namedMed && !/\b(citas?|turnos?|consultas?)\b/.test(norm(cleanText))) {
+                return { replyText: (await MedicationReminderService.medicationOverviewText(user.id, namedMed.medication)) + pendingNote() };
+              }
+              if (!ctxRows.length) {
+                return { replyText: tr('_No tenés medicamentos con horario ni citas guardadas. Decime qué querés agendar._', "_Ndaipóri momandu'a._") + pendingNote() };
+              }
+              // Lista numerada (la misma numeración que usan "borrar N" y la IA) +
+              // el detalle de medicación y de citas.
+              const hasMeds = ctxRows.some((r) => r.kind !== 'APPOINTMENT');
+              const hasAppts = ctxRows.some((r) => r.kind === 'APPOINTMENT');
               return {
                 replyText:
-                  (ctxRows.length
-                    ? `⏰ *${tr('Tus recordatorios y turnos', "Nde momandu'a ha turno")}:*\n\n${MedicationReminderService.format(ctxRows)}\n\n` +
-                      tr('_Para borrar uno decime cuál (ej: "borrá el 2"). Para agregar, dictámelo._', '_Ehai "borrar N" rehe\'ávo._')
-                    : tr('_No tenés recordatorios ni turnos guardados. Decime cuál querés agendar._', "_Ndaipóri momandu'a._")) + pendingNote(),
+                  `⏰ *${tr('Todo lo que tenés registrado', "Nde momandu'a")}:*\n\n${MedicationReminderService.format(ctxRows)}` +
+                  (hasMeds ? `\n\n———\n${await MedicationReminderService.medicationOverviewText(user.id, null, { onlyNext: true })}` : '') +
+                  (hasAppts ? `\n\n———\n${await MedicationReminderService.upcomingAppointmentsText(user.id)}` : '') +
+                  `\n\n_${tr('Para borrar uno decime cuál (ej: "borrá el 2"). Para agregar, dictámelo.', 'Ehai "borrar N" rehe\'ávo.')}_` +
+                  pendingNote(),
               };
             }
-            case 'QUERY_MEDS':
+            case 'QUERY_MEDS': {
+              await leaveSoftMode();
+              const namedMed2 = ctxRows.find((r) => r.kind !== 'APPOINTMENT' && (nameMatches(it.med.name || '', r.medication) || nameMatches(cleanText, r.medication)));
+              return { replyText: (await MedicationReminderService.medicationOverviewText(user.id, namedMed2 ? namedMed2.medication : null)) + pendingNote() };
+            }
             case 'MARK_TAKEN':
             case 'FIND_DOCUMENT':
             case 'STOP_MED': {
+              // "ya no tomo la metformina" y tiene recordatorio → también se ofrece dejar de avisar.
+              if (it.intent === 'STOP_MED' && !hardPending) {
+                const hits = ctxRows.filter((r) => r.kind !== 'APPOINTMENT' && (nameMatches(it.med.name || it.target.name || '', r.medication) || nameMatches(cleanText, r.medication)));
+                if (hits.length) {
+                  const { list: newMeds, removed } = removeMedication(meds, hits[0].medication);
+                  if (removed.length) await persistMeds(newMeds);
+                  const label = hits.map((h) => `*${h.medication}*`).join(', ');
+                  await updateState('ACTIVE_CONFIRM_DELETE', { pendingDelete: { ids: hits.map((h) => h.id), label }, rdraft: null });
+                  return { replyText: `💊 ${tr(`Anotado que ya no tomás ${label}.`, `Oñeanota.`)}
+
+🗑️ ${tr('¿Borro también su recordatorio para que no te avise más?', "¿Aipe'a avei momandu'a?")}
+
+*[1]* ${tr('Sí, borrar', 'Heẽ')}   *[2]* ${tr('No', 'Nahániri')}` };
+                }
+              }
               if (hardPending) break; // el sub-flujo guiado ya contesta consultas sin perder el borrador
               return redispatch('ACTIVE_MEMBER', cleanText);
             }
@@ -2356,37 +2404,138 @@ export class BotStateMachine {
               if (m.durationDays) d.endsAt = new Date(Date.now() + m.durationDays * 86_400_000).toISOString();
               return advanceRemind(d);
             }
-            case 'DELETE_REMINDER': {
+            case 'DELETE_REMINDER':
+            case 'PAUSE_REMINDER':
+            case 'RESUME_REMINDER':
+            case 'EDIT_REMINDER': {
               const tg = it.target;
+              const verb =
+                it.intent === 'DELETE_REMINDER'
+                  ? tr('borrar', "mbogue")
+                  : it.intent === 'PAUSE_REMINDER'
+                    ? tr('pausar', 'mopyta')
+                    : it.intent === 'RESUME_REMINDER'
+                      ? tr('reactivar', 'myendy jey')
+                      : tr('cambiar', 'moambue');
+              const cmd = it.intent === 'DELETE_REMINDER' ? 'borrar' : it.intent === 'PAUSE_REMINDER' ? 'pausar' : it.intent === 'RESUME_REMINDER' ? 'activar' : 'editar';
               let picked = ctxRows;
               if (tg.scope === 'MEDS') picked = ctxRows.filter((r) => r.kind !== 'APPOINTMENT');
               else if (tg.scope === 'APPOINTMENTS') picked = ctxRows.filter((r) => r.kind === 'APPOINTMENT');
-              else if (tg.scope !== 'ALL') {
+              else if (tg.scope !== 'ALL' || it.intent === 'EDIT_REMINDER') {
                 if (tg.index && ctxRows[tg.index - 1]) picked = [ctxRows[tg.index - 1]];
-                else if (tg.name) {
-                  picked = ctxRows.filter((r) => nameMatches(tg.name!, r.medication));
-                  // "borrá el turno" / "borrá la cita" sin nombre reconocible y hay UNO solo → ese.
+                else {
+                  // Por el nombre que dio la IA, y si no, por las palabras del mensaje.
+                  picked = tg.name ? ctxRows.filter((r) => nameMatches(tg.name!, r.medication)) : [];
+                  if (!picked.length) picked = ctxRows.filter((r) => nameMatches(cleanText, r.medication));
+                  // "borrá el turno" / "cambiá la cita" sin nombre reconocible y hay UNO solo → ese.
                   if (!picked.length && /\b(turno|cita|consulta)\b/.test(norm(cleanText))) {
                     const appts = ctxRows.filter((r) => r.kind === 'APPOINTMENT');
                     if (appts.length === 1) picked = appts;
                   }
-                } else picked = [];
+                }
               }
               if (!picked.length) {
                 await updateState('ACTIVE_REMINDER', { rdraft: null });
                 return {
                   replyText: ctxRows.length
-                    ? `${tr('😕 No encontré cuál querés borrar. Estos son los que tenés:', '😕 Ndajuhúi. Kóva nde momandu\'a:')}\n\n${MedicationReminderService.format(ctxRows)}\n\n_${tr('Escribí "borrar N" con el número.', 'Ehai "borrar N".')}_`
+                    ? `${tr(`😕 No encontré cuál querés ${verb}. Estos son los que tenés:`, '😕 Ndajuhúi. Kóva nde momandu\'a:')}\n\n${MedicationReminderService.format(ctxRows)}\n\n_${tr(`Escribí "${cmd} N" con el número.`, `Ehai "${cmd} N".`)}_`
                     : tr('No tenés recordatorios ni turnos guardados.', "Ndaipóri momandu'a."),
                 };
               }
-              if (picked.length > 1 && !tg.scope) {
+              if (picked.length > 1 && (!tg.scope || it.intent === 'EDIT_REMINDER')) {
                 await updateState('ACTIVE_REMINDER', { rdraft: null });
                 const idxs = picked.map((p) => ctxRows.indexOf(p) + 1);
                 return {
-                  replyText: `${tr('Encontré varios. ¿Cuál borro?', 'Heta ajuhu. Mávapa aipe\'a?')}\n\n${MedicationReminderService.format(ctxRows).split('\n').filter((_, i) => idxs.includes(i + 1)).join('\n')}\n\n_${tr('Escribí "borrar N" con el número.', 'Ehai "borrar N".')}_`,
+                  replyText: `${tr(`Encontré varios. ¿Cuál querés ${verb}?`, 'Heta ajuhu. Mávapa?')}\n\n${MedicationReminderService.format(ctxRows).split('\n').filter((_, i) => idxs.includes(i + 1)).join('\n')}\n\n_${tr(`Escribí "${cmd} N" con el número.`, `Ehai "${cmd} N".`)}_`,
                 };
               }
+
+              if (it.intent === 'PAUSE_REMINDER' || it.intent === 'RESUME_REMINDER') {
+                const on = it.intent === 'RESUME_REMINDER';
+                await prisma.medicationReminder.updateMany({ where: { userId: user.id, id: { in: picked.map((p) => p.id) } }, data: { active: on, ...(on ? { lastSentSlot: null } : {}) } });
+                await updateState('ACTIVE_REMINDER', { rdraft: null });
+                const rest = await listForUser();
+                return {
+                  replyText:
+                    (on
+                      ? tr(`🔔 Listo, vuelvo a avisarte de ${picked.map((p) => `*${p.medication}*`).join(', ')}.`, `🔔 Oĩma.`)
+                      : tr(`🔕 Listo, pausé los avisos de ${picked.map((p) => `*${p.medication}*`).join(', ')}. Queda guardado; para volver a activarlo decime "activá ${picked[0].medication}".`, `🔕 Oĩma.`)) +
+                    `\n\n${MedicationReminderService.format(rest)}`,
+                };
+              }
+
+              if (it.intent === 'EDIT_REMINDER') {
+                const row = await prisma.medicationReminder.findUnique({ where: { id: picked[0].id } });
+                if (!row) break;
+                const d: Partial<ReminderDraft> = {
+                  id: row.id,
+                  kind: (row.kind as 'MED' | 'APPOINTMENT') || 'MED',
+                  medication: row.medication,
+                  dose: row.dose,
+                  scheduleKind: (row.scheduleKind as 'CLOCK' | 'INTERVAL' | undefined) || undefined,
+                  times: row.times ? JSON.parse(row.times) : [],
+                  intervalHours: row.intervalHours ?? undefined,
+                  anchorAt: row.anchorAt ? new Date(row.anchorAt).toISOString() : undefined,
+                  whenAt: row.whenAt ? new Date(row.whenAt).toISOString() : undefined,
+                  leadMinutes: row.leadMinutes,
+                  endsAt: row.endsAt ? new Date(row.endsAt).toISOString() : undefined,
+                };
+                let changed = false;
+                if (d.kind === 'APPOINTMENT') {
+                  const a = it.appointment;
+                  if (a.date || a.time) {
+                    const orig = row.whenAt ? new Date(row.whenAt) : new Date();
+                    const dateKey = a.date || orig.toLocaleDateString('en-CA', { timeZone: config.timezone });
+                    const hhmm = a.time || orig.toLocaleTimeString('en-GB', { timeZone: config.timezone, hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
+                    const w = MedicationReminderService.localDateTime(dateKey, hhmm);
+                    if (w && w.getTime() > Date.now()) {
+                      d.whenAt = w.toISOString();
+                      changed = true;
+                    }
+                  }
+                  if (a.leadMinutes) {
+                    d.leadMinutes = a.leadMinutes;
+                    changed = true;
+                  }
+                } else {
+                  const m = it.med;
+                  if (m.times.length) {
+                    d.scheduleKind = 'CLOCK';
+                    d.times = m.times;
+                    d.intervalHours = undefined;
+                    changed = true;
+                  } else if (m.intervalHours) {
+                    d.scheduleKind = 'INTERVAL';
+                    d.intervalHours = m.intervalHours;
+                    d.times = [];
+                    if (m.lastTakenMinutesAgo !== null) d.anchorAt = new Date(Date.now() - m.lastTakenMinutesAgo * 60_000).toISOString();
+                    changed = true;
+                  }
+                  if (m.dose) {
+                    d.dose = m.dose;
+                    changed = true;
+                  }
+                  if (m.durationDays) {
+                    d.endsAt = new Date(Date.now() + m.durationDays * 86_400_000).toISOString();
+                    changed = true;
+                  }
+                }
+                if (!changed) {
+                  await updateState('ACTIVE_REMIND_EDIT_PICK', { rdraft: d });
+                  const opts =
+                    d.kind === 'APPOINTMENT'
+                      ? '*[1]* Nombre/motivo\n*[2]* Fecha y hora\n*[3]* Anticipación del aviso'
+                      : d.scheduleKind === 'INTERVAL'
+                        ? '*[1]* Nombre\n*[2]* Cada cuánto\n*[3]* Última toma\n*[4]* Dosis'
+                        : '*[1]* Nombre\n*[2]* Horarios\n*[3]* Dosis';
+                  return { replyText: `✏️ *Editando:* ${MedicationReminderService.describeDraft(d)}\n\n¿Qué querés cambiar?\n${opts}\n\n_O decímelo directo (ej: "a las 9 y a las 21"). *CANCELAR* para dejarlo como está._` };
+                }
+                await updateState('ACTIVE_REMIND_CONFIRM', { rdraft: d });
+                return {
+                  replyText: `✏️ *${tr('Confirmá el cambio', 'Emoneĩ pe moambue')}:*\n\n${MedicationReminderService.describeDraft(d)}\n\n*[1]* ${tr('Sí, guardar', 'Heẽ')}   *[2]* ${tr('No', 'Nahániri')}`,
+                };
+              }
+
               const label = picked.length === 1 ? `*${picked[0].medication}*` : tr(`${picked.length} recordatorios/turnos`, `${picked.length} momandu'a`);
               await updateState('ACTIVE_CONFIRM_DELETE', { pendingDelete: { ids: picked.map((p) => p.id), label }, rdraft: null });
               return {

@@ -103,8 +103,8 @@ export class PushService {
    * para la notificación del navegador. Nunca tira (best-effort, igual que el envío por
    * WhatsApp de al lado no bloquea si push falla, y viceversa).
    */
-  static async notify(userId: string, title: string, body: string, opts: Partial<PushPayload> = {}): Promise<void> {
-    if (!this.enabled) return;
+  static async notify(userId: string, title: string, body: string, opts: Partial<PushPayload> = {}): Promise<number> {
+    if (!this.enabled) return 0;
     const clean = body
       .replace(/[*_`~]/g, '')
       .replace(/\n{2,}/g, ' · ')
@@ -112,7 +112,9 @@ export class PushService {
       .replace(/\s{2,}/g, ' ')
       .trim()
       .slice(0, 180);
-    await this.sendToUser(userId, { title, body: clean, ...opts }).catch(() => {});
+    const res = await this.sendToUser(userId, { title, body: clean, ...opts }).catch(() => ({ sent: 0, pruned: 0 }));
+    if (res.sent || res.pruned) console.log(`[push] "${title}" → ${res.sent} dispositivo(s)${res.pruned ? `, ${res.pruned} suscripción(es) vencida(s) borrada(s)` : ''}`);
+    return res.sent;
   }
 
   /** Emergency-scan alert — high urgency, requires interaction so it stays on screen. */
