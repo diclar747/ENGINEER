@@ -2506,6 +2506,13 @@ export class BotStateMachine {
           };
         }
 
+        // "VER" / "lista" / "mostrame todos" — antes esto caía en el parser de
+        // "agregar" de más abajo y "ver" se colaba como si fuera el NOMBRE de un
+        // medicamento nuevo (matcheaba el patrón de texto libre sin querer).
+        if (/^(ver|ver todo|ver todos|ver lista|lista|listar|mostrar|mostrame|mostrame todo|mostrame todos|mis recordatorios)$/i.test(norm(cleanText))) {
+          return { replyText: showList() };
+        }
+
         // borrar N / pausar N / activar N
         const cmd = cleanText.match(/^(borrar|eliminar|quitar|sacar|pausar|desactivar|activar|reactivar)\s+(\d{1,2})/i);
         if (cmd) {
@@ -2777,14 +2784,6 @@ export class BotStateMachine {
             draft.kind === 'MED'
               ? medicationConflicts([{ name: draft.medication || '', source: 'manual', addedAt: '' }], user.severeAllergies, user.contraindicatedMeds)
               : [];
-          const all = await prisma.medicationReminder.findMany({
-            where: { userId: user.id },
-            orderBy: { createdAt: 'asc' },
-            select: {
-              kind: true, scheduleKind: true, medication: true, dose: true, times: true,
-              intervalHours: true, nextDoseAt: true, whenAt: true, endsAt: true, active: true,
-            },
-          });
           const dur = draft.endsAt
             ? ` Se desactiva solo el ${new Date(draft.endsAt).toLocaleDateString('es-PY', { timeZone: config.timezone, day: '2-digit', month: '2-digit' })}.`
             : '';
@@ -2803,8 +2802,10 @@ export class BotStateMachine {
             replyText:
               `✅ *¡Guardado en tu bóveda!*\n\n${MedicationReminderService.describeDraft(draft)}\n${how}\n` +
               (conflicts.length ? `\n⚠️ ${conflicts.map((c) => `• ${c}`).join('\n')}\n` : '') +
-              `\n*${tr('Tus recordatorios', "Ne momandu'a")}:*\n${MedicationReminderService.format(all)}\n\n` +
-              `_${tr('Agregá otro, "borrar N" / "pausar N", o *LISTO* para volver al menú.', 'Emoĩ ambue, "borrar N", térã *LISTO*.')}_`,
+              `\n_${tr(
+                'Agregá otro, escribí *VER* para ver todos tus recordatorios, o *LISTO* para volver al menú.',
+                'Emoĩ ambue, ehai *VER* rehecha hag̃ua opavave, térã *LISTO*.'
+              )}_`,
           };
         }
 
