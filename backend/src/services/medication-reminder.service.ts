@@ -16,6 +16,9 @@ export interface ParsedReminder {
  * como JSON en `user.onboardingData.rdraft`, por eso las fechas son ISO string).
  */
 export interface ReminderDraft {
+  /** Presente SOLO en modo edición: id del MedicationReminder ya existente que se
+   *  está modificando (en vez de crear uno nuevo). Ver "editar N" en bot-state-machine. */
+  id?: string;
   kind: 'MED' | 'APPOINTMENT';
   medication?: string;
   dose?: string | null; // undefined = todavía no se preguntó · null/'' = se preguntó y no aplica
@@ -800,6 +803,55 @@ export class MedicationReminderService {
       data.times = JSON.stringify(d.times && d.times.length ? d.times : ['08:00']);
     }
     return prisma.medicationReminder.create({ data });
+  }
+
+  /**
+   * Aplica una edición de UN campo (o varios) sobre un recordatorio YA EXISTENTE
+   * — mismo `data` que createFromDraft, pero con `update` en vez de `create`.
+   * Resetea `lastSentSlot`/`lastSentAt` (si cambió el horario/fecha, el dedupe
+   * viejo no debe bloquear el próximo aviso) y reactiva el recordatorio —
+   * editar algo implica que se lo quiere volver a recibir.
+   */
+  static async updateFromDraft(id: string, d: Partial<ReminderDraft>) {
+    if (d.kind === 'APPOINTMENT') {
+      const leadMinutes = d.leadMinutes ?? 30;
+      return prisma.medicationReminder.update({
+        where: { id },
+        data: {
+          medication: this.cap((d.medication || 'Consulta médica').slice(0, 120)),
+          whenAt: d.whenAt ? new Date(d.whenAt) : null,
+          leadMinutes,
+          secondLeadMinutes: leadMinutes !== 10 ? 10 : null,
+          active: true,
+          lastSentAt: null,
+          lastSentSlot: null,
+        },
+      });
+    }
+    const scheduleKind = d.scheduleKind === 'INTERVAL' ? 'INTERVAL' : 'CLOCK';
+    const data: any = {
+      scheduleKind,
+      medication: this.cap((d.medication || 'Medicación').slice(0, 80)),
+      dose: d.dose ? String(d.dose).slice(0, 60) : null,
+      leadMinutes: d.leadMinutes ?? 10,
+      endsAt: d.endsAt && !isNaN(new Date(d.endsAt).getTime()) ? new Date(d.endsAt) : null,
+      active: true,
+      lastSentAt: null,
+      lastSentSlot: null,
+    };
+    if (scheduleKind === 'INTERVAL') {
+      const anchor = d.anchorAt ? new Date(d.anchorAt) : new Date();
+      data.intervalHours = d.intervalHours || 8;
+      data.anchorAt = anchor;
+      data.nextDoseAt = this.computeNextDose(anchor, data.intervalHours);
+      data.times = '[]';
+    } else {
+      data.times = JSON.stringify(d.times && d.times.length ? d.times : ['08:00']);
+      data.intervalHours = null;
+      data.anchorAt = null;
+      data.nextDoseAt = null;
+    }
+    return prisma.medicationReminder.update({ where: { id }, data });
   }
 
   /** Lista legible de recordatorios para WhatsApp. */

@@ -267,6 +267,7 @@ const MID_FLOW_STATES = new Set([
   'ACTIVE_LINK_PHONE', 'ACTIVE_FREE_UPDATE',
   'ACTIVE_REMINDER', 'ACTIVE_REMIND_NAME', 'ACTIVE_REMIND_SCHED', 'ACTIVE_REMIND_LAST',
   'ACTIVE_REMIND_DOSE', 'ACTIVE_REMIND_WHEN', 'ACTIVE_REMIND_LEAD', 'ACTIVE_REMIND_CONFIRM',
+  'ACTIVE_REMIND_EDIT_PICK',
 ]);
 
 const PENDING_STEP_LABEL: Record<string, { es: string; pt: string }> = {
@@ -298,6 +299,7 @@ const PENDING_STEP_LABEL: Record<string, { es: string; pt: string }> = {
   ACTIVE_REMIND_WHEN: { es: 'Decirme el día y hora del turno', pt: 'Dizer o dia e a hora da consulta' },
   ACTIVE_REMIND_LEAD: { es: 'Decirme con cuánta anticipación avisar', pt: 'Dizer com quanta antecedência avisar' },
   ACTIVE_REMIND_CONFIRM: { es: 'Confirmar el recordatorio (Sí / No)', pt: 'Confirmar o lembrete (Sim / Não)' },
+  ACTIVE_REMIND_EDIT_PICK: { es: 'Decirme qué campo querés cambiar', pt: 'Dizer qual campo você quer mudar' },
 };
 
 /** Descripción corta de "en qué pregunta había quedado" para el mensaje de timeout. */
@@ -2446,6 +2448,7 @@ export class BotStateMachine {
             select: {
               id: true, kind: true, scheduleKind: true, medication: true, dose: true, times: true,
               intervalHours: true, nextDoseAt: true, whenAt: true, endsAt: true, active: true,
+              leadMinutes: true, anchorAt: true,
             },
           });
 
@@ -2527,6 +2530,42 @@ export class BotStateMachine {
           const activate = /^(activar|reactivar)/.test(verb);
           await prisma.medicationReminder.update({ where: { id: target.id }, data: { active: activate } });
           return { replyText: tr(`${activate ? '▶️ Activé' : '⏸️ Pausé'} el recordatorio de *${target.medication}*.`, `*${target.medication}* ${activate ? 'oñemyendy' : 'oñembopyta'}.`) + '\n\n' + MedicationReminderService.format(await list()) };
+        }
+
+        // editar N — carga ese recordatorio como borrador (con `id`, marca de modo
+        // edición) y pregunta qué campo cambiar. Reusa TODO el diálogo guiado
+        // existente (NAME/SCHED/WHEN/DOSE/LEAD, con su respaldo de IA incluido) —
+        // advanceRemind() detecta `draft.id` y actualiza en vez de crear.
+        const editCmd = cleanText.match(/^editar\s+(\d{1,2})/i);
+        if (editCmd) {
+          const idx = parseInt(editCmd[1], 10) - 1;
+          const target = rows[idx];
+          if (!target) return { replyText: tr(`No hay un recordatorio *${idx + 1}*.`, `Ndaipóri momandu'a *${idx + 1}*.`) + '\n\n' + showList() };
+          const editDraft: Partial<ReminderDraft> = {
+            id: target.id,
+            kind: (target.kind as 'MED' | 'APPOINTMENT') || 'MED',
+            medication: target.medication,
+            dose: target.dose,
+            scheduleKind: (target.scheduleKind as 'CLOCK' | 'INTERVAL' | undefined) || undefined,
+            times: target.times ? JSON.parse(target.times) : [],
+            intervalHours: target.intervalHours ?? undefined,
+            anchorAt: target.anchorAt ? new Date(target.anchorAt).toISOString() : undefined,
+            whenAt: target.whenAt ? new Date(target.whenAt).toISOString() : undefined,
+            leadMinutes: target.leadMinutes,
+            endsAt: target.endsAt ? new Date(target.endsAt).toISOString() : undefined,
+          };
+          await updateState('ACTIVE_REMIND_EDIT_PICK', { rdraft: editDraft });
+          const opts =
+            target.kind === 'APPOINTMENT'
+              ? '*[1]* Nombre/motivo\n*[2]* Fecha y hora\n*[3]* Anticipación del aviso'
+              : target.scheduleKind === 'INTERVAL'
+                ? '*[1]* Nombre\n*[2]* Cada cuánto\n*[3]* Última toma\n*[4]* Dosis'
+                : '*[1]* Nombre\n*[2]* Horarios\n*[3]* Dosis';
+          return {
+            replyText:
+              `✏️ *Editando:* ${MedicationReminderService.describeDraft(editDraft)}\n\n` +
+              `¿Qué querés cambiar?\n${opts}\n\n_Escribí *CANCELAR* para dejarlo como está._`,
+          };
         }
 
         // agregar (texto tecleado o transcripto de audio) → se interpreta con la IA
@@ -2635,6 +2674,26 @@ export class BotStateMachine {
               replyText: `${midQuery}\n\n_(Seguís cargando algo pendiente — ${lower} cuando quieras, o escribí *LISTO* para dejarlo.)_`,
             };
           }
+        }
+
+        if (state === 'ACTIVE_REMIND_EDIT_PICK') {
+          if (/^(cancelar|cancel|no|listo)$/i.test(norm(cleanText))) {
+            await updateState('ACTIVE_REMINDER', { rdraft: null });
+            return { replyText: '👍 No cambié nada. Escribí *VER* para ver tus recordatorios.' };
+          }
+          const isAppt = draft.kind === 'APPOINTMENT';
+          const fieldMap: Record<string, string> = isAppt
+            ? { '1': 'ACTIVE_REMIND_NAME', '2': 'ACTIVE_REMIND_WHEN', '3': 'ACTIVE_REMIND_LEAD' }
+            : draft.scheduleKind === 'INTERVAL'
+              ? { '1': 'ACTIVE_REMIND_NAME', '2': 'ACTIVE_REMIND_SCHED', '3': 'ACTIVE_REMIND_LAST', '4': 'ACTIVE_REMIND_DOSE' }
+              : { '1': 'ACTIVE_REMIND_NAME', '2': 'ACTIVE_REMIND_SCHED', '3': 'ACTIVE_REMIND_DOSE' };
+          const target = fieldMap[cleanText.trim()];
+          if (!target) {
+            return { replyText: `😕 Respondé con el número (*${Object.keys(fieldMap).join('*, *')}*) de lo que querés cambiar, o *CANCELAR*.` };
+          }
+          const stepKey = Object.keys(REMIND_STATE).find((k) => REMIND_STATE[k] === target) || '';
+          await updateState(target, { rdraft: draft });
+          return { replyText: remindQuestion(stepKey, draft) };
         }
 
         if (state === 'ACTIVE_REMIND_NAME') {
@@ -2774,6 +2833,16 @@ export class BotStateMachine {
             return {
               replyText:
                 `📋 *Confirmá el recordatorio:*\n\n${MedicationReminderService.describeDraft(draft)}\n\n*[1]* Sí, guardar   *[2]* No`,
+            };
+          }
+          if (draft.id) {
+            // Modo edición: se actualiza el registro existente, no se crea uno nuevo.
+            await MedicationReminderService.updateFromDraft(draft.id, draft);
+            await updateState('ACTIVE_REMINDER', { rdraft: null });
+            return {
+              replyText:
+                `✅ *Actualizado.*\n\n${MedicationReminderService.describeDraft(draft)}\n\n` +
+                `_${tr('Otra edición: "editar N". *VER* para ver todos, o *LISTO* para el menú.', 'Ambue jehai: "editar N". *VER* rehecha hag̃ua opavave.')}_`,
             };
           }
           await MedicationReminderService.createFromDraft(user.id, draft);
