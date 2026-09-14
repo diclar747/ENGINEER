@@ -2082,6 +2082,25 @@ export class BotStateMachine {
         }
         return { replyText: remindQuestion(step, d) };
       };
+      // ¿Este texto que llegó en medio de OTRO sub-modo (subir foto de receta/
+      // estudio/medicamento…) es en realidad un pedido de agendar un turno o
+      // armar un recordatorio? Confirmado en vivo: "quiero registrar una cita
+      // médica con el Dr. Alonso mañana..." mandado estando en "Cargar estudio"
+      // seguía recibiendo "mandá la foto del estudio" en loop — nunca se
+      // reconocía que el mensaje no tenía NADA que ver con subir un archivo.
+      const tryStartReminderFromText = async (text: string): Promise<BotResponse | null> => {
+        const lo = norm(text);
+        if (
+          !lo ||
+          !/\b(cita|turno|consulta|record[aá]me|recu[eé]rdame|hac[eé]me\s+recordar|avis[aá]me|hagas?\s+recordar)\b/.test(lo)
+        ) {
+          return null;
+        }
+        const parsed = await MedicationReminderService.parseReminderRequest(text);
+        if (!parsed.medication && !parsed.whenAt && !parsed.times?.length && !parsed.intervalHours) return null;
+        await updateState('ACTIVE_REMINDER', { rdraft: null });
+        return advanceRemind(parsed);
+      };
       const parseTimesLoose = (s: string): string[] => {
         const viaParse = MedicationReminderService.parse(`medic ${s}`)?.times || [];
         if (viaParse.length) return viaParse;
@@ -2291,6 +2310,8 @@ export class BotStateMachine {
           if (looksLikeQuestion) {
             const ans = await MedicationReminderService.answerQuery(user.id, cleanText, lang);
             if (ans) return { replyText: ans };
+            const asReminder = await tryStartReminderFromText(cleanText);
+            if (asReminder) return asReminder;
             return {
               replyText: tr(
                 '💊 Estás en *Cargar medicamento*. Mandá el *nombre* (ej: _"Losartán 50 mg, 1 vez al día"_), una *foto*, o escribí *LISTO* para salir.',
@@ -2320,6 +2341,8 @@ export class BotStateMachine {
       // Sub-modo: cargar receta
       if (subMode === 'ACTIVE_UPLOAD_RX') {
         if (!msg.mediaBuffer) {
+          const asReminder = cleanText ? await tryStartReminderFromText(cleanText) : null;
+          if (asReminder) return asReminder;
           return {
             replyText: tr(
               '📄 Mandá la *foto o PDF de la receta*. Podés mandar varias.\n_Escribí *LISTO* cuando termines._',
@@ -2357,6 +2380,8 @@ export class BotStateMachine {
       // Sub-modo: cargar estudio / evaluación médica
       if (subMode === 'ACTIVE_UPLOAD_STUDY') {
         if (!msg.mediaBuffer) {
+          const asReminder = cleanText ? await tryStartReminderFromText(cleanText) : null;
+          if (asReminder) return asReminder;
           return {
             replyText: tr(
               '🧪 Mandá la *foto o PDF del estudio* (laboratorio, radiografía, tomografía, ECG, informe). Podés mandar varios.\n_Escribí *LISTO* cuando termines._',
