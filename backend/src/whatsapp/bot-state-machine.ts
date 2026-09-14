@@ -2520,6 +2520,23 @@ export class BotStateMachine {
                     changed = true;
                   }
                 }
+                // La IA a veces no extrae la hora nueva ("cambiá el horario de X a las 22"):
+                // se la saca del texto con el parser de siempre.
+                if (!changed && d.kind === 'APPOINTMENT') {
+                  const w = MedicationReminderService.resolveWhen(cleanText);
+                  if (w.whenAt && w.whenAt.getTime() > Date.now()) {
+                    d.whenAt = w.whenAt.toISOString();
+                    changed = true;
+                  }
+                } else if (!changed && /\b(a\s+las?\s+\d|\d{1,2}[:h.]\d{2}|\d{1,2}\s*hs\b)/.test(norm(cleanText))) {
+                  const tms = parseTimesLoose(cleanText.replace(/^.*?\b(a\s+las?)\b/i, 'a las'));
+                  if (tms.length) {
+                    d.scheduleKind = 'CLOCK';
+                    d.times = tms;
+                    d.intervalHours = undefined;
+                    changed = true;
+                  }
+                }
                 if (!changed) {
                   await updateState('ACTIVE_REMIND_EDIT_PICK', { rdraft: d });
                   const opts =

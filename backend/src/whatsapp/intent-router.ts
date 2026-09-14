@@ -378,11 +378,16 @@ function editDistance(a: string, b: string): number {
   return dp[b.length];
 }
 
-const STOP_WORDS = new Set(['doctor', 'doctora', 'dr', 'dra', 'cita', 'turno', 'consulta', 'con', 'el', 'la', 'los', 'las', 'del', 'de', 'mi', 'medica', 'medico', 'recordatorio', 'para', 'una', 'un']);
+const STOP_WORDS = new Set([
+  'doctor', 'doctora', 'dr', 'dra', 'cita', 'turno', 'consulta', 'con', 'el', 'la', 'los', 'las', 'del', 'de', 'mi', 'mis',
+  'medica', 'medico', 'recordatorio', 'recordatorios', 'para', 'una', 'un', 'que', 'tengo', 'tomar', 'toma', 'tomo', 'hora',
+  'horas', 'horario', 'horarios', 'hoy', 'manana', 'cada', 'algun', 'alguno', 'alguna', 'medicamento', 'medicamentos',
+  'remedio', 'remedios', 'pastilla', 'pastillas', 'todos', 'dias', 'dia', 'antes', 'ahora', 'cuando', 'como', 'esta', 'este',
+]);
 
 /** ¿El nombre que dijo la persona corresponde a este recordatorio? Tolera tildes y 1–2 letras distintas. */
 export function nameMatches(said: string, stored: string): boolean {
-  const words = (x: string) => plain(x).replace(/[^a-z0-9\s]/g, ' ').split(/\s+/).filter((w) => w.length >= 3 && !STOP_WORDS.has(w));
+  const words = (x: string) => plain(x).replace(/[^a-z0-9\s]/g, ' ').split(/\s+/).filter((w) => w.length >= 4 && !STOP_WORDS.has(w));
   const a = words(said);
   const b = words(stored);
   if (!a.length || !b.length) return false;

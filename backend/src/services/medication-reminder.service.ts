@@ -353,7 +353,8 @@ export class MedicationReminderService {
         const nx = hit.flatMap(nextDoses).sort((a, b) => a.getTime() - b.getTime())[0];
         return (
           hit.map(describe).join('\n') +
-          (nx ? `\n\n⏭️ Te toca ${when(nx)} (en ${humanIn(nx.getTime() - now.getTime())}). Te aviso ${leadLabel(Math.max(1, hit[0].leadMinutes || 10))} antes y a la hora.` : '')
+          (nx ? `\n\n⏭️ Te toca ${when(nx)} (en ${humanIn(nx.getTime() - now.getTime())}). Te aviso ${leadLabel(Math.max(1, hit[0].leadMinutes || 10))} antes y a la hora.` : '') +
+          `\n\n_Para cambiarlo: "cambiá el horario de ${hit[0].medication.split(/\s+/)[0]} a las …" · Para borrarlo: "borrá ${hit[0].medication.split(/\s+/)[0]}"_`
         );
       }
     }
@@ -390,7 +391,13 @@ export class MedicationReminderService {
       ? `\n\n🔔 Te aviso ${leads.length === 1 ? `${leadLabel(leads[0])} antes` : 'antes'} y a la hora de cada toma, por WhatsApp y notificación.`
       : '';
     if (opts.onlyNext) return (nextBlock + howBlock).trim();
-    return `💊 *Tus medicamentos con horario (${rows.length}):*\n\n${rows.map(describe).join('\n')}${nextBlock}${howBlock}${loadedBlock}`;
+    const ex = rows[0].medication.split(/\s+/)[0];
+    const helpBlock =
+      `\n\n✏️ *Para cambiar o borrar*, escribime o mandame un audio:\n` +
+      `• _"cambiá el horario de ${ex} a las 9 y a las 21"_\n` +
+      `• _"borrá el recordatorio de ${ex}"_\n` +
+      `• _"pausá ${ex}"_ (deja de avisar sin borrarlo)`;
+    return `💊 *Tus medicamentos con horario (${rows.length}):*\n\n${rows.map(describe).join('\n')}${nextBlock}${howBlock}${loadedBlock}${helpBlock}`;
   }
 
   /** Fecha local de Paraguay ("2026-09-15" + "10:00") → instante real. null si es inválida. */

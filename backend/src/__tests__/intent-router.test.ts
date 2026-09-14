@@ -131,3 +131,10 @@ describe('refineInterpretation — notificaciones', () => {
     expect(refineInterpretation(normalizeInterpretation({ intent: 'RESUME_REMINDER' })!, 'quiero activar las notificaciones').intent).toBe('NOTIFICATIONS');
   });
 });
+
+describe('nameMatches — palabras comunes no cuentan', () => {
+  it('"¿qué medicamentos tengo que tomar?" NO nombra a "Aceme recardar que"', () => {
+    expect(nameMatches('¿qué medicamentos tengo que tomar?', 'Aceme recardar que')).toBe(false);
+    expect(nameMatches('borrá el recordatorio Aceme', 'Aceme recardar que')).toBe(true);
+  });
+});
