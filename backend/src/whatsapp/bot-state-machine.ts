@@ -2790,8 +2790,15 @@ export class BotStateMachine {
               // Antes solo aceptaba dígitos ("2 horas") — "dos horas"/"tres minutos"
               // (números escritos, muy comunes al hablar) no matcheaban nada.
               const numWord = '(un[ao]?s?|dos|tres|cuatro|cinco|seis|siete|ocho|nueve|diez|once|doce|\\d+(?:[.,]\\d+)?)';
-              const h = lc.match(new RegExp(`${numWord}\\s*(h|hora|horas)\\b`));
-              const mm = lc.match(new RegExp(`${numWord}\\s*(min|minuto|minutos)\\b`));
+              // Si el mensaje dice "antes" en algún lado, exigir que el número esté
+              // PEGADO a esa palabra — si no, "voy a tener el turno a las 23 horas...
+              // avisame dos minutos antes" agarraba el "23" (la hora del turno) en vez
+              // del "dos" real, porque cualquier N+unidad suelto calificaba igual.
+              // Sin "antes" en el mensaje (respuesta corta y directa, "2 horas"),
+              // no hace falta exigirlo.
+              const hasAntes = /\bantes\b/.test(lc);
+              let h = lc.match(new RegExp(`${numWord}\\s*(h|hora|horas)${hasAntes ? '\\s+antes\\b' : '\\b'}`));
+              let mm = lc.match(new RegExp(`${numWord}\\s*(min|minuto|minutos)${hasAntes ? '\\s+antes\\b' : '\\b'}`));
               if (h) mins = Math.round(toNum(h[1]) * 60);
               else if (mm) mins = Math.round(toNum(mm[1]));
             }
