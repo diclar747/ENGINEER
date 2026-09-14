@@ -15,7 +15,7 @@ import {
   medicationConflicts,
 } from '../services/medication.util';
 import { AiPromptService, PromptScope } from '../services/ai-prompt.service';
-import { MedicationReminderService, ReminderDraft } from '../services/medication-reminder.service';
+import { MedicationReminderService, ReminderDraft, toNum } from '../services/medication-reminder.service';
 import { EmailService } from '../services/email.service';
 import { NlpHandler } from './nlp-handler';
 import { whatsappBot } from './baileys.client';
@@ -2787,10 +2787,13 @@ export class BotStateMachine {
             if (/\bmedia\s+hora\b/.test(lc)) mins = 30;
             else if (/\b(un|1)\s*d[ií]a\b/.test(lc)) mins = 1440;
             else {
-              const h = lc.match(/(\d+(?:[.,]\d+)?)\s*(h|hora|horas)\b/);
-              const mm = lc.match(/(\d+)\s*(min|minuto|minutos)\b/);
-              if (h) mins = Math.round(parseFloat(h[1].replace(',', '.')) * 60);
-              else if (mm) mins = +mm[1];
+              // Antes solo aceptaba dígitos ("2 horas") — "dos horas"/"tres minutos"
+              // (números escritos, muy comunes al hablar) no matcheaban nada.
+              const numWord = '(un[ao]?s?|dos|tres|cuatro|cinco|seis|siete|ocho|nueve|diez|once|doce|\\d+(?:[.,]\\d+)?)';
+              const h = lc.match(new RegExp(`${numWord}\\s*(h|hora|horas)\\b`));
+              const mm = lc.match(new RegExp(`${numWord}\\s*(min|minuto|minutos)\\b`));
+              if (h) mins = Math.round(toNum(h[1]) * 60);
+              else if (mm) mins = Math.round(toNum(mm[1]));
             }
           }
           if (!mins || mins > 10080) {

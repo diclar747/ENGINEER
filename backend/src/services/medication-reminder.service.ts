@@ -40,9 +40,10 @@ const WORD_NUM: Record<string, number> = {
   veintidos: 22, veintitres: 23, veinticuatro: 24, veinticinco: 25, veintiseis: 26,
   veintisiete: 27, veintiocho: 28, veintinueve: 29, treinta: 30, cuarenta: 40, sesenta: 60, noventa: 90,
 };
-function toNum(s: string): number {
+export function toNum(s: string): number {
   const w = (s || '').toLowerCase().trim().normalize('NFD').replace(/[̀-ͯ]/g, '');
   if (/^\d+$/.test(w)) return parseInt(w, 10);
+  if (/^\d+[.,]\d+$/.test(w)) return parseFloat(w.replace(',', '.')); // "1,5" / "1.5" horas
   return WORD_NUM[w] ?? NaN;
 }
 
@@ -690,9 +691,14 @@ export class MedicationReminderService {
       const lo = original.toLowerCase();
       if (/\b(el\s+d[ií]a|un\s+d[ií]a)\s+antes\b/.test(lo)) draft.leadMinutes = 1440;
       else {
-        const lm = lo.match(/\b(?:avisa\w*\s+(?:me\s+)?)?(un[ao]?|media|\d+(?:[.,]\d+)?)\s*(hora|horas|hs?|min|minutos?|d[ií]as?)\s+antes\b/);
+        // Antes solo reconocía "un/una" o dígitos — "dos minutos antes", "tres horas
+        // antes" (números escritos, muy comunes al hablar) no matcheaban NADA y el
+        // pedido de anticipación se perdía en silencio.
+        const lm = lo.match(
+          /\b(?:avisa\w*\s+(?:me\s+)?)?(un[ao]?s?|dos|tres|cuatro|cinco|seis|siete|ocho|nueve|diez|once|doce|trece|catorce|quince|dieci\w+|veinte|veinti\w+|treinta|cuarenta|media|\d+(?:[.,]\d+)?)\s*(hora|horas|hs?|min|minutos?|d[ií]as?)\s+antes\b/
+        );
         if (lm) {
-          const n = lm[1] === 'media' ? 0.5 : /^un/.test(lm[1]) ? 1 : parseFloat(lm[1].replace(',', '.'));
+          const n = lm[1] === 'media' ? 0.5 : toNum(lm[1]);
           if (!isNaN(n)) {
             const mins = /^min/.test(lm[2]) ? Math.round(n) : /^d/.test(lm[2]) ? Math.round(n * 1440) : Math.round(n * 60);
             if (mins >= 1 && mins <= 10080) draft.leadMinutes = mins;
