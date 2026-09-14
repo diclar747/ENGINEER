@@ -1445,7 +1445,7 @@ export class MedicationReminderService {
           if (
             await deliver(r.user.id, target, msg, {
               title: '📅 Turno médico mañana',
-              body: `Consulta: ${r.medication} · 🕒 ${dtLocal}. Abrí tu pasaporte Bio-Pass.`,
+              body: `🩺 ${r.medication} · 🕒 ${dtLocal}. Abrí tu pasaporte Bio-Pass.`,
               opts: { tag: `reminder-${r.id}`, url: '/dashboard', requireInteraction: true },
             })
           ) {
@@ -1467,7 +1467,7 @@ export class MedicationReminderService {
           if (
             await deliver(r.user.id, target, msg, {
               title: `📅 Tu turno médico (faltan ${faltan})`,
-              body: `Consulta: ${r.medication} · 🕒 ${dtLocal}. Abrí tu ficha médica.`,
+              body: `🩺 ${r.medication} · 🕒 ${dtLocal}. Abrí tu ficha médica.`,
               opts: { tag: `reminder-${r.id}`, url: '/dashboard', requireInteraction: true },
             })
           ) {

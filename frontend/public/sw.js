@@ -4,7 +4,9 @@
 // deletes any cache whose name is not this one.
 // v7: badge de notificación monocromo (antes usaba el ícono a color como badge
 // y Android lo rellenaba entero — salía un blob irreconocible en la barra de estado).
-const CACHE_NAME = 'biopass-cache-v7';
+// v8: sin `icon` en las notificaciones — Android lo mostraba como imagen grande a la
+// derecha (logo viejo) repitiendo el logo que ya aparece a la izquierda.
+const CACHE_NAME = 'biopass-cache-v8';
 
 // Only truly static, rarely-changing assets are pre-cached. The app shell
 // (index.html) and hashed JS/CSS are handled network-first so a new deploy
@@ -108,7 +110,7 @@ self.addEventListener('push', (event) => {
     tag: data.tag || 'biopass',
     renotify: true,
     requireInteraction: !!data.requireInteraction,
-    icon: '/icon-192.png',
+    // Sin `icon`: el logo de la app ya aparece a la izquierda de la notificación.
     // Badge = silueta blanca monocromo en fondo transparente (no el ícono a color):
     // Android recorta por canal alfa para pintarlo en la barra de estado.
     badge: '/badge-96.png',
