@@ -149,13 +149,13 @@ export class NiroService {
   }
 
   /** Chat estilo OpenAI vía Niro. Devuelve el texto del asistente, o null si falla. */
-  static async chat(messages: ChatMsg[]): Promise<string | null> {
+  static async chat(messages: ChatMsg[], opts: { timeoutMs?: number; temperature?: number } = {}): Promise<string | null> {
     if (!KEY) return null;
     try {
       const { data } = await axios.post(
         `${BASE}/api/v1/chat/completions`,
-        { model: 'cnid-auto', messages },
-        { headers: { Authorization: `Bearer ${KEY}` }, timeout: 25000 },
+        { model: 'cnid-auto', messages, ...(opts.temperature !== undefined ? { temperature: opts.temperature } : {}) },
+        { headers: { Authorization: `Bearer ${KEY}` }, timeout: opts.timeoutMs ?? 25000 },
       );
       const text = data?.choices?.[0]?.message?.content;
       return typeof text === 'string' && text.trim() ? text.trim() : null;

@@ -58,45 +58,71 @@ export class NlpHandler {
 
     // 3. Change emergency contact:
     // Audio / text: "Quiero cambiar el número de teléfono y el nombre para el tema de emergencia, para llamar emergencia"
-    // "Nuevo contacto Maria Perez 0981123456", "Cambiar contacto a Carlos 0982-111-222"
+    // "Nuevo contacto Maria Perez 0981123456", "Cambiar contacto a Carlos 0982-111-222", "modificar datos de emergencia"
     const mentionsContact =
       clean.includes('contacto') ||
       clean.includes('familiar') ||
       clean.includes('avisar') ||
+      /\b(datos?\s+de\s+emergencias?|persona\s+de\s+emergencia|contacto\s+de\s+emergencia)\b/i.test(clean) ||
+      /\b(a\s+quien\s+(?:se\s+)?llamar?|a\s+quien\s+avisar|quien\s+llamar)\b/i.test(clean) ||
       /\b(madre|mam[aá]|padre|pap[aá]|espos[ao]|herman[ao]|hij[ao]|t[ií][ao]|prim[ao]|pareja|novi[ao]|amig[ao]|vecin[ao])\b/i.test(clean) ||
-      /\b(cambiar|cambi[aá]|modificar|actualizar|editar|nuevo|nueva)\b.{0,35}\b(n[uú]mero|tel[eé]fono|nombre|persona|contacto|familiar|quien\s+llamar)\b.{0,35}\b(emergencia|urgencia|rescate|llamar)\b/i.test(
-        clean
-      ) ||
-      (/\b(emergencia|llamar\s+emergencia|en\s+caso\s+de\s+emergencia)\b/i.test(clean) &&
-        /\b(tel[eé]fono|n[uú]mero|nombre|persona|contacto|quien|llamar)\b/i.test(clean));
+      /\b(cambiar|cambi[aá]|modificar|actualizar|editar|nuevo|nueva)\b.{0,35}\b(n[uú]mero|tel[eé]fono|nombre|persona|contacto|familiar|quien\s+llamar|datos)\b.{0,35}\b(emergencia|emergencias|urgencia|rescate|llamar)\b/i.test(clean) ||
+      (/\b(emergencia|emergencias|llamar\s+emergencia|en\s+caso\s+de\s+emergencia)\b/i.test(clean) &&
+        /\b(tel[eé]fono|n[uú]mero|nombre|persona|contacto|quien|llamar|datos)\b/i.test(clean));
 
     if (mentionsContact) {
       const phoneMatch = raw.match(/(\+?\d[\d\s.-]{6,14}\d)/);
       const contactPhone = phoneMatch ? phoneMatch[1].replace(/[^\d+]/g, '') : undefined;
-      let namePart = phoneMatch ? raw.slice(0, phoneMatch.index) : raw;
 
-      const llamaMatch = namePart.match(/(?:se llama|llamado|llamada|nombre(?:\s+es)?)\s+([\p{L}\s]+)$/iu);
-      if (llamaMatch) namePart = llamaMatch[1];
-
-      // Extract relationship if mentioned: Madre, Padre, Hermano, Esposa, etc.
-      let contactRelationship: string | undefined;
-      const relMatch = raw.match(
+      let relMatch = raw.match(
         /\b(madre|mam[aá]|padre|pap[aá]|espos[ao]|herman[ao]|hij[ao]|t[ií][ao]|prim[ao]|pareja|novi[ao]|amig[ao]|vecin[ao]|familiar)\b/i
       );
-      if (relMatch) {
-        contactRelationship = relMatch[1].charAt(0).toUpperCase() + relMatch[1].slice(1).toLowerCase();
+      const contactRelationship = relMatch ? relMatch[1].charAt(0).toUpperCase() + relMatch[1].slice(1).toLowerCase() : undefined;
+
+      // Distinguir si el usuario solo pide la acción sin dar todavía nombre ni teléfono
+      const isPureIntent =
+        !phoneMatch &&
+        (/\b(cambiar|cambi[aá]|modificar|actualizar|editar|poner|corregir)\b/i.test(clean) ||
+          /^(datos?\s+de\s+emergencias?|contacto(\s+de\s+emergencia)?|familiar)$/i.test(clean) ||
+          /\b(forma\s+cuando\s+hay|quien\s+se\s+llama|a\s+quien\s+llamar|en\s+caso\s+de\s+emergencia)\b/i.test(clean)) &&
+        !/\b(?:es|a|nombre)\s+([A-ZÁÉÍÓÚÑa-záéíóúñ]{3,}\s+[A-ZÁÉÍÓÚÑa-záéíóúñ]{3,})/i.test(raw);
+
+      if (isPureIntent) {
+        return { intent: 'CHANGE_CONTACT', isIntentOnly: true };
       }
 
-      const contactName = namePart
-        .replace(
-          /\b(quiero|necesito|cambiar|cambi[aá]|cambio|modificar|actualizar|editar|nuevo|nueva|contacto|familiar|emergencia|avisar|es|mi|su|el|la|que|se|llama|llamado|llamada|y|a|para|numero|número|telefono|teléfono|celular|whatsapp|de|tema|llamar)\b/gi,
-          ' '
-        )
-        .replace(/\s+/g, ' ')
-        .trim();
+      let contactName: string | undefined;
+      if (phoneMatch) {
+        const pIdx = phoneMatch.index ?? 0;
+        let namePart = raw.slice(0, pIdx);
+        if (!namePart.trim() || namePart.trim().length < 3) {
+          namePart = raw.slice(pIdx + phoneMatch[0].length);
+        }
+        const llamaMatch = namePart.match(/(?:se llama|llamado|llamada|nombre(?:\s+es)?)\s+([\p{L}\s]+)$/iu);
+        if (llamaMatch) namePart = llamaMatch[1];
+
+        const candidate = namePart
+          .replace(
+            /\b(quiero|necesito|cambiar|cambi[aá]|cambio|modificar|actualizar|editar|nuevo|nueva|contacto|familiar|emergencia|emergencias|avisar|es|mi|su|el|la|que|se|llama|llamado|llamada|y|a|para|numero|número|telefono|teléfono|celular|whatsapp|de|tema|llamar|madre|mam[aá]|padre|pap[aá]|espos[ao]|herman[ao]|hij[ao]|t[ií][ao]|prim[ao]|pareja|novi[ao]|amig[ao]|vecin[ao])\b/gi,
+            ' '
+          )
+          .replace(/[^\p{L}\s]/gu, ' ')
+          .replace(/\s+/g, ' ')
+          .trim();
+
+        const fillerWords = /^(forma|cuando|hay|quien|caso|algo|alguien|nada|datos|favor|por\s+favor)$/i;
+        if (candidate.length >= 3 && !fillerWords.test(candidate)) {
+          contactName = candidate;
+        }
+      } else {
+        const nameMatch = raw.match(/(?:contacto|familiar|emergencia|llamar\s+a)\s+(?:a|es|nuevo|se\s+llama)?\s*([A-ZÁÉÍÓÚÑa-záéíóúñ]{2,}(?:\s+[A-ZÁÉÍÓÚÑa-záéíóúñ]{2,})+)/i);
+        if (nameMatch) {
+          contactName = nameMatch[1].trim();
+        }
+      }
 
       const hasValidPhone = !!contactPhone && contactPhone.replace(/\D/g, '').length >= 7;
-      const hasValidName = contactName.length >= 3 && !/\b(emergencia|llamar|tema)\b/i.test(contactName);
+      const hasValidName = !!contactName && contactName.length >= 3;
 
       if (hasValidPhone && hasValidName) {
         return { intent: 'CHANGE_CONTACT', contactName, contactPhone, contactRelationship, isIntentOnly: false };
@@ -118,21 +144,21 @@ export class NlpHandler {
       clean.includes('vivo en') ||
       clean.includes('donde vivo')
     ) {
-      const value = raw
-        .replace(/.*(dirección|direccion|domicilio|vivo en|donde vivo|es\s+|a\s+)/i, '')
-        .replace(/^[.:,\s]+/, '')
-        .trim();
-      if (value.length >= 4) {
-        return { intent: 'CHANGE_ADDRESS', value, isIntentOnly: false };
+      const m = raw.match(/\b(?:direcci[oó]n|domicilio|donde\s+vivo|vivo\s+en)\b(?:\s+(?:es|a|de|nueva))?\s*[:]?\s*(.+)/i);
+      const val = m ? m[1].replace(/^[.:,\s]+/, '').trim() : '';
+      if (val.length >= 4) {
+        return { intent: 'CHANGE_ADDRESS', value: val, isIntentOnly: false };
       }
       return { intent: 'CHANGE_ADDRESS', isIntentOnly: true };
     }
 
     // 5. Change allergy: "Cambiar alergia a Penicilina", "Mi alergia es al maní", "Nueva alergia sulfas"
     if (clean.includes('alergia') || clean.includes('alérgico') || clean.includes('alergico')) {
-      const value = raw.replace(/.*(alergia|alérgic[oa]|alergic[oa]|a\s+|es\s+|a\s+la\s+|al\s+)/i, '').trim();
-      if (value.length >= 2) {
-        return { intent: 'CHANGE_ALLERGY', value, isIntentOnly: false };
+      const m = raw.match(/\b(?:alergia|al[eé]rgic[oa])\b(?:\s+(?:es|a|a\s+la|al|con|de|nueva))?\s*[:]?\s*(.+)/i);
+      const val = m ? m[1].replace(/^[.:,\s]+/, '').trim() : '';
+      const isVerbOnly = /^(cambiar|corregir|actualizar|editar|poner|modificar)\s*$/i.test(val);
+      if (val.length >= 2 && !isVerbOnly) {
+        return { intent: 'CHANGE_ALLERGY', value: val, isIntentOnly: false };
       }
       return { intent: 'CHANGE_ALLERGY', isIntentOnly: true };
     }
@@ -145,21 +171,22 @@ export class NlpHandler {
     // 7. Change name: "Mi nombre es Carlos Benitez", "cambiar mi nombre a..."
     if (/\bnombre\b|\bme\s+llamo\b/i.test(clean) && !clean.includes('contacto') && !clean.includes('familiar') && !clean.includes('emergencia')) {
       const m = raw.match(
-        /(?:mi\s+nombre(?:\s+completo)?\s+(?:correcto\s+)?(?:es|:)|(?:en\s+realidad\s+)?me\s+llamo|(?:cambiar|corregir|actualizar)\s+(?:mi\s+)?nombre(?:\s+completo)?\s+a|el\s+nombre\s+correcto\s+es)\s*[:]?\s*(.+)/i
+        /(?:nombre(?:\s+completo)?|me\s+llamo)\b(?:\s+(?:correcto|es|a|de|en\s+realidad|por))*\s*[:]?\s*([\p{L}\s]{3,})/iu
       );
-      const value = (m ? m[1] : '').replace(/[.!]+$/, '').trim();
-      if (value.length >= 3) return { intent: 'CHANGE_NAME', value, isIntentOnly: false };
-      if (/\b(cambiar|corregir|actualizar|editar)\b/i.test(clean)) {
+      const val = (m ? m[1] : '').replace(/[.!]+$/, '').trim();
+      const isVerbOnly = /^(cambiar|corregir|actualizar|editar|poner|modificar)\s*$/i.test(val);
+      if (val.length >= 3 && !isVerbOnly) return { intent: 'CHANGE_NAME', value: val, isIntentOnly: false };
+      if (/\b(cambiar|corregir|actualizar|editar|modificar)\b/i.test(clean)) {
         return { intent: 'CHANGE_NAME', isIntentOnly: true };
       }
     }
 
-    // 8. Change CI: "Mi cédula es 3500200", "cédula correcta 4892310"
-    if (/\bc[eé]dula\b/i.test(clean) && !clean.includes('foto')) {
-      const m = raw.match(/c[eé]dula(?:\s+es|\s+correcta\s+es)?\s*[:]?\s*(\d[\d.\-\s]{4,14}\d)/i);
+    // 8. Change CI: "Mi cédula es 3500200", "cédula correcta 4892310", "cambiar cedula a 1234567"
+    if (/\bc[eé]dula\b|\bci\b/i.test(clean) && !clean.includes('foto')) {
+      const m = raw.match(/(?:c[eé]dula|ci|documento)\b.*?\b(\d[\d.\-\s]{4,14}\d)/i);
       const value = m ? m[1].replace(/[^\d]/g, '') : '';
       if (value.length >= 5) return { intent: 'CHANGE_CI', value, isIntentOnly: false };
-      if (/\b(cambiar|corregir|actualizar|editar)\b/i.test(clean)) {
+      if (/\b(cambiar|corregir|actualizar|editar|modificar|nueva)\b/i.test(clean)) {
         return { intent: 'CHANGE_CI', isIntentOnly: true };
       }
     }

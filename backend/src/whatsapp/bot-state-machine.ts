@@ -18,6 +18,7 @@ import { AiPromptService, PromptScope } from '../services/ai-prompt.service';
 import { MedicationReminderService, ReminderDraft, toNum } from '../services/medication-reminder.service';
 import { EmailService } from '../services/email.service';
 import { NlpHandler } from './nlp-handler';
+import { IntentRouter, nowInParaguay, refineInterpretation, nameMatches } from './intent-router';
 import { whatsappBot } from './baileys.client';
 import { config } from '../config';
 import bcrypt from 'bcryptjs';
@@ -34,6 +35,8 @@ export interface InboundMessage {
    *  ilegible, cortado, o el servicio falló) — sin esto, un `body` vacío se lee
    *  igual que un silencio real y el bot responde como si fuera un saludo. */
   audioTranscriptionFailed?: boolean;
+  /** Re-despacho interno del intérprete de intención (ya interpretado → no volver a llamar a la IA). */
+  routed?: boolean;
 }
 
 export interface BotResponse {
@@ -78,7 +81,8 @@ async function askNiro(
       ? ' DATO IMPORTANTE (no lo contradigas): Bio-Pass SÍ permite, por WhatsApp (opción 5 del menú), ' +
         'programar *recordatorios de toma de medicación* ("cada X horas" o a horas fijas) y *recordatorios de turnos / citas médicas*. ' +
         'NO reserva la cita con el consultorio: solo le avisa al titular antes. ' +
-        'El titular puede preguntar "¿qué cita tengo?", "¿cuál es mi próxima toma?", "¿qué estoy tomando?" y el sistema le responde con sus datos reales.'
+        'El titular puede preguntar "¿qué cita tengo?", "¿cuál es mi próxima toma?", "¿qué estoy tomando?" y el sistema le responde con sus datos reales. ' +
+        'NUNCA digas que Bio-Pass no maneja citas, turnos o recordatorios. Si pregunta por sus citas, decile que escriba "¿tengo alguna cita pendiente?".'
       : ' DATO IMPORTANTE (no lo contradigas): además de la ficha médica de emergencia por QR y de guardar medicamentos/recetas/estudios, ' +
         'Bio-Pass —una vez que la persona se registra— permite programar por WhatsApp *recordatorios de toma de medicación* y *recordatorios de turnos / citas médicas* ' +
         '(no reserva la cita con el consultorio, solo avisa antes). Si preguntan por esto, confirmá que sí y sugerí registrarse (menos de 3 minutos).';
@@ -265,7 +269,7 @@ const MID_FLOW_STATES = new Set([
   'STEP7_PIN', 'STEP7B_RECOVERY', 'STEP8_PAYMENT',
   'ACTIVE_UPLOAD_MED', 'ACTIVE_UPLOAD_RX', 'ACTIVE_UPLOAD_STUDY', 'ACTIVE_RX_CONFIRM', 'ACTIVE_ASK_CATEGORY',
   'ACTIVE_LINK_PHONE', 'ACTIVE_FREE_UPDATE',
-  'ACTIVE_REMINDER', 'ACTIVE_REMIND_NAME', 'ACTIVE_REMIND_SCHED', 'ACTIVE_REMIND_LAST',
+  'ACTIVE_REMIND_NAME', 'ACTIVE_REMIND_SCHED', 'ACTIVE_REMIND_LAST',
   'ACTIVE_REMIND_DOSE', 'ACTIVE_REMIND_WHEN', 'ACTIVE_REMIND_LEAD', 'ACTIVE_REMIND_CONFIRM',
   'ACTIVE_REMIND_EDIT_PICK',
 ]);
@@ -540,7 +544,22 @@ export class BotStateMachine {
     const awaitingTimeoutChoice = !!timeoutTempData._timeoutPromptShown;
     let forceRestartFromTimeout = false;
 
-    if (isMidFlowState && !awaitingTimeoutChoice && lastInteractionAt && now.getTime() - lastInteractionAt.getTime() > IDLE_TIMEOUT_MS) {
+    // El cartel sale SOLO si el mensaje es un saludo suelto ("hola", "buenas").
+    // Antes salía con CUALQUIER mensaje tras 5 min — se tragaba pedidos concretos
+    // ("pasame si tengo alguna cita pendiente" → "¡Hola de nuevo! ¿seguir o empezar
+    // de nuevo?"), fotos de recetas que nunca se guardaban, y "gracias". Un pedido
+    // o una respuesta real se procesa directo: el intérprete de intención decide
+    // si responde el paso pendiente o es algo nuevo.
+    const isGreetingOnly = !!cleanText && isSmallTalk(cleanText) && !/graci|aguyj/.test(norm(cleanText));
+    if (
+      isMidFlowState &&
+      !msg.routed &&
+      !msg.mediaBuffer &&
+      isGreetingOnly &&
+      !awaitingTimeoutChoice &&
+      lastInteractionAt &&
+      now.getTime() - lastInteractionAt.getTime() > IDLE_TIMEOUT_MS
+    ) {
       await updateState(state, { _timeoutPromptShown: true });
       return {
         replyText:
@@ -562,7 +581,7 @@ export class BotStateMachine {
     }
 
     if (isMidFlowState && awaitingTimeoutChoice) {
-      if (isAffirmative(cleanText) || isSmallTalk(cleanText) || isAck(cleanText)) {
+      if (/^1$/.test(cleanText.trim()) || (isAffirmative(cleanText) && !isAck(cleanText))) {
         // "Seguir donde quedé" — persistido de una (no alcanza con mutar el
         // objeto en memoria: si no se guarda acá, el flag queda "true" en la
         // base y el PRÓXIMO mensaje real vuelve a caer en este mismo cartel).
@@ -1849,7 +1868,7 @@ export class BotStateMachine {
             `*[4]* 📁 Ver mi *perfil médico*\n` +
             `*[5]* ⏰ *Recordatorios* de medicación y *turnos*\n` +
             `*[6]* 🏷️ Descargar Kit de Stickers (3x3 cm) y QR\n` +
-            `*[7]* ✏️ Modificar datos de emergencia / alergias\n` +
+            `*[7]* ✏️ Modificar datos de mi perfil (contacto, dirección, etc.)\n` +
             `*[8]* 💬 Hablar con soporte\n\n` +
             `🔔 _Escribí *NOTIFICACIONES* para activar alertas push en tu celular._\n` +
             `_Respondé con el número, mandá una foto/PDF, o un audio._`,
@@ -1861,7 +1880,7 @@ export class BotStateMachine {
             `*[4]* 📁 Ahecha che *perfil médico*\n` +
             `*[5]* ⏰ *Momandu'a* pohã reheve\n` +
             `*[6]* 🏷️ Kit Stickers (3x3 cm) ha QR\n` +
-            `*[7]* ✏️ Emoambue datos de emergencia / alergia\n` +
+            `*[7]* ✏️ Emoambue datos de perfil (contacto, óga renda, etc.)\n` +
             `*[8]* 💬 Soporte ndive\n\n` +
             `🔔 _Ehai *NOTIFICACIONES* rehóvo emyendy hag̃ua alertas push._\n` +
             `_Embohovái papapy reheve, emondo ta'anga/PDF, térã ñe'ẽ._`
@@ -2144,8 +2163,306 @@ export class BotStateMachine {
         return Array.from(new Set(nums)).sort();
       };
 
+      // =====================================================================
+      // INTÉRPRETE DE INTENCIÓN (IA) — ver intent-router.ts.
+      // Corre ANTES de las reglas de cada sub-modo: la IA ve el mensaje junto con
+      // lo que el bot está esperando y decide si es la respuesta a ese paso o un
+      // pedido nuevo ("¿tengo cita pendiente?" en medio de armar un recordatorio).
+      // Lo que ejecuta es código determinístico con datos reales de la base. Si la
+      // IA no responde, sigue el motor de reglas de siempre.
+      // =====================================================================
+      const lowerFirst = (s: string) => s.charAt(0).toLowerCase() + s.slice(1);
+      // Sub-modos sin datos a medio cargar: si la persona pide otra cosa, se sale solo.
+      const SOFT_MODES = new Set(['ACTIVE_MEMBER', 'ACTIVE_REMINDER', 'ACTIVE_UPLOAD_MED', 'ACTIVE_UPLOAD_RX', 'ACTIVE_UPLOAD_STUDY', 'ACTIVE_EDIT_MENU', 'ACTIVE_FREE_UPDATE']);
+      const hardPending = !SOFT_MODES.has(subMode);
+      const pendingNote = (): string =>
+        hardPending
+          ? `\n\n_${tr(
+              `(Tenés algo a medias: ${lowerFirst(pendingStepLabel(subMode, lang))}. Respondé para seguir, o escribí *CANCELAR* para dejarlo.)`,
+              `(Oĩ mba'e rejapo mbyte: ${lowerFirst(pendingStepLabel(subMode, lang))}. Ehai *CANCELAR* rehejávo.)`
+            )}_`
+          : '';
+      const leaveSoftMode = async () => {
+        if (!hardPending && subMode !== 'ACTIVE_MEMBER') await updateState('ACTIVE_MEMBER', { rdraft: null, _timeoutPromptShown: false });
+      };
+      const redispatch = async (toState: string, body: string): Promise<BotResponse> => {
+        await updateState(toState, { rdraft: null, pendingUpload: null, pendingDelete: null, _timeoutPromptShown: false });
+        return BotStateMachine.handleMessage({ ...msg, body, routed: true });
+      };
+      const listForUser = () =>
+        prisma.medicationReminder.findMany({
+          where: { userId: user!.id, OR: [{ NOT: { kind: 'APPOINTMENT' } }, { whenAt: { gte: new Date() } }] },
+          orderBy: { createdAt: 'asc' },
+          select: {
+            id: true, kind: true, scheduleKind: true, medication: true, dose: true, times: true,
+            intervalHours: true, nextDoseAt: true, whenAt: true, endsAt: true, active: true,
+          },
+        });
+
+      // Confirmación de un borrado pedido en lenguaje natural ("borrá el turno del Dr. X").
+      if (state === 'ACTIVE_CONFIRM_DELETE' && !msg.mediaBuffer) {
+        const pd = getTempData().pendingDelete as { ids: string[]; label: string } | undefined;
+        if (pd?.ids?.length && isAffirmative(cleanText)) {
+          const { count } = await prisma.medicationReminder.deleteMany({ where: { userId: user.id, id: { in: pd.ids } } });
+          await updateState('ACTIVE_REMINDER', { pendingDelete: null, rdraft: null });
+          const rest = await listForUser();
+          return {
+            replyText:
+              `🗑️ ${count ? tr(`Listo, borré ${pd.label}.`, `Oĩma, aipe'a ${pd.label}.`) : tr('Ya no estaba guardado.', 'Ndaipóri.')}\n\n` +
+              (rest.length ? `⏰ *${tr('Te quedan', 'Opyta')}:*\n${MedicationReminderService.format(rest)}` : tr('_No te quedan recordatorios ni turnos._', "_Ndaipóri momandu'a._")),
+          };
+        }
+        await updateState('ACTIVE_MEMBER', { pendingDelete: null });
+        if (!pd?.ids?.length || isNegative(cleanText) || isAck(cleanText)) {
+          return { replyText: tr('👍 No borré nada.', "👍 Nda'ipe'ái mba'eve.") };
+        }
+        // Otra cosa → se procesa como mensaje nuevo desde el menú.
+        return BotStateMachine.handleMessage({ ...msg, routed: false });
+      }
+
+      // Saludo suelto ("hola", "buenas tardes"): sin IA. Con algo a medias, se lo
+      // recuerda; si no, menú.
+      if (!msg.mediaBuffer && isSmallTalk(cleanText) && !/graci|aguyj/.test(norm(cleanText)) && !['ACTIVE_REMIND_CONFIRM', 'ACTIVE_RX_CONFIRM'].includes(subMode)) {
+        if (hardPending) return { replyText: `👋 ${tr('¡Hola!', "Mba'éichapa!")}` + pendingNote() };
+        await leaveSoftMode();
+        return { replyText: activeMenu() };
+      }
+
+      // "gracias" / "ok" sueltos: sin IA (respuesta inmediata), sin tocar el paso pendiente.
+      if (!msg.mediaBuffer && subMode !== 'ACTIVE_REMIND_CONFIRM' && subMode !== 'ACTIVE_RX_CONFIRM' && /graci|aguyj/.test(norm(cleanText)) && isAck(cleanText)) {
+        return {
+          replyText:
+            tr('¡De nada! 🙂', "Ndaipóri mba'eve! 🙂") +
+            (hardPending ? pendingNote() : `\n_${tr('Cualquier cosa, escribime o mandame un audio.', 'Ehai chéve rehejávo.')}_`),
+        };
+      }
+
+      // Respuesta corta a una pregunta pendiente ("dale", "nada", "cada 8 horas",
+      // "1 comprimido", "Losartán", un email) → directo al paso, sin IA: es
+      // instantáneo y no hay riesgo de que se lea como otro pedido y se pierda el borrador.
+      const shortStepAnswer =
+        hardPending &&
+        cleanText.split(/\s+/).length <= 3 &&
+        !/[?¿]/.test(cleanText) &&
+        !/\b(cita|turno|consulta|recordatorio|borr\w*|elimin\w*|cancel\w*|sal[ií]r?|menu|perfil|error|olvid\w*|equivoqu\w*|tengo|hay|ayuda|soporte)\b/.test(norm(cleanText));
+
+      if (!msg.routed && !msg.mediaBuffer && cleanText && !shortStepAnswer && IntentRouter.enabled) {
+        const ctxRows = await listForUser();
+        const stepKey = Object.keys(REMIND_STATE).find((k) => REMIND_STATE[k] === subMode);
+        const ctxDraft: Partial<ReminderDraft> = getTempData().rdraft || {};
+        const stepDesc = (() => {
+          switch (subMode) {
+            case 'ACTIVE_MEMBER':
+              return 'Menú principal, sin ninguna pregunta pendiente. Opciones: [1] cargar medicamento [2] cargar receta [3] cargar estudio [4] ver perfil médico [5] recordatorios y turnos [6] stickers y QR [7] modificar datos [8] soporte.';
+            case 'ACTIVE_REMINDER':
+              return 'Submenú de recordatorios y turnos (ya le mostró su lista). Puede dictar un recordatorio o turno nuevo, o escribir "borrar N", "pausar N", "activar N", "editar N".';
+            case 'ACTIVE_REMIND_CONFIRM':
+              return `Pregunta pendiente: confirmar si guarda este recordatorio — [1] Sí, guardar / [2] No.\n${MedicationReminderService.describeDraft(ctxDraft)}`;
+            case 'ACTIVE_REMIND_EDIT_PICK':
+              return 'Editando un recordatorio: pregunta qué campo cambiar (responde con un número).';
+            case 'ACTIVE_UPLOAD_MED':
+              return 'Cargar medicamento: espera una foto del medicamento o que escriba nombre + dosis + frecuencia (ej: "Losartán 50 mg 1 vez al día").';
+            case 'ACTIVE_UPLOAD_RX':
+              return 'Cargar receta: espera la foto o PDF de la receta.';
+            case 'ACTIVE_UPLOAD_STUDY':
+              return 'Cargar estudio: espera la foto o PDF del estudio.';
+            case 'ACTIVE_RX_CONFIRM':
+              return 'Pregunta pendiente: ¿agrega los medicamentos leídos de la receta a su medicación actual? [1] Sí / [2] No.';
+            case 'ACTIVE_ASK_CATEGORY':
+              return 'Mandó un archivo. Pregunta pendiente: ¿es [1] un medicamento, [2] una receta o [3] un estudio? (o que fue un error)';
+            case 'ACTIVE_LINK_PHONE':
+              return 'Pregunta pendiente: que escriba su número de teléfono completo con código de país.';
+            case 'ACTIVE_EDIT_MENU':
+              return 'Menú de modificar datos: [1] contacto de emergencia [2] correo [3] dirección [4] alergias [5] condiciones médicas [6] nombre o cédula [7] grupo sanguíneo [8] otro cambio. Si dice qué dato cambiar, es ANSWER_CURRENT_STEP.';
+            case 'ACTIVE_FREE_UPDATE':
+              return 'Espera que diga qué dato de su perfil quiere cambiar y el valor nuevo (eso es ANSWER_CURRENT_STEP).';
+            default:
+              if (stepKey) return `Armando un recordatorio. Pregunta pendiente: "${remindQuestion(stepKey, ctxDraft)}"\nBorrador: ${MedicationReminderService.describeDraft(ctxDraft)}`;
+              return `Modificando datos del perfil: ${pendingStepLabel(subMode, lang)} (si manda el dato nuevo, es ANSWER_CURRENT_STEP).`;
+          }
+        })();
+        const ctxList = MedicationReminderService.format(ctxRows).split('\n').filter(Boolean);
+        const itRaw = await IntentRouter.interpret(cleanText, { step: stepDesc, reminders: ctxList });
+        const it = itRaw ? refineInterpretation(itRaw, cleanText, { inUploadMed: subMode === 'ACTIVE_UPLOAD_MED' }) : null;
+
+        if (it) {
+          switch (it.intent) {
+            case 'QUERY_APPOINTMENTS': {
+              await leaveSoftMode();
+              return { replyText: (await MedicationReminderService.upcomingAppointmentsText(user.id, it.dateFilter)) + pendingNote() };
+            }
+            case 'QUERY_REMINDERS': {
+              await leaveSoftMode();
+              return {
+                replyText:
+                  (ctxRows.length
+                    ? `⏰ *${tr('Tus recordatorios y turnos', "Nde momandu'a ha turno")}:*\n\n${MedicationReminderService.format(ctxRows)}\n\n` +
+                      tr('_Para borrar uno decime cuál (ej: "borrá el 2"). Para agregar, dictámelo._', '_Ehai "borrar N" rehe\'ávo._')
+                    : tr('_No tenés recordatorios ni turnos guardados. Decime cuál querés agendar._', "_Ndaipóri momandu'a._")) + pendingNote(),
+              };
+            }
+            case 'QUERY_MEDS':
+            case 'MARK_TAKEN':
+            case 'FIND_DOCUMENT':
+            case 'STOP_MED': {
+              if (hardPending) break; // el sub-flujo guiado ya contesta consultas sin perder el borrador
+              return redispatch('ACTIVE_MEMBER', cleanText);
+            }
+            case 'CREATE_APPOINTMENT': {
+              const a = it.appointment;
+              const nowD = new Date();
+              const d: Partial<ReminderDraft> = {
+                kind: 'APPOINTMENT',
+                medication: a.description ? a.description.charAt(0).toLocaleUpperCase('es') + a.description.slice(1) : 'Consulta médica',
+                ...(a.leadMinutes ? { leadMinutes: a.leadMinutes } : {}),
+              };
+              let pastWarning = false;
+              const pyNow = nowInParaguay(nowD);
+              if (a.date && a.time) {
+                const w = MedicationReminderService.localDateTime(a.date, a.time);
+                if (w && w.getTime() > nowD.getTime()) d.whenAt = w.toISOString();
+                else pastWarning = true;
+              } else if (a.time) {
+                const todayAt = MedicationReminderService.localDateTime(pyNow.today, a.time);
+                const w = todayAt && todayAt.getTime() > nowD.getTime() ? todayAt : MedicationReminderService.localDateTime(pyNow.tomorrow, a.time);
+                if (w) d.whenAt = w.toISOString();
+              } else if (a.date) {
+                if (a.date >= pyNow.today) d.whenPendingDate = a.date;
+                else pastWarning = true;
+              }
+              if (!d.whenAt && d.whenPendingDate) {
+                await updateState('ACTIVE_REMIND_WHEN', { rdraft: d, _timeoutPromptShown: false });
+                const [, mo, dd] = d.whenPendingDate.split('-');
+                return { replyText: `🩺 *${d.medication}*\n📅 ${tr(`Anotado el *${dd}/${mo}*. ¿A qué hora es?`, `*${dd}/${mo}*. Mba'e aravópa?`)} _(ej: "14:30", "3 de la tarde")_` };
+              }
+              const res = await advanceRemind(d);
+              return pastWarning
+                ? { ...res, replyText: tr('⚠️ Esa fecha y hora ya pasó.\n\n', '⚠️ Upe ára ohasáma.\n\n') + res.replyText }
+                : res;
+            }
+            case 'CREATE_MED_REMINDER': {
+              const m = it.med;
+              const d: Partial<ReminderDraft> = { kind: 'MED', leadMinutes: 10, dose: m.dose ?? null };
+              if (m.name) d.medication = m.name;
+              if (m.times.length) {
+                d.scheduleKind = 'CLOCK';
+                d.times = m.times;
+              } else if (m.intervalHours) {
+                d.scheduleKind = 'INTERVAL';
+                d.intervalHours = m.intervalHours;
+                d.times = [];
+                if (m.lastTakenMinutesAgo !== null) d.anchorAt = new Date(Date.now() - m.lastTakenMinutesAgo * 60_000).toISOString();
+              }
+              if (m.durationDays) d.endsAt = new Date(Date.now() + m.durationDays * 86_400_000).toISOString();
+              return advanceRemind(d);
+            }
+            case 'DELETE_REMINDER': {
+              const tg = it.target;
+              let picked = ctxRows;
+              if (tg.scope === 'MEDS') picked = ctxRows.filter((r) => r.kind !== 'APPOINTMENT');
+              else if (tg.scope === 'APPOINTMENTS') picked = ctxRows.filter((r) => r.kind === 'APPOINTMENT');
+              else if (tg.scope !== 'ALL') {
+                if (tg.index && ctxRows[tg.index - 1]) picked = [ctxRows[tg.index - 1]];
+                else if (tg.name) {
+                  picked = ctxRows.filter((r) => nameMatches(tg.name!, r.medication));
+                  // "borrá el turno" / "borrá la cita" sin nombre reconocible y hay UNO solo → ese.
+                  if (!picked.length && /\b(turno|cita|consulta)\b/.test(norm(cleanText))) {
+                    const appts = ctxRows.filter((r) => r.kind === 'APPOINTMENT');
+                    if (appts.length === 1) picked = appts;
+                  }
+                } else picked = [];
+              }
+              if (!picked.length) {
+                await updateState('ACTIVE_REMINDER', { rdraft: null });
+                return {
+                  replyText: ctxRows.length
+                    ? `${tr('😕 No encontré cuál querés borrar. Estos son los que tenés:', '😕 Ndajuhúi. Kóva nde momandu\'a:')}\n\n${MedicationReminderService.format(ctxRows)}\n\n_${tr('Escribí "borrar N" con el número.', 'Ehai "borrar N".')}_`
+                    : tr('No tenés recordatorios ni turnos guardados.', "Ndaipóri momandu'a."),
+                };
+              }
+              if (picked.length > 1 && !tg.scope) {
+                await updateState('ACTIVE_REMINDER', { rdraft: null });
+                const idxs = picked.map((p) => ctxRows.indexOf(p) + 1);
+                return {
+                  replyText: `${tr('Encontré varios. ¿Cuál borro?', 'Heta ajuhu. Mávapa aipe\'a?')}\n\n${MedicationReminderService.format(ctxRows).split('\n').filter((_, i) => idxs.includes(i + 1)).join('\n')}\n\n_${tr('Escribí "borrar N" con el número.', 'Ehai "borrar N".')}_`,
+                };
+              }
+              const label = picked.length === 1 ? `*${picked[0].medication}*` : tr(`${picked.length} recordatorios/turnos`, `${picked.length} momandu'a`);
+              await updateState('ACTIVE_CONFIRM_DELETE', { pendingDelete: { ids: picked.map((p) => p.id), label }, rdraft: null });
+              return {
+                replyText:
+                  `🗑️ ${tr(`¿Borro ${label}?`, `¿Aipe'a ${label}?`)}\n` +
+                  (picked.length > 1 ? `\n${MedicationReminderService.format(picked)}\n` : '') +
+                  `\n*[1]* ${tr('Sí, borrar', "Heẽ")}   *[2]* ${tr('No', 'Nahániri')}`,
+              };
+            }
+            case 'CANCEL': {
+              await updateState('ACTIVE_MEMBER', { rdraft: null, pendingUpload: null, pendingRxMeds: null, pendingDelete: null, _timeoutPromptShown: false });
+              return {
+                replyText:
+                  (subMode === 'ACTIVE_MEMBER' ? '👍 ' + tr('Dale.', 'Néi.') : '👍 ' + tr('Listo, lo dejé — no guardé nada.', "Oĩma, nda'aguardái mba'eve.")) +
+                  `\n\n_${tr('¿Qué más necesitás? Decímelo directamente, mandame un audio, o escribí *MENU*.', 'Mba\'e reikotevẽ? Ehai *MENU*.')}_`,
+              };
+            }
+            case 'THANKS':
+              return {
+                replyText:
+                  tr('¡De nada! 🙂', "Ndaipóri mba'eve! 🙂") +
+                  (hardPending ? pendingNote() : `\n_${tr('Cualquier cosa, escribime o mandame un audio.', 'Ehai chéve rehejávo.')}_`),
+              };
+            case 'GREETING':
+              if (hardPending) {
+                return { replyText: `👋 ${tr('¡Hola!', "Mba'éichapa!")}` + pendingNote() };
+              }
+              await leaveSoftMode();
+              return { replyText: activeMenu() };
+            case 'MENU':
+              await updateState('ACTIVE_MEMBER', { rdraft: null, pendingUpload: null, pendingDelete: null, _timeoutPromptShown: false });
+              return { replyText: activeMenu() };
+            case 'VIEW_PROFILE':
+              return redispatch('ACTIVE_MEMBER', '4');
+            case 'UPLOAD_MED':
+              return it.hasDetails ? redispatch('ACTIVE_UPLOAD_MED', cleanText) : redispatch('ACTIVE_MEMBER', '1');
+            case 'UPLOAD_RX':
+              return redispatch('ACTIVE_MEMBER', '2');
+            case 'UPLOAD_STUDY':
+              return redispatch('ACTIVE_MEMBER', '3');
+            case 'STICKERS':
+              return redispatch('ACTIVE_MEMBER', '6');
+            case 'SUPPORT':
+              return redispatch('ACTIVE_MEMBER', '8');
+            case 'NOTIFICATIONS':
+              return redispatch('ACTIVE_MEMBER', 'NOTIFICACIONES');
+            case 'LINK_PHONE':
+              return redispatch('ACTIVE_MEMBER', 'VINCULAR');
+            case 'EDIT_PROFILE':
+              if (subMode.startsWith('ACTIVE_EDIT_') || subMode === 'ACTIVE_FREE_UPDATE') break; // ya está en ese flujo
+              return it.hasDetails ? redispatch('ACTIVE_MEMBER', cleanText) : redispatch('ACTIVE_MEMBER', '7');
+            case 'HEALTH_QUESTION':
+            case 'OTHER': {
+              if (hardPending) break;
+              await leaveSoftMode();
+              const ai = await askNiro(cleanText, { name: user.fullName || undefined, scope: 'MIEMBRO_ACTIVO' });
+              if (ai) return { replyText: ai + tr('\n\n_Escribí *MENU* para ver las opciones._', '\n\n_Ehai *MENU*._') };
+              return { replyText: activeMenu() };
+            }
+            case 'ANSWER_CURRENT_STEP':
+            default:
+              break;
+          }
+        }
+      }
+
+      // Un número de menú (1–8) estando en "cargar medicamento/receta/estudio" es
+      // elegir otra opción del menú, no el nombre de un fármaco ("3" → "no entendí
+      // el medicamento" dos veces seguidas, visto en producción).
+      if (['ACTIVE_UPLOAD_MED', 'ACTIVE_UPLOAD_RX', 'ACTIVE_UPLOAD_STUDY'].includes(subMode) && !msg.mediaBuffer && /^[1-8]$/.test(cleanText)) {
+        await updateState('ACTIVE_MEMBER', { rdraft: null });
+        return BotStateMachine.handleMessage({ ...msg, routed: true });
+      }
+
       // Salir de un sub-modo de carga → cierre lindo según el contexto.
-      if (subMode !== 'ACTIVE_MEMBER' && /^(listo|menu|men[uú]|0|salir|volver|cancelar|terminar)$/i.test(cleanText)) {
+      if (subMode !== 'ACTIVE_MEMBER' && /^(listo|menu|men[uú]|0|sal[ií]r?|volver|cancelar|terminar)$/i.test(cleanText.replace(/[.!¡]+/g, '').trim())) {
         const wantsMenu = /^(menu|men[uú]|0)$/i.test(cleanText);
         await updateState('ACTIVE_MEMBER', { rdraft: null });
         if (wantsMenu) return { replyText: activeMenu() };
@@ -2920,10 +3237,10 @@ export class BotStateMachine {
             draft.scheduleKind === 'INTERVAL'
               ? `Te aviso ${MedicationReminderService.leadLabel(draft.leadMinutes ?? 10)} antes y a la hora. Cuando la tomes escribí *YA TOMÉ* y recalculo la próxima.${dur}`
               : `Te aviso ${MedicationReminderService.leadLabel(draft.leadMinutes ?? 10)} antes y a la hora, todos los días.${dur}`;
-          const apptLead = draft.leadMinutes ?? 30;
+          const apptLead = draft.leadMinutes ?? 60;
           const how =
             draft.kind === 'APPOINTMENT'
-              ? apptLead !== 10
+              ? apptLead > 10
                 ? `Te aviso ${MedicationReminderService.leadLabel(apptLead)} antes, y de nuevo 10 minutos antes.`
                 : `Te aviso ${MedicationReminderService.leadLabel(apptLead)} antes.`
               : howMed;
@@ -2948,33 +3265,20 @@ export class BotStateMachine {
           where: { userId: user.id },
           orderBy: { isPrimary: 'desc' },
         });
-        let condStr = 'Ninguna declarada';
-        try {
-          const arr = user.emergencyConditions ? JSON.parse(user.emergencyConditions) : [];
-          if (Array.isArray(arr) && arr.length) condStr = arr.join(', ');
-        } catch {
-          if (user.emergencyConditions) condStr = user.emergencyConditions;
-        }
 
         return (
           `✏️ *Modificación de Datos de Perfil*\n\n` +
           `¿Qué dato querés modificar?\n\n` +
           `*[1]* 👥 *Contacto de Emergencia*\n` +
-          `   _Actual: ${contact ? `${contact.fullName} (${contact.phoneNumber})` : 'Sin asignar'}_\n` +
+          (contact ? `   _Actual: ${contact.fullName} (${contact.phoneNumber})_\n` : '') +
           `*[2]* 📧 *Correo Electrónico*\n` +
-          `   _Actual: ${user.email || 'Sin asignar'}_\n` +
           `*[3]* 📍 *Dirección / Domicilio*\n` +
-          `   _Actual: ${user.address || 'Sin asignar'}_\n` +
           `*[4]* ⚠️ *Alergias Severas*\n` +
-          `   _Actual: ${user.severeAllergies || 'Ninguna declarada'}_\n` +
           `*[5]* 🩺 *Condiciones Médicas*\n` +
-          `   _Actual: ${condStr}_\n` +
-          `*[6]* 👤 *Nombre o Cédula*\n` +
-          `   _Actual: ${user.fullName || 'Sin registrar'} · CI: ${user.ciNumber || 'Sin registrar'}_\n` +
+          `*[6]* 👤 *Nombre Completo o Cédula*\n` +
           `*[7]* 🩸 *Grupo Sanguíneo*\n` +
-          `   _Actual: ${user.bloodType || 'Sin registrar'}_\n` +
           `*[8]* ✍️ *Otro cambio libre*\n\n` +
-          `👉 *Elegí un número (1 al 8)* o escribí/mandá un audio con lo que querés cambiar.\n` +
+          `👉 *Elegí una opción (1 al 8)* o decime directamente qué querés cambiar (también podés mandar un audio).\n` +
           `_Escribí *SALIR* para volver al menú principal._`
         );
       };
@@ -3919,7 +4223,7 @@ export class BotStateMachine {
       }
       if (
         cleanText === '7' ||
-        /^(7|editar|modificar|modificar datos|cambiar datos|datos de emergencia|actualizar datos|editar perfil|modificar perfil|cambiar perfil)$/i.test(norm(cleanText))
+        /^(7|editar|modificar|modificar perfil|cambiar perfil|actualizar perfil|editar datos|modificar datos|cambiar datos)$/i.test(norm(cleanText))
       ) {
         await updateState('ACTIVE_EDIT_MENU', {});
         return { replyText: await getEditMenuText() };
@@ -4024,6 +4328,14 @@ export class BotStateMachine {
       // Heurística y procesamiento de lenguaje natural para actualización de perfil
       const profileResult = await handleProfileUpdate(cleanText, true);
       if (profileResult) return profileResult;
+
+      // Última red antes de la IA general: una pregunta por citas/turnos se contesta
+      // con los datos reales. La IA general, con el prompt guardado en /admin, llegó
+      // a responder "No manejamos citas médicas" a "¿tengo alguna cita pendiente hoy?".
+      if (/\b(citas?|turnos?|consultas?)\b/.test(norm(cleanText)) && !/\d{1,2}[:h.]\d{2}|a\s+las?\s+\d/.test(norm(cleanText))) {
+        const dayF = /\bhoy\b/.test(norm(cleanText)) ? 'today' : /\bmanana\b/.test(norm(cleanText)) && !/de\s+la\s+manana/.test(norm(cleanText)) ? 'tomorrow' : null;
+        return { replyText: await MedicationReminderService.upcomingAppointmentsText(user.id, dayF) };
+      }
 
       {
         const ai = await askNiro(cleanText, { name: user.fullName || undefined, scope: 'MIEMBRO_ACTIVO' });

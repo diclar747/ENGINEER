@@ -5,10 +5,27 @@ const db: { user: any; reminders: any[] } = { user: { currentMedications: null }
 vi.mock('../database/prisma', () => ({
   prisma: {
     user: { findUnique: async () => db.user },
-    medicationReminder: { findMany: async () => db.reminders, update: async () => ({}) },
+    medicationReminder: {
+      findMany: async () => db.reminders,
+      update: async ({ where, data }: any) => {
+        const row = db.reminders.find((r) => r.id === where.id);
+        if (row) Object.assign(row, data);
+        return row || {};
+      },
+    },
   },
 }));
-vi.mock('../whatsapp/baileys.client', () => ({ whatsappBot: { getStatus: () => ({ connected: false }), sendMessage: vi.fn() } }));
+const bot = vi.hoisted(() => ({ connected: false, sent: [] as string[] }));
+vi.mock('../whatsapp/baileys.client', () => ({
+  whatsappBot: {
+    getStatus: () => ({ connected: bot.connected }),
+    sendMessage: async (_to: string, text: string) => {
+      bot.sent.push(text);
+      return true;
+    },
+  },
+}));
+vi.mock('../services/push.service', () => ({ PushService: { notify: vi.fn() } }));
 vi.mock('../services/niro.service', () => ({ NiroService: { enabled: false, extractFields: vi.fn() } }));
 
 import { MedicationReminderService, parseTreatmentEnd } from '../services/medication-reminder.service';
@@ -233,7 +250,7 @@ describe('answerQuery — consulta de turnos/medicación (no debe caer en "carga
     ];
     const r = await MedicationReminderService.answerQuery('u1', 'tengo alguna cita medica reservada?');
     expect(r).toBeTruthy();
-    expect(r).toMatch(/próximo turno/i);
+    expect(r).toMatch(/citas pendientes/i);
     expect(r).toMatch(/Cardiólogo/);
   });
 
@@ -244,7 +261,7 @@ describe('answerQuery — consulta de turnos/medicación (no debe caer en "carga
     ];
     const r = await MedicationReminderService.answerQuery('u1', 'que cita tengo regitrado');
     expect(r).toMatch(/Doctor Kodak/);
-    expect(r).toMatch(/2 horas antes/); // leadMinutes 10 → se normaliza a 120
+    expect(r).toMatch(/10 minutos antes/); // se respeta la anticipación guardada (antes decía "2 horas" mintiendo)
   });
 
   it('"quiero registrar una cita con el cardiólogo mañana 9:00" → NO lo trata como consulta (deja pasar a registrar)', async () => {
@@ -260,7 +277,7 @@ describe('answerQuery — consulta de turnos/medicación (no debe caer en "carga
     ];
     const r = await MedicationReminderService.answerQuery('u1', 'quiero saber si tengo una cita');
     expect(r).toMatch(/Doctor Kodak/);
-    expect(r).toMatch(/próximo turno/i);
+    expect(r).toMatch(/citas pendientes/i);
   });
 
   it('"necesito saber si tengo cita" y "quiero ver si tengo cita agendada" → responden el turno', async () => {
@@ -277,7 +294,7 @@ describe('answerQuery — consulta de turnos/medicación (no debe caer en "carga
     db.reminders = [];
     const r = await MedicationReminderService.answerQuery('u1', 'tenes alguna cita agendada para mi?');
     expect(r).toBeTruthy();
-    expect(r).toMatch(/no tenés turnos/i);
+    expect(r).toMatch(/no tenés citas pendientes/i);
   });
 
   it('"que remedio tengo que tomar?" → no devuelve null', async () => {
@@ -385,12 +402,89 @@ describe('draftNextStep', () => {
       MedicationReminderService.draftNextStep({ kind: 'MED', medication: 'x', scheduleKind: 'CLOCK', times: ['08:00'], dose: null })
     ).toBe('');
   });
-  it('APPOINTMENT: nombre → cuándo → anticipación', () => {
+  it('APPOINTMENT: nombre → cuándo → (anticipación por defecto 1 h, no se pregunta)', () => {
     expect(MedicationReminderService.draftNextStep({ kind: 'APPOINTMENT' })).toBe('name');
     expect(MedicationReminderService.draftNextStep({ kind: 'APPOINTMENT', medication: 'Cardiólogo' })).toBe('when');
-    expect(MedicationReminderService.draftNextStep({ kind: 'APPOINTMENT', medication: 'Cardiólogo', whenAt: new Date().toISOString() })).toBe('lead');
+    const d: any = { kind: 'APPOINTMENT', medication: 'Cardiólogo', whenAt: new Date().toISOString() };
+    expect(MedicationReminderService.draftNextStep(d)).toBe('');
+    expect(d.leadMinutes).toBe(60);
     expect(
       MedicationReminderService.draftNextStep({ kind: 'APPOINTMENT', medication: 'Cardiólogo', whenAt: new Date().toISOString(), leadMinutes: 60 })
     ).toBe('');
+  });
+});
+
+describe('localDateTime — hora de Paraguay (UTC-3 permanente)', () => {
+  it('"2026-09-15" "10:00" → 13:00 UTC', () => {
+    expect(MedicationReminderService.localDateTime('2026-09-15', '10:00')!.toISOString()).toBe('2026-09-15T13:00:00.000Z');
+  });
+  it('en julio también es UTC-3 (sin horario de invierno desde 2024)', () => {
+    expect(MedicationReminderService.localDateTime('2026-07-01', '23:30')!.toISOString()).toBe('2026-07-02T02:30:00.000Z');
+  });
+  it('fecha u hora inválida → null', () => {
+    expect(MedicationReminderService.localDateTime('15/09/2026', '10:00')).toBeNull();
+    expect(MedicationReminderService.localDateTime('2026-09-15', '9')).toBeNull();
+  });
+});
+
+describe('upcomingAppointmentsText', () => {
+  it('lista TODAS las citas pendientes con su anticipación real', async () => {
+    db.reminders = [
+      { kind: 'APPOINTMENT', medication: 'Consulta con el Dr. Cerdán', whenAt: new Date(Date.now() + 20 * 3600_000), leadMinutes: 10, active: true },
+      { kind: 'APPOINTMENT', medication: 'Cardiólogo', whenAt: new Date(Date.now() + 5 * 86400_000), leadMinutes: 60, active: true },
+    ];
+    const r = await MedicationReminderService.upcomingAppointmentsText('u1');
+    expect(r).toMatch(/citas pendientes \(2\)/);
+    expect(r).toMatch(/Cerdán[\s\S]*10 minutos antes[\s\S]*Cardiólogo[\s\S]*1 hora antes/);
+  });
+  it('filtro "hoy" sin citas hoy → lo dice y muestra la próxima', async () => {
+    db.reminders = [{ kind: 'APPOINTMENT', medication: 'Cardiólogo', whenAt: new Date(Date.now() + 3 * 86400_000), leadMinutes: 60, active: true }];
+    const r = await MedicationReminderService.upcomingAppointmentsText('u1', 'today');
+    expect(r).toMatch(/Hoy no tenés citas/);
+    expect(r).toMatch(/Cardiólogo/);
+  });
+});
+
+describe('tick — avisos de turno (sin spam)', () => {
+  const appt = (over: any) => ({
+    id: 'ap1', kind: 'APPOINTMENT', medication: 'Consulta médica', leadMinutes: 60, secondLeadMinutes: 10,
+    lastSentSlot: null, active: true, endsAt: null, scheduleKind: 'CLOCK', times: '[]',
+    user: { id: 'u1', phoneNumber: '595981000000', whatsappJid: null, status: 'ACTIVE', language: 'ES' },
+    ...over,
+  });
+
+  it('aviso principal + segundo aviso: cada uno UNA sola vez aunque el tick corra cada minuto', async () => {
+    bot.connected = true;
+    bot.sent = [];
+    db.reminders = [appt({ whenAt: new Date(Date.now() + 59 * 60_000) })];
+    await MedicationReminderService.tick();
+    await MedicationReminderService.tick();
+    expect(bot.sent.length).toBe(1); // aviso de 1 h
+    expect(bot.sent[0]).toMatch(/Faltan:\* 59 min/);
+    // pasan 50 minutos: faltan 9 → segundo aviso
+    db.reminders[0].whenAt = new Date(Date.now() + 9 * 60_000);
+    for (let i = 0; i < 5; i++) await MedicationReminderService.tick();
+    expect(bot.sent.length).toBe(2);
+    expect(db.reminders[0].lastSentSlot).toBe('LEAD,LEAD2');
+    bot.connected = false;
+  });
+
+  it('turno cargado a último momento (faltan 5 min) → un solo mensaje, no dos', async () => {
+    bot.connected = true;
+    bot.sent = [];
+    db.reminders = [appt({ whenAt: new Date(Date.now() + 5 * 60_000) })];
+    for (let i = 0; i < 4; i++) await MedicationReminderService.tick();
+    expect(bot.sent.length).toBe(1);
+    expect(bot.sent[0]).toMatch(/Faltan:\* 5 min/);
+    bot.connected = false;
+  });
+
+  it('slot viejo "LEAD" (formato anterior) → manda solo el segundo aviso, una vez', async () => {
+    bot.connected = true;
+    bot.sent = [];
+    db.reminders = [appt({ whenAt: new Date(Date.now() + 8 * 60_000), lastSentSlot: 'LEAD' })];
+    for (let i = 0; i < 4; i++) await MedicationReminderService.tick();
+    expect(bot.sent.length).toBe(1);
+    bot.connected = false;
   });
 });

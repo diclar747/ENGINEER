@@ -75,7 +75,7 @@ const DOSE_RE =
  *  "con 30 minutos de anticipación") — NO son la hora del turno. Se sacan antes de
  *  buscar horarios. */
 const LEAD_PHRASE_RE =
-  /\b(?:avisa(?:me|r)?\s+)?(?:con\s+)?\d{1,3}\s*(?:h|hs|hrs|horas?|min|minutos?|d[ií]as?)\s*(?:antes|de\s+anticipaci[oó]n|de\s+antelaci[oó]n)\b|\bel\s+d[ií]a\s+(?:antes|anterior)\b/gi;
+  /\b(?:av[ií]sa(?:me|r)?\s+)?(?:con\s+)?(?:\d{1,3}|un[ao]?|dos|tres|media)\s*(?:h|hs|hrs|horas?|min|minutos?|d[ií]as?)\s*(?:antes|de\s+anticipaci[oó]n|de\s+antelaci[oó]n)?\b|\b(?:el|un)\s+d[ií]a\s+(?:antes|anterior)\b/gi;
 
 /** Extrae horarios de un texto: "08:00", "8", "8hs", "8 am", "20:30", "a las 9". */
 function extractTimes(text: string): string[] {
@@ -193,8 +193,13 @@ function todayAtLocal(hh: number, mm: number, ref: Date = new Date()): Date {
 }
 
 const LEAD_LABEL: Record<number, string> = {
+  10: '10 minutos',
+  15: '15 minutos',
+  20: '20 minutos',
   30: 'media hora',
+  45: '45 minutos',
   60: '1 hora',
+  90: '1 hora y media',
   120: '2 horas',
   180: '3 horas',
   1440: '1 día',
@@ -210,10 +215,10 @@ function intervalLabel(hours: number): string {
   }
   return `cada ${hours} h`;
 }
-/** Anticipación efectiva para un TURNO: nunca menos de 30 min (el default 10 del
- *  schema es para el pre-aviso de medicación, no para una consulta médica). */
+/** Anticipación efectiva para un TURNO: por defecto 1 hora (60 min) si no se especificó.
+ *  Si el usuario indicó minutos específicos (ej: 20 min, 15 min, 30 min, 10 min), se respeta exactamente. */
 function apptLead(mins?: number | null): number {
-  return mins && mins >= 30 ? mins : 120;
+  return mins && mins >= 1 ? mins : 60;
 }
 
 const TZ = () => config.timezone || 'America/Asuncion';
@@ -251,7 +256,94 @@ function fmtNextDose(d: Date, from: Date = new Date()): string {
   return `${d.toLocaleDateString('es-PY', { timeZone: TZ(), day: '2-digit', month: '2-digit' })} ~${hh}`;
 }
 
+/** Diferencia (ms) entre la hora de pared de `tz` y UTC en ese instante — sin offsets fijos a mano. */
+function tzOffsetMs(at: Date, tz: string): number {
+  const p = Object.fromEntries(
+    new Intl.DateTimeFormat('en-US', {
+      timeZone: tz,
+      hourCycle: 'h23',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+    })
+      .formatToParts(at)
+      .map((x) => [x.type, x.value])
+  );
+  return Date.UTC(+p.year, +p.month - 1, +p.day, +p.hour, +p.minute, +p.second) - Math.floor(at.getTime() / 1000) * 1000;
+}
+
+/** "mañana (martes 15/09) a las 10:00" · "hoy a las 16:00" · "jueves 24/09 a las 09:30". */
+function fmtApptDay(d: Date, from: Date = new Date()): string {
+  const dayOf = (x: Date) => x.toLocaleDateString('en-CA', { timeZone: TZ() });
+  const hh = fmtHHMM(d);
+  const dayName = d.toLocaleDateString('es-PY', { timeZone: TZ(), weekday: 'long', day: '2-digit', month: '2-digit' });
+  if (dayOf(d) === dayOf(from)) return `hoy (${dayName}) a las ${hh}`;
+  if (dayOf(d) === dayOf(new Date(from.getTime() + 86_400_000))) return `mañana (${dayName}) a las ${hh}`;
+  return `${dayName} a las ${hh}`;
+}
+
 export class MedicationReminderService {
+  /** Fecha local de Paraguay ("2026-09-15" + "10:00") → instante real. null si es inválida. */
+  static localDateTime(dateKey: string, hhmm: string): Date | null {
+    const dm = dateKey.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    const tm = hhmm.match(/^(\d{2}):(\d{2})$/);
+    if (!dm || !tm) return null;
+    const wall = Date.UTC(+dm[1], +dm[2] - 1, +dm[3], +tm[1], +tm[2]);
+    const out = new Date(wall - tzOffsetMs(new Date(wall), TZ()));
+    return isNaN(out.getTime()) ? null : out;
+  }
+
+  /**
+   * Respuesta a "¿tengo alguna cita pendiente?": TODOS los turnos que todavía no
+   * pasaron (nunca uno vencido), del más cercano al más lejano, en hora de Paraguay.
+   * `dateFilter`: 'today' | 'tomorrow' | 'YYYY-MM-DD' | null.
+   */
+  static async upcomingAppointmentsText(userId: string, dateFilter: string | null = null): Promise<string> {
+    const now = new Date();
+    const appts = await prisma.medicationReminder.findMany({
+      where: { userId, kind: 'APPOINTMENT', whenAt: { gt: now } },
+      orderBy: { whenAt: 'asc' },
+      select: { medication: true, whenAt: true, leadMinutes: true, active: true },
+    });
+    const line = (r: (typeof appts)[number], i: number) => {
+      const w = new Date(r.whenAt!);
+      return (
+        `*${i + 1}.* 🩺 *${r.medication}*\n` +
+        `      📅 ${fmtApptDay(w, now)} · faltan ${humanIn(w.getTime() - now.getTime())}\n` +
+        (r.active ? `      🔔 te aviso ${leadLabel(apptLead(r.leadMinutes))} antes` : `      🔕 aviso pausado`)
+      );
+    };
+    if (!appts.length) {
+      return (
+        `✅ *No tenés citas pendientes.*\n\n` +
+        `_Si querés agendar una, decime por ejemplo: "cita con el cardiólogo el jueves a las 10"._`
+      );
+    }
+    const key =
+      dateFilter === 'today'
+        ? now.toLocaleDateString('en-CA', { timeZone: TZ() })
+        : dateFilter === 'tomorrow'
+          ? new Date(now.getTime() + 86_400_000).toLocaleDateString('en-CA', { timeZone: TZ() })
+          : dateFilter;
+    if (key) {
+      const sameDay = appts.filter((r) => new Date(r.whenAt!).toLocaleDateString('en-CA', { timeZone: TZ() }) === key);
+      const todayKey = now.toLocaleDateString('en-CA', { timeZone: TZ() });
+      const tomorrowKey = new Date(now.getTime() + 86_400_000).toLocaleDateString('en-CA', { timeZone: TZ() });
+      const dayWord = key === todayKey ? 'hoy' : key === tomorrowKey ? 'mañana' : `el ${key.split('-').reverse().slice(0, 2).join('/')}`;
+      if (!sameDay.length) {
+        return (
+          `📅 *${dayWord.charAt(0).toUpperCase() + dayWord.slice(1)} no tenés citas.*\n\n` +
+          `Tu próxima cita:\n${line(appts[0], 0)}`
+        );
+      }
+      return `🩺 *Tus citas ${dayWord === 'hoy' || dayWord === 'mañana' ? `de ${dayWord}` : `del ${dayWord.slice(3)}`} (${sameDay.length}):*\n\n${sameDay.map(line).join('\n\n')}`;
+    }
+    return `🩺 *Tus citas pendientes (${appts.length}):*\n\n${appts.map(line).join('\n\n')}`;
+  }
+
   /**
    * Parsea "Losartán 50 mg 08:00 y 20:00" → { medication, dose, times }.
    * También acepta frecuencia relativa: "Ibuprofeno cada 8 horas" (reparte
@@ -319,6 +411,9 @@ export class MedicationReminderService {
     const dName = dNameM && months.some((m) => dNameM[2].startsWith(m.slice(0, 4))) ? dNameM : null;
     const weekdays = ['domingo', 'lunes', 'martes', 'mi[eé]rcoles', 'jueves', 'viernes', 's[aá]bado'];
 
+    // Distinguir "mañana" (día siguiente) de "de la mañana" / "por la mañana" (horario matutino).
+    const tWithoutMorning = t.replace(/\b(?:de|por|en|a)\s+la\s+(?:mañana|manana)\b/g, ' ');
+
     if (dm) {
       d = parseInt(dm[1], 10);
       mo = parseInt(dm[2], 10);
@@ -327,18 +422,21 @@ export class MedicationReminderService {
       d = parseInt(dName[1], 10);
       const mi = months.findIndex((m) => dName[2].startsWith(m.slice(0, 4)));
       if (mi >= 0) mo = (mi === 10 ? 9 : mi > 10 ? mi - 1 : mi) + 1; // "setiembre" alias
-    } else if (/\bmañana\b/.test(t)) {
-      const dt = new Date();
-      dt.setDate(dt.getDate() + 1);
-      const p = dt.toLocaleDateString('en-CA', { timeZone: tz }).split('-').map(Number);
+    } else if (/\bhoy\b/.test(t)) {
+      const p = new Date().toLocaleDateString('en-CA', { timeZone: tz }).split('-').map(Number);
       [y, mo, d] = p;
-    } else if (/\bpasado\s+mañana\b/.test(t)) {
+    } else if (/\bpasado\s+(?:mañana|manana)\b/.test(tWithoutMorning)) {
       const dt = new Date();
       dt.setDate(dt.getDate() + 2);
       const p = dt.toLocaleDateString('en-CA', { timeZone: tz }).split('-').map(Number);
       [y, mo, d] = p;
-    } else if (!/\bhoy\b/.test(t)) {
-      const wi = weekdays.findIndex((w) => new RegExp(`\\b${w}\\b`).test(t));
+    } else if (/\b(?:mañana|manana)\b/.test(tWithoutMorning)) {
+      const dt = new Date();
+      dt.setDate(dt.getDate() + 1);
+      const p = dt.toLocaleDateString('en-CA', { timeZone: tz }).split('-').map(Number);
+      [y, mo, d] = p;
+    } else {
+      const wi = weekdays.findIndex((w) => new RegExp(`\\b${w}\\b`).test(tWithoutMorning));
       if (wi >= 0) {
         const today = new Date().toLocaleString('en-US', { timeZone: tz, weekday: 'long' });
         const map: Record<string, number> = { Sunday: 0, Monday: 1, Tuesday: 2, Wednesday: 3, Thursday: 4, Friday: 5, Saturday: 6 };
@@ -363,21 +461,35 @@ export class MedicationReminderService {
     // los audios traen mucho relleno y restar deja fragmentos.
     const SPEC = 'cardi[oó]log\\w*|traumat[oó]log\\w*|dermat[oó]log\\w*|pediatr\\w*|ginec[oó]log\\w*|neur[oó]log\\w*|ur[oó]log\\w*|oftalm[oó]log\\w*|odont[oó]log\\w*|kinesi[oó]log\\w*|nutricionist\\w*|psic[oó]log\\w*|psiquiatr\\w*|end[oó]crin[oó]log\\w*|otorrino\\w*|dentista|especialista';
     const STOP = '(?=\\s*(?:\\b(?:y|a|el|la|los|las|para|mañana|manana|hoy|pasado|el\\s+d[ií]a|a\\s+las?|el\\s+lunes|el\\s+martes|el\\s+mi[eé]rcoles|el\\s+jueves|el\\s+viernes|el\\s+s[aá]bado|el\\s+domingo)\\b|[,.;]|$))';
+    const DATE_WORDS = /^(hoy|mañana|manana|pasado|lunes|martes|mi[eé]rcoles|jueves|viernes|s[aá]bado|domingo|el|la|a|a\s+las?)$/i;
     let note = '';
-    let mm2 =
-      t.match(new RegExp(`\\bcon\\s+(?:el|la|mi|un[ao]?|dr\\.?|dra\\.?)?\\s*(doctor|doctora|dr|dra|m[eé]dico|${SPEC})\\.?\\s+([a-záéíóúñ][a-záéíóúñ .'-]{1,40}?)${STOP}`, 'i')) ||
-      t.match(new RegExp(`\\b(doctor|doctora|dr|dra)\\.?\\s+([a-záéíóúñ][a-záéíóúñ .'-]{1,40}?)${STOP}`, 'i'));
-    if (mm2) {
-      const who = mm2[2].trim().replace(/\s+(y|a|para|el|la)$/i, '');
-      note = `Consulta con el Dr. ${who.charAt(0).toLocaleUpperCase('es')}${who.slice(1)}`;
+
+    // 1. Doctor con nombre/apellido: "con el Dr. Kodak", "con la Dra. Gomez"
+    const mmDr = t.match(new RegExp(`\\b(?:con\\s+(?:el|la|mi|un[ao]?)?\\s*)?(doctor|doctora|dr|dra)\\.?\\s+([a-záéíóúñ][a-záéíóúñ .'-]{1,30}?)${STOP}`, 'i'));
+    if (mmDr) {
+      const who = mmDr[2].trim();
+      if (!DATE_WORDS.test(who)) {
+        note = `Consulta con el Dr. ${who.charAt(0).toLocaleUpperCase('es')}${who.slice(1)}`;
+      }
     }
+
+    // 2. Especialista con o sin apellido: "con el dentista", "con el cardiólogo Pérez"
+    if (!note) {
+      const mmSpec = t.match(new RegExp(`\\b(?:con\\s+(?:el|la|mi|un[ao]?)?\\s*)?(${SPEC})(?:\\s+([a-záéíóúñ]{2,30}))?${STOP}`, 'i'));
+      if (mmSpec) {
+        const spec = mmSpec[1].charAt(0).toLocaleUpperCase('es') + mmSpec[1].slice(1).toLowerCase();
+        const docName = mmSpec[2] && !DATE_WORDS.test(mmSpec[2].trim()) ? mmSpec[2].trim() : '';
+        note = docName ? `${spec} (${docName.charAt(0).toUpperCase() + docName.slice(1)})` : spec;
+      }
+    }
+
+    // 3. Fallback genérico: "turno para control odontologico"
     if (!note) {
       const mm3 = t.match(new RegExp(`\\b(?:turno|cita|consulta|control|hora\\s+m[eé]dica)\\s+(?:m[eé]dic[ao]\\s+)?(?:con|de|para|del?)\\s+(?:el|la|mi|un[ao]?)?\\s*([a-záéíóúñ][a-záéíóúñ .'-]{2,40}?)${STOP}`, 'i'));
-      if (mm3) { const w = mm3[1].trim(); note = w.charAt(0).toLocaleUpperCase('es') + w.slice(1); }
-    }
-    if (!note) {
-      const mm4 = t.match(new RegExp(`\\b(${SPEC})\\b`, 'i'));
-      if (mm4) note = mm4[1].charAt(0).toLocaleUpperCase('es') + mm4[1].slice(1);
+      if (mm3) {
+        const w = mm3[1].trim();
+        if (!DATE_WORDS.test(w)) note = w.charAt(0).toLocaleUpperCase('es') + w.slice(1);
+      }
     }
     if (!note || note.replace(/[^\p{L}]/gu, '').length < 3) note = 'Consulta médica';
 
@@ -430,9 +542,10 @@ export class MedicationReminderService {
     const dm = t.match(/\b([0-3]?\d)\s*[\/.\-]\s*([01]?\d)(?:\s*[\/.\-]\s*(\d{2,4}))?\b/);
     const dNameM = t.match(/\b([0-3]?\d)\s+de\s+([a-z]+)/);
     const dName = dNameM && months.some((mo) => dNameM[2].startsWith(mo.slice(0, 4))) ? dNameM : null;
+    const tWithoutMorning = t.replace(/\b(?:de|por|en|a)\s+la\s+(?:mañana|manana)\b/g, ' ');
     const enN = t.match(/\ben\s+(\d{1,3})\s*d[ií]as?\b/);
-    const wIdx = weekdays.findIndex((w) => new RegExp(`\\b${w}\\b`).test(t));
-    const relWord = /\bpasado\s+manana\b/.test(t) ? 2 : /\bmanana\b/.test(t) ? 1 : /\bhoy\b/.test(t) ? 0 : null;
+    const wIdx = weekdays.findIndex((w) => new RegExp(`\\b${w}\\b`).test(tWithoutMorning));
+    const relWord = /\bhoy\b/.test(t) ? 0 : /\bpasado\s+manana\b/.test(tWithoutMorning) ? 2 : /\bmanana\b/.test(tWithoutMorning) ? 1 : null;
     const elD = t.match(/\bel\s+([0-3]?\d)\b(?!\s*[\/.\-:h])/);
     // Si hay CUALQUIER indicio de fecha, un número suelto NO es la hora.
     const hasDateHint = !!(dm || dName || enN || wIdx >= 0 || relWord !== null || elD);
@@ -462,7 +575,8 @@ export class MedicationReminderService {
     } else if (enN) {
       shiftFrom(+enN[1]); explicitDate = true;
     } else if (relWord !== null) {
-      shiftFrom(relWord); if (relWord === 0) explicitDate = false;
+      shiftFrom(relWord);
+      explicitDate = true;
     } else if (wIdx >= 0) {
       const enDay: Record<string, number> = { Sunday: 0, Monday: 1, Tuesday: 2, Wednesday: 3, Thursday: 4, Friday: 5, Saturday: 6 };
       const cur = enDay[new Date(from).toLocaleString('en-US', { timeZone: tz, weekday: 'long' })] ?? 0;
@@ -695,7 +809,7 @@ export class MedicationReminderService {
         // antes" (números escritos, muy comunes al hablar) no matcheaban NADA y el
         // pedido de anticipación se perdía en silencio.
         const lm = lo.match(
-          /\b(?:avisa\w*\s+(?:me\s+)?)?(un[ao]?s?|dos|tres|cuatro|cinco|seis|siete|ocho|nueve|diez|once|doce|trece|catorce|quince|dieci\w+|veinte|veinti\w+|treinta|cuarenta|media|\d+(?:[.,]\d+)?)\s*(hora|horas|hs?|min|minutos?|d[ií]as?)\s+antes\b/
+          /\b(?:av[ií]sa\w*\s+(?:me\s+)?)?(?:con\s+)?(un[ao]?s?|dos|tres|cuatro|cinco|seis|siete|ocho|nueve|diez|once|doce|trece|catorce|quince|dieci\w+|veinte|veinti\w+|treinta|cuarenta|media|\d+(?:[.,]\d+)?)\s*(hora|horas|hs?|min|minutos?|d[ií]as?)\s*(?:antes|de\s+anticipaci[oó]n|de\s+antelaci[oó]n)?\b/i
         );
         if (lm) {
           const n = lm[1] === 'media' ? 0.5 : toNum(lm[1]);
@@ -710,6 +824,9 @@ export class MedicationReminderService {
     // Nunca devuelve null: si no hay datos concretos, arranca un borrador vacío del
     // tipo detectado para que el diálogo guiado pregunte lo que falte.
     if (!draft.kind) draft.kind = draft.whenAt || /\b(cita|turno|consulta|hora\s+m[eé]dica)\b/i.test(raw) ? 'APPOINTMENT' : 'MED';
+    if (draft.kind === 'APPOINTMENT' && (draft.leadMinutes === undefined || draft.leadMinutes === null)) {
+      draft.leadMinutes = 60; // 1 hora antes por defecto
+    }
     return draft;
   }
 
@@ -718,7 +835,7 @@ export class MedicationReminderService {
     if (d.kind === 'APPOINTMENT') {
       if (!d.medication) return 'name';
       if (!d.whenAt) return 'when';
-      if (d.leadMinutes === undefined || d.leadMinutes === null) return 'lead';
+      if (d.leadMinutes === undefined || d.leadMinutes === null) d.leadMinutes = 60;
       return '';
     }
     if (!d.medication) return 'name';
@@ -758,7 +875,7 @@ export class MedicationReminderService {
   /** Persiste un borrador ya confirmado. Calcula `nextDoseAt` para INTERVAL. */
   static async createFromDraft(userId: string, d: Partial<ReminderDraft>) {
     if (d.kind === 'APPOINTMENT') {
-      const leadMinutes = d.leadMinutes ?? 30; // sin preferencia del usuario → 30 min por defecto
+      const leadMinutes = d.leadMinutes ?? 60; // sin preferencia del usuario → 60 min (1 hora) por defecto
       const created = await prisma.medicationReminder.create({
         data: {
           userId,
@@ -769,7 +886,7 @@ export class MedicationReminderService {
           leadMinutes,
           // Segundo aviso automático 10 min antes, además del principal — salvo que
           // el principal YA sea de 10 min (no mandar el mismo aviso dos veces).
-          secondLeadMinutes: leadMinutes !== 10 ? 10 : null,
+          secondLeadMinutes: leadMinutes > 10 ? 10 : null,
         },
       });
       if (created.whenAt) {
@@ -821,14 +938,14 @@ export class MedicationReminderService {
    */
   static async updateFromDraft(id: string, d: Partial<ReminderDraft>) {
     if (d.kind === 'APPOINTMENT') {
-      const leadMinutes = d.leadMinutes ?? 30;
+      const leadMinutes = d.leadMinutes ?? 60; // 60 min (1 hora) por defecto
       return prisma.medicationReminder.update({
         where: { id },
         data: {
           medication: this.cap((d.medication || 'Consulta médica').slice(0, 120)),
           whenAt: d.whenAt ? new Date(d.whenAt) : null,
           leadMinutes,
-          secondLeadMinutes: leadMinutes !== 10 ? 10 : null,
+          secondLeadMinutes: leadMinutes > 10 ? 10 : null,
           active: true,
           lastSentAt: null,
           lastSentSlot: null,
@@ -964,9 +1081,6 @@ export class MedicationReminderService {
     ]);
     const medList = parseMedications(meds?.currentMedications ?? null);
     const medReminders = reminders.filter((r) => r.kind === 'MED');
-    const appts = reminders
-      .filter((r) => r.kind === 'APPOINTMENT' && r.whenAt)
-      .sort((a, b) => new Date(a.whenAt!).getTime() - new Date(b.whenAt!).getTime());
     const now = new Date();
 
     // --- "ya tomé [X]" → re-anclar los INTERVAL ---
@@ -1023,9 +1137,8 @@ export class MedicationReminderService {
       // Estrictamente en el futuro — un turno que ya pasó no es "tu próximo turno"
       // aunque haya sido hace 5 minutos (antes toleraba hasta 1 hora de margen,
       // lo que hacía decir "tu próximo turno" de algo que ya había pasado hacía rato).
-      const nextAppt = appts.find((r) => new Date(r.whenAt!).getTime() > now.getTime());
-      if (!nextAppt) return '🩺 No tenés turnos agendados.';
-      return `🩺 *Tu próximo turno:*\n*${nextAppt.medication}*\n📅 ${fmtDateTime(new Date(nextAppt.whenAt!))}\nTe voy a avisar ${leadLabel(apptLead(nextAppt.leadMinutes))} antes.`;
+      const dayFilter = /\bpasado\s+manana\b/.test(t) ? null : /\bhoy\b/.test(t) ? 'today' : /\bmanana\b/.test(t) && !/\bde\s+la\s+manana\b/.test(t) ? 'tomorrow' : null;
+      return this.upcomingAppointmentsText(userId, dayFilter);
     }
 
     // --- "¿qué estoy tomando?" / "¿cómo se llama lo que tomo?" / "¿qué remedios tengo?" ---
@@ -1176,9 +1289,28 @@ export class MedicationReminderService {
         if (!r.whenAt) continue;
         const whenMs = new Date(r.whenAt).getTime();
         const dtLocal = fmtDateTime(new Date(r.whenAt));
+        // Avisos ya mandados de este turno, acumulados ("D-1,LEAD,LEAD2"). Antes se
+        // guardaba UNO solo y cada aviso pisaba al otro: con aviso principal (1 h) +
+        // segundo aviso (10 min), a partir de los 10 min antes el tick los mandaba
+        // alternados CADA MINUTO hasta la hora del turno (visto en producción el
+        // 14/09: 13 mensajes "Faltan 1 hora" / "Faltan 10 min" seguidos).
+        const sentTags = new Set((r.lastSentSlot || '').split(',').filter(Boolean));
+        const markSent = (...tags: string[]) => {
+          tags.forEach((x) => sentTags.add(x));
+          return prisma.medicationReminder.update({
+            where: { id: r.id },
+            data: { lastSentAt: new Date(), lastSentSlot: Array.from(sentTags).join(','), active: whenMs > nowMs },
+          });
+        };
+        const untilAppt = whenMs - nowMs;
+        const inGrace = untilAppt > -15 * 60_000;
+        const lead2 = r.secondLeadMinutes && r.secondLeadMinutes < lead ? r.secondLeadMinutes : null;
+        // "Faltan" = lo que falta DE VERDAD (si el turno se cargó tarde o el bot
+        // estuvo desconectado, no decir "falta 1 hora" cuando faltan 5 minutos).
+        const faltan = untilAppt > 60_000 ? humanIn(untilAppt) : 'ya es la hora';
 
         // Cortesía 24 h antes (salvo que el aviso pedido ya sea de ~1 día).
-        if (lead < 1200 && r.lastSentSlot !== 'D-1' && r.lastSentSlot !== 'LEAD' && whenMs - nowMs <= 24 * 3600_000 && whenMs - nowMs > 24 * 3600_000 - 6 * 60_000) {
+        if (lead < 1200 && !sentTags.has('D-1') && !sentTags.has('LEAD') && !sentTags.has('LEAD2') && untilAppt <= 24 * 3600_000 && untilAppt > 24 * 3600_000 - 6 * 60_000) {
           const msg = gn
             ? `📅 *Momandu'a: turno* ko'ẽrõ\n\n🩺 *${r.medication}*\n🕒 ${dtLocal}\n\n_Ehecha nde pasaporte médico bio-pass.cnid.com.py_`
             : `📅 *Recordatorio: Turno médico mañana*\n\n🩺 *${r.medication}*\n🕒 *Fecha y hora:* ${dtLocal}\n\n_Tené a mano tus estudios y recetas en Bio-Pass._`;
@@ -1189,47 +1321,40 @@ export class MedicationReminderService {
             { tag: `reminder-${r.id}`, url: '/dashboard', requireInteraction: true }
           );
           if (await whatsappBot.sendMessage(target, msg)) {
-            await prisma.medicationReminder.update({ where: { id: r.id }, data: { lastSentAt: new Date(), lastSentSlot: 'D-1' } });
+            await markSent('D-1');
             sent++;
           }
           continue;
         }
+        const mainDue = untilAppt - lead * 60_000 <= 150_000 && inGrace;
+        const secondDue = !!lead2 && untilAppt - lead2 * 60_000 <= 150_000 && inGrace;
         // Aviso principal: `leadMinutes` antes (con tolerancia hasta la hora del turno).
-        const untilLead = whenMs - nowMs - lead * 60_000;
-        if (r.lastSentSlot !== 'LEAD' && untilLead <= 150_000 && whenMs - nowMs > -15 * 60_000) {
+        // Si para cuando sale ya tocaba también el segundo aviso, va UN solo mensaje.
+        if (!sentTags.has('LEAD') && !sentTags.has('LEAD2') && mainDue) {
           const msg = gn
-            ? `📅 *¡Turno ko'ág̃a!* — *${r.medication}*\n🕒 ${dtLocal}\n\n_Opáta ${leadLabel(lead)}._`
-            : `📅 *¡Tu turno médico es hoy!*\n\n🩺 *${r.medication}*\n🕒 *Hora:* ${dtLocal}\n⏱️ *Faltan:* ${leadLabel(lead)}. No faltes.\n\n_Tu médico puede escanear tu QR para ver tus antecedentes._`;
+            ? `📅 *Turno* — *${r.medication}*\n🕒 ${dtLocal}\n\n_${faltan}._`
+            : `📅 *Recordatorio de tu turno médico*\n\n🩺 *${r.medication}*\n🕒 *Cuándo:* ${fmtApptDay(new Date(r.whenAt))}\n⏱️ *Faltan:* ${faltan}. No faltes.\n\n_Tu médico puede escanear tu QR para ver tus antecedentes._`;
           PushService.notify(
             r.user.id,
-            `📅 Tu turno médico (en ${leadLabel(lead)})`,
+            `📅 Tu turno médico (faltan ${faltan})`,
             `Consulta: ${r.medication} · 🕒 ${dtLocal}. Abrí tu ficha médica.`,
             { tag: `reminder-${r.id}`, url: '/dashboard', requireInteraction: true }
           );
           if (await whatsappBot.sendMessage(target, msg)) {
-            await prisma.medicationReminder.update({
-              where: { id: r.id },
-              data: { lastSentAt: new Date(), lastSentSlot: 'LEAD', active: whenMs > nowMs },
-            });
+            await (secondDue ? markSent('LEAD', 'LEAD2') : markSent('LEAD'));
             sent++;
           }
         }
         // Segundo aviso automático (ej. 10 min antes), además del principal — mismo
-        // registro, otro offset (`secondLeadMinutes`, ver createFromDraft).
-        else if (r.secondLeadMinutes && r.lastSentSlot !== 'LEAD2') {
-          const untilLead2 = whenMs - nowMs - r.secondLeadMinutes * 60_000;
-          if (untilLead2 <= 150_000 && whenMs - nowMs > -15 * 60_000) {
-            const msg2 = gn
-              ? `📅 *Momandu'a: turno*\n\n*${r.medication}*\n🕒 ${dtLocal}`
-              : `📅 *Recordatorio: tu turno*\n\n*${r.medication}*\n🕒 ${dtLocal}\n\n_Faltan ${leadLabel(r.secondLeadMinutes)}. No faltes._`;
-            PushService.notify(r.user.id, '📅 Tu turno médico', msg2, { tag: `reminder-${r.id}-2`, url: '/dashboard', requireInteraction: true });
-            if (await whatsappBot.sendMessage(target, msg2)) {
-              await prisma.medicationReminder.update({
-                where: { id: r.id },
-                data: { lastSentAt: new Date(), lastSentSlot: 'LEAD2', active: whenMs > nowMs },
-              });
-              sent++;
-            }
+        // registro, otro offset (`secondLeadMinutes`, ver createFromDraft). Una sola vez.
+        else if (lead2 && !sentTags.has('LEAD2') && secondDue) {
+          const msg2 = gn
+            ? `📅 *Momandu'a: turno*\n\n*${r.medication}*\n🕒 ${dtLocal}`
+            : `📅 *Tu turno está por empezar*\n\n🩺 *${r.medication}*\n🕒 ${fmtApptDay(new Date(r.whenAt))}\n\n_Faltan ${faltan}. No faltes._`;
+          PushService.notify(r.user.id, '📅 Tu turno médico', msg2, { tag: `reminder-${r.id}-2`, url: '/dashboard', requireInteraction: true });
+          if (await whatsappBot.sendMessage(target, msg2)) {
+            await markSent('LEAD', 'LEAD2');
+            sent++;
           }
         }
         // Se desactiva a los 20 min de pasado (poco más que la ventana de gracia de
