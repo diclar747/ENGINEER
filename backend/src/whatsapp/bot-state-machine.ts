@@ -119,12 +119,21 @@ function isAffirmative(text: string): boolean {
   if (/^[\p{Emoji_Presentation}\p{Extended_Pictographic}\s]+$/u.test(raw) && /[\u{1F44D}\u{1F44C}✅\u{1F64C}]/u.test(raw)) {
     return true; // 👍 👌 ✅ 🙌 a secas
   }
+  // Una pregunta ("¿tengo turno?", "¿me decís si...?") nunca es una respuesta
+  // afirmativa a una confirmación — antes se colaba por palabras sueltas
+  // ("si", "vale", "bien") que también aparecen dentro de preguntas reales.
+  if (/[?¿]/.test(raw)) return false;
   const t = norm(raw);
   if (!t) return false;
   if (/^2\b/.test(t) || /\bno\b/.test(t)) return false;
   return (
     /^1\b/.test(t) ||
-    /\b(si|sisi|sip|sipi|sipe|dale|ok|oka|okey|okay|listo|correcto|correctos|correcta|correctas|confirmo|confirmar|confirmado|confirmados|continuar|continua|proceder|proseguir|acepto|aceptar|adelante|va|vale|bien|exacto|exactos|asi es|es correcto|son correctos|de acuerdo|deacuerdo|afirmativo|yes|claro|obvio|todo bien|esta bien)\b/.test(t)
+    // "si"/"sisi"/etc. SOLO cuentan como el "sí" afirmativo si abren la frase — en
+    // "necesito saber si tengo..." es la conjunción condicional, no una respuesta.
+    // Sin anclar al inicio, ese "si" del medio se leía como "sí, dale" y el bot
+    // contestaba "seguimos" en vez de la pregunta real que se le hizo.
+    /^(si|sisi|sip|sipi|sipe)\b/.test(t) ||
+    /\b(dale|ok|oka|okey|okay|listo|correcto|correctos|correcta|correctas|confirmo|confirmar|confirmado|confirmados|continuar|continua|proceder|proseguir|acepto|aceptar|adelante|va|vale|bien|exacto|exactos|asi es|es correcto|son correctos|de acuerdo|deacuerdo|afirmativo|yes|claro|obvio|todo bien|esta bien)\b/.test(t)
   );
 }
 
@@ -552,11 +561,10 @@ export class BotStateMachine {
 
     if (isMidFlowState && awaitingTimeoutChoice) {
       if (isAffirmative(cleanText) || isSmallTalk(cleanText) || isAck(cleanText)) {
-        // "Seguir donde quedé" — se limpia el flag (en memoria, para que el
-        // resto de este mismo request ya lo vea resuelto) y se le recuerda la
-        // pregunta pendiente sin reprocesar este mensaje como si fuera datos.
-        timeoutTempData._timeoutPromptShown = false;
-        user.onboardingData = JSON.stringify(timeoutTempData);
+        // "Seguir donde quedé" — persistido de una (no alcanza con mutar el
+        // objeto en memoria: si no se guarda acá, el flag queda "true" en la
+        // base y el PRÓXIMO mensaje real vuelve a caer en este mismo cartel).
+        await updateState(state, { _timeoutPromptShown: false });
         return {
           replyText:
             `👍 ${tr('Dale, seguimos.', "Néike, jasegi.", 'Beleza, vamos continuar.', "Sure, let's continue.")}\n\n📍 *${pendingStepLabel(state, lang)}*`,
@@ -568,11 +576,14 @@ export class BotStateMachine {
         forceRestartFromTimeout = true;
       } else {
         // Ni sí ni no: lo más probable es que ya esté respondiendo la
-        // pregunta pendiente directamente — no se lo interrumpe, se limpia el
-        // flag y se deja que el procesamiento normal de este mismo mensaje
-        // siga más abajo con sus datos intactos.
+        // pregunta pendiente directamente — no se lo interrumpe. Se limpia el
+        // flag en memoria (para que el resto de este mismo request lo vea
+        // resuelto) Y se persiste ya mismo, sin esperar — así, sea cual sea el
+        // camino que tome el resto del procesamiento (incluso uno que no
+        // vuelva a llamar a updateState), el próximo mensaje no cae de nuevo acá.
         timeoutTempData._timeoutPromptShown = false;
         user.onboardingData = JSON.stringify(timeoutTempData);
+        prisma.user.update({ where: { id: user.id }, data: { onboardingData: JSON.stringify(timeoutTempData) } }).catch(() => undefined);
       }
     }
 
