@@ -2458,9 +2458,15 @@ export class BotStateMachine {
           await updateState('ACTIVE_MEMBER', { rdraft: null });
           return BotStateMachine.handleMessage(msg);
         }
+        // Turnos que ya pasaron de fecha no se muestran más — no aportan nada verlos
+        // en la lista (no se puede "reactivar" algo que ya ocurrió). Medicación no
+        // se filtra por fecha: un recordatorio pausado sigue siendo relevante.
         const list = async () =>
           prisma.medicationReminder.findMany({
-            where: { userId: user!.id },
+            where: {
+              userId: user!.id,
+              OR: [{ NOT: { kind: 'APPOINTMENT' } }, { whenAt: { gte: new Date() } }],
+            },
             orderBy: { createdAt: 'asc' },
             select: {
               id: true, kind: true, scheduleKind: true, medication: true, dose: true, times: true,
