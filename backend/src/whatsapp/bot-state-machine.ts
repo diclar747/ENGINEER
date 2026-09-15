@@ -37,6 +37,9 @@ export interface InboundMessage {
   audioTranscriptionFailed?: boolean;
   /** Re-despacho interno del intérprete de intención (ya interpretado → no volver a llamar a la IA). */
   routed?: boolean;
+  /** Por dónde llegó: 'whatsapp' (el chat ES del dueño del número) o 'web' (asistente
+   *  público /registro, que NO verifica la titularidad del número → sin documentos). */
+  channel?: 'whatsapp' | 'web';
 }
 
 export interface BotResponse {
@@ -52,6 +55,8 @@ export interface BotResponse {
   /** Cuando es true el adjunto se manda ANTES del texto (p. ej. el QR de pago, para que
    *  "escaneá el QR de arriba" sea literal en el chat). Default: texto y después adjunto. */
   mediaFirst?: boolean;
+  /** Más adjuntos, enviados en orden DESPUÉS del texto y del adjunto principal (ej. todos los estudios). */
+  extraAttachments?: Array<NonNullable<BotResponse['mediaAttachment']>>;
 }
 
 
@@ -1874,7 +1879,8 @@ export class BotStateMachine {
             `*[6]* 🩺 *Citas y turnos médicos*\n` +
             `*[7]* 🏷️ Descargar Kit de Stickers (3x3 cm) y QR\n` +
             `*[8]* ✏️ Modificar datos de mi perfil (contacto, dirección, etc.)\n` +
-            `*[9]* 💬 Hablar con soporte\n\n` +
+            `*[9]* 📥 *Descargar todos mis documentos* (estudios y recetas)\n` +
+            `*[10]* 💬 Hablar con soporte\n\n` +
             `🔔 _Escribí *NOTIFICACIONES* para activar alertas push en tu celular._\n` +
             `_Respondé con el número, mandá una foto/PDF, o un audio._`,
           `👋 *Mba'éichapa, ${user!.fullName || 'Titular Bio-Pass'}*\n\n` +
@@ -1887,7 +1893,8 @@ export class BotStateMachine {
             `*[6]* 🩺 *Turno* médico\n` +
             `*[7]* 🏷️ Kit Stickers (3x3 cm) ha QR\n` +
             `*[8]* ✏️ Emoambue datos de perfil (contacto, óga renda, etc.)\n` +
-            `*[9]* 💬 Soporte ndive\n\n` +
+            `*[9]* 📥 Emboguejy opa che documento (estudio ha receta)\n` +
+            `*[10]* 💬 Soporte ndive\n\n` +
             `🔔 _Ehai *NOTIFICACIONES* rehóvo emyendy hag̃ua alertas push._\n` +
             `_Embohovái papapy reheve, emondo ta'anga/PDF, térã ñe'ẽ._`
         );
@@ -2227,6 +2234,117 @@ export class BotStateMachine {
       /** Submenú al que se vuelve después de guardar / cancelar algo de este tipo. */
       const reminderHome = (kind?: string) => (kind === 'APPOINTMENT' ? 'ACTIVE_APPOINTMENTS' : 'ACTIVE_REMINDER');
 
+
+      // ---- [9] Descargar documentos (estudios, evaluaciones y recetas) ----
+      // Manda los ARCHIVOS reales al chat (uno por mensaje), nunca links: los links de
+      // /uploads se abren sin sesión. Solo por WhatsApp — el asistente web (/registro)
+      // no verifica que quien escribe sea dueño del número, así que ahí se niega.
+      const DOC_MAX = 30;
+      const docKindOf = (name: string, buf: Buffer): { mimetype: string; ext: string; image: boolean } => {
+        const ext = (name.split('.').pop() || '').toLowerCase();
+        if (buf.subarray(0, 4).toString('latin1') === '%PDF' || ext === 'pdf') return { mimetype: 'application/pdf', ext: 'pdf', image: false };
+        if (buf[0] === 0x89 && buf[1] === 0x50) return { mimetype: 'image/png', ext: 'png', image: true };
+        if (buf.subarray(8, 12).toString('latin1') === 'WEBP') return { mimetype: 'image/webp', ext: 'webp', image: true };
+        if (ext === 'heic' || buf.subarray(4, 12).toString('latin1').startsWith('ftyphei')) return { mimetype: 'image/heic', ext: 'heic', image: false };
+        return { mimetype: 'image/jpeg', ext: 'jpg', image: true };
+      };
+      const sendDocuments = async (scope: 'ALL' | 'STUDIES' | 'PRESCRIPTIONS', term = ''): Promise<BotResponse> => {
+        if (msg.channel === 'web') {
+          return {
+            replyText: tr(
+              '🔒 *Por seguridad, tus estudios y recetas solo se envían al WhatsApp registrado en tu cuenta.*\n\nEscribime desde ese WhatsApp y elegí la opción *9*, o entrá a tu panel en la web con tu número y PIN.',
+              '🔒 Nde documento oñemondo WhatsApp-pe añoite. Ehai *9* WhatsApp-gui.'
+            ),
+          };
+        }
+        const where: any = { userId: user!.id };
+        if (scope === 'PRESCRIPTIONS') where.studyType = 'PRESCRIPTION';
+        if (scope === 'STUDIES') where.NOT = { studyType: 'PRESCRIPTION' };
+        let rows = await prisma.medicalStudy.findMany({ where, orderBy: [{ studyDate: 'desc' }, { createdAt: 'desc' }] });
+        const t = norm(term);
+        let notFoundNote = '';
+        if (t) {
+          // ocrRawText/aiSummary pueden estar cifrados at-rest → se filtra tras descifrar.
+          // Tolera tildes y errores de tipeo ("ecografia" ≈ "Ecografía abdominal").
+          const hits = rows.filter((s) =>
+            [s.title, ZeroKnowledgeSecurity.kmsDecrypt(s.aiSummary), ZeroKnowledgeSecurity.kmsDecrypt(s.ocrRawText)].some(
+              (x) => !!x && (norm(x).includes(t) || nameMatches(term, x))
+            )
+          );
+          if (hits.length) rows = hits;
+          else if (rows.length) notFoundNote = tr(`🔍 No encontré uno que diga *${term}*, así que te mando todos.\n\n`, `🔍 Ndajuhúi *${term}*.\n\n`);
+        }
+        const what =
+          scope === 'PRESCRIPTIONS' ? tr('recetas', 'receta') : scope === 'STUDIES' ? tr('estudios', 'estudio') : tr('estudios ni recetas', 'documento');
+        if (!rows.length) {
+          return {
+            replyText: tr(
+              `📂 No encontré ${what}${t ? ` sobre *${term}*` : ''} guardados en tu perfil.\n\n` +
+                `Podés cargarlos con *[2]* Cargar receta o *[3]* Cargar estudio, o mandame la foto o el PDF directo.`,
+              `📂 Ndajuhúi ${what}. Emombe'u *[2]* térã *[3]* rupive.`
+            ),
+          };
+        }
+        // Fecha sola guardada como medianoche UTC (cargas desde la web) → se muestra ese
+        // mismo día; convertida a Paraguay (UTC-3) caía el día anterior.
+        const dateOf = (s: (typeof rows)[number]) => {
+          const d = s.studyDate || s.createdAt;
+          const dateOnly = d.getUTCHours() === 0 && d.getUTCMinutes() === 0 && d.getUTCSeconds() === 0;
+          return d.toLocaleDateString('es-PY', { timeZone: dateOnly ? 'UTC' : config.timezone, day: '2-digit', month: '2-digit', year: 'numeric' });
+        };
+        const isRx = (s: (typeof rows)[number]) => s.studyType === 'PRESCRIPTION';
+        // Mismo orden que el listado: primero estudios, después recetas.
+        rows = [...rows.filter((s) => !isRx(s)), ...rows.filter(isRx)];
+        const toSend = rows.slice(0, DOC_MAX);
+        const attachments: NonNullable<BotResponse['extraAttachments']> = [];
+        const missing: string[] = [];
+        for (const s of toSend) {
+          const name = (s.fileUrl || '').split('/').pop() || '';
+          const buf = name ? await StorageService.getFile('medical_studies', name) : null;
+          if (!buf || !buf.length) {
+            missing.push(s.title);
+            continue;
+          }
+          const k = docKindOf(name, buf);
+          const label = `${isRx(s) ? '📄 Receta' : '🧪 Estudio'} · ${s.title} · ${dateOf(s)}`;
+          const safe = `${isRx(s) ? 'Receta' : 'Estudio'} ${s.title} ${dateOf(s).replace(/\//g, '-')}`.replace(/[^\p{L}\p{N}\s.-]/gu, '').replace(/\s+/g, ' ').trim().slice(0, 80);
+          attachments.push({ buffer: buf, mimetype: k.mimetype, filename: `${safe}.${k.ext}`, caption: label, kind: k.image ? 'image' : 'document' });
+        }
+        const studies = rows.filter((s) => !isRx(s));
+        const rxs = rows.filter(isRx);
+        const listBlock = (arr: typeof rows) => arr.slice(0, DOC_MAX).map((s, i) => `${i + 1}. ${s.title} — ${dateOf(s)}`).join('\n');
+        const header =
+          notFoundNote +
+          `📥 *${tr('Tus documentos médicos', 'Nde documento')}*${t && !notFoundNote ? ` — _${term}_` : ''}\n\n` +
+          (studies.length && scope !== 'PRESCRIPTIONS' ? `🧪 *${tr('Estudios y evaluaciones', 'Estudio')} (${studies.length}):*\n${listBlock(studies)}\n\n` : '') +
+          (rxs.length && scope !== 'STUDIES' ? `📄 *${tr('Recetas', 'Receta')} (${rxs.length}):*\n${listBlock(rxs)}\n\n` : '');
+        const footer = attachments.length
+          ? tr(
+              attachments.length === 1
+                ? `⬇️ Te lo mando acá abajo. Tocalo para abrirlo o guardarlo en tu teléfono.`
+                : `⬇️ Te mando los ${attachments.length} acá abajo, uno por mensaje. Tocá cada uno para abrirlo o guardarlo en tu teléfono.`,
+              `⬇️ Amondo ko'ápe.`
+            ) +
+            (rows.length > DOC_MAX ? tr(`\n\n_Tenés ${rows.length}: te mando los ${DOC_MAX} más recientes. Para otros, pedime uno puntual (ej: "mandame el estudio de sangre")._`, '') : '') +
+            (missing.length ? tr(`\n\n⚠️ _No encontré el archivo de: ${missing.join(', ')}. Volvé a cargarlo si lo necesitás._`, '') : '')
+          : tr('⚠️ No pude recuperar los archivos. Probá de nuevo en un rato o escribí a soporte.', '⚠️ Ndaikatúi.');
+        return { replyText: header + footer, extraAttachments: attachments };
+      };
+      /** "estudios" / "recetas" / todo, según lo que pidió. */
+      const docScopeFrom = (text: string): 'ALL' | 'STUDIES' | 'PRESCRIPTIONS' => {
+        const n = norm(text);
+        const rx = /\brecetas?\b/.test(n);
+        const st = /\b(estudios?|analisis|evaluaci\w*|laboratorio|resultados?|radiograf\w*|ecograf\w*|tomograf\w*|informes?|placas?|examen\w*)\b/.test(n);
+        return rx && !st ? 'PRESCRIPTIONS' : st && !rx ? 'STUDIES' : 'ALL';
+      };
+      /** Término puntual ("el estudio de sangre" → "sangre", "la ecografía" → "ecografía"); vacío si pidió todo. */
+      const docTermFrom = (text: string): string => {
+        const n = norm(text).replace(/[^\p{L}\p{N}\s]/gu, ' ');
+        if (/\b(todos?|todas?|completo|mis\s+documentos)\b/.test(n)) return '';
+        const GENERIC = /^(pasame|pasa|mandame|manda|enviame|envia|envieme|mostrame|mostra|dame|traeme|buscame|busca|descargar|descarga|quiero|necesito|podes|podrias|puedes|enviar|mandar|pasar|ver|por|favor|porfa|gracias|estudio|estudios|documento|documentos|receta|recetas|archivo|archivos|medico|medica|medicos|medicas|evaluacion|mis|los|las|del|de|la|el|mi|un|una|sobre|para|que|tengo|me|lo)$/;
+        return n.split(/\s+/).filter((w) => w.length >= 3 && !GENERIC.test(w)).join(' ').trim();
+      };
+
       // =====================================================================
       // INTÉRPRETE DE INTENCIÓN (IA) — ver intent-router.ts.
       // Corre ANTES de las reglas de cada sub-modo: la IA ve el mensaje junto con
@@ -2316,7 +2434,7 @@ export class BotStateMachine {
         const stepDesc = (() => {
           switch (subMode) {
             case 'ACTIVE_MEMBER':
-              return 'Menú principal, sin ninguna pregunta pendiente. Opciones: [1] cargar medicamento [2] cargar receta [3] cargar estudio [4] ver perfil médico [5] recordatorios de medicación [6] citas y turnos médicos [7] stickers y QR [8] modificar datos [9] soporte.';
+              return 'Menú principal, sin ninguna pregunta pendiente. Opciones: [1] cargar medicamento [2] cargar receta [3] cargar estudio [4] ver perfil médico [5] recordatorios de medicación [6] citas y turnos médicos [7] stickers y QR [8] modificar datos [9] descargar todos mis documentos (estudios y recetas) [10] soporte.';
             case 'ACTIVE_REMINDER':
               return 'Opción [5] RECORDATORIOS DE MEDICACIÓN (ya le mostró su lista de medicamentos con horario). Puede dictar un medicamento nuevo con su horario, o "borrar N", "pausar N", "activar N", "editar N" sobre esa lista. Las citas médicas son otra opción ([6]), pero si igual pide agendar una cita, es CREATE_APPOINTMENT.';
             case 'ACTIVE_APPOINTMENTS':
@@ -2398,8 +2516,14 @@ export class BotStateMachine {
               const namedMed2 = ctxRows.find((r) => r.kind !== 'APPOINTMENT' && (nameMatches(it.med.name || '', r.medication) || nameMatches(cleanText, r.medication)));
               return { replyText: (await MedicationReminderService.medicationOverviewText(user.id, namedMed2 ? namedMed2.medication : null)) + pendingNote() };
             }
+            case 'DOWNLOAD_DOCUMENTS':
+            case 'FIND_DOCUMENT': {
+              await leaveSoftMode();
+              const term = it.intent === 'FIND_DOCUMENT' ? docTermFrom(cleanText) : '';
+              const res = await sendDocuments(docScopeFrom(cleanText), term);
+              return { ...res, replyText: res.replyText + pendingNote() };
+            }
             case 'MARK_TAKEN':
-            case 'FIND_DOCUMENT':
             case 'STOP_MED': {
               // "ya no tomo la metformina" y tiene recordatorio → también se ofrece dejar de avisar.
               if (it.intent === 'STOP_MED' && !hardPending) {
@@ -2661,7 +2785,7 @@ export class BotStateMachine {
             case 'STICKERS':
               return redispatch('ACTIVE_MEMBER', '7');
             case 'SUPPORT':
-              return redispatch('ACTIVE_MEMBER', '9');
+              return redispatch('ACTIVE_MEMBER', '10');
             case 'NOTIFICATIONS':
               return redispatch('ACTIVE_MEMBER', 'NOTIFICACIONES');
             case 'LINK_PHONE':
@@ -2687,7 +2811,7 @@ export class BotStateMachine {
       // Un número de menú (1–8) estando en "cargar medicamento/receta/estudio" es
       // elegir otra opción del menú, no el nombre de un fármaco ("3" → "no entendí
       // el medicamento" dos veces seguidas, visto en producción).
-      if (['ACTIVE_UPLOAD_MED', 'ACTIVE_UPLOAD_RX', 'ACTIVE_UPLOAD_STUDY'].includes(subMode) && !msg.mediaBuffer && /^[1-9]$/.test(cleanText)) {
+      if (['ACTIVE_UPLOAD_MED', 'ACTIVE_UPLOAD_RX', 'ACTIVE_UPLOAD_STUDY'].includes(subMode) && !msg.mediaBuffer && /^([1-9]|10)$/.test(cleanText)) {
         await updateState('ACTIVE_MEMBER', { rdraft: null });
         return BotStateMachine.handleMessage({ ...msg, routed: true });
       }
@@ -3039,7 +3163,7 @@ export class BotStateMachine {
         const apptMode = subMode === 'ACTIVE_APPOINTMENTS';
         // Si el usuario tira otra opción del menú principal o "menu"/"perfil", salimos
         // del submenú y lo procesamos como si viniera del menú — no queda atascado.
-        if ((apptMode ? /^[1-57-9]$/ : /^[1-46-9]$/).test(cleanText) || /^(men[uú]|inicio|perfil|hola|buenas?)$/i.test(cleanText)) {
+        if ((apptMode ? /^([1-57-9]|10)$/ : /^([1-46-9]|10)$/).test(cleanText) || /^(men[uú]|inicio|perfil|hola|buenas?)$/i.test(cleanText)) {
           await updateState('ACTIVE_MEMBER', { rdraft: null });
           return BotStateMachine.handleMessage(msg);
         }
@@ -4438,8 +4562,15 @@ export class BotStateMachine {
         await updateState('ACTIVE_EDIT_MENU', {});
         return { replyText: await getEditMenuText() };
       }
+      // [9] Descargar todos mis documentos
       if (
         cleanText === '9' ||
+        /\b(descarg\w*|baj\w*)\b.{0,30}\b(documentos?|estudios?|recetas?|an[aá]lisis|todo)\b/.test(lc)
+      ) {
+        return sendDocuments(cleanText === '9' ? 'ALL' : docScopeFrom(cleanText), cleanText === '9' ? '' : docTermFrom(cleanText));
+      }
+      if (
+        cleanText === '10' ||
         lc.includes('soporte') ||
         /\b(hablar\s+con\s+(alguien|una\s+persona|un\s+humano|un\s+agente|un\s+asesor|atenci[oó]n)|atenci[oó]n\s+al\s+cliente|reclamo|queja|necesito\s+ayuda\s+de\s+(alguien|una\s+persona)|contacto\s+humano)\b/.test(lc)
       ) {
@@ -4455,84 +4586,7 @@ export class BotStateMachine {
         /\b(pasame|pas[aá]|mandame|mand[aá]|env[ií]ame|env[ií]a|mostrame|mostr[aá]|dame|quiero ver|necesito|busc[aá]r?|ver|descargar|tra[eé]me|buscame)\b[\s\S]*?\b(estudios?|an[aá]lisis|resultados?|informes?|recetas?|medicamentos?|radiograf\w*|tomograf\w*|laboratorio|placas?|ecograf\w*|electro\w*|ex[aá]menes?)\b/i
       );
       if (askDoc) {
-        const wantsRx = /receta/i.test(askDoc[2]);
-        // término de búsqueda: lo que sigue a "de/sobre/del/de la/de mi"
-        const after = cleanText.slice((askDoc.index || 0) + askDoc[0].length);
-        const termMatch = after.match(/\b(?:de|sobre|del|de la|de mi|para)\s+(.{2,60})/i);
-        const term = (termMatch ? termMatch[1] : '')
-          .replace(/[?¿!¡.]+$/g, '')
-          .replace(/\b(por favor|porfa|gracias|mio|m[ií]a|mis|mi)\b/gi, '')
-          .trim();
-
-        const where: any = { userId: user.id };
-        if (wantsRx) where.studyType = 'PRESCRIPTION';
-        // ocrRawText/aiSummary pueden estar cifrados at-rest → el filtro por texto
-        // se hace en memoria tras descifrar (no con `contains` de la DB).
-        const all = await prisma.medicalStudy.findMany({
-          where,
-          orderBy: [{ studyDate: 'desc' }, { createdAt: 'desc' }],
-        });
-        const decrypted = all.map((s) => ({
-          ...s,
-          aiSummary: ZeroKnowledgeSecurity.kmsDecrypt(s.aiSummary),
-          ocrRawText: ZeroKnowledgeSecurity.kmsDecrypt(s.ocrRawText),
-        }));
-        const termLc = term.toLowerCase();
-        const found = (term
-          ? decrypted.filter(
-              (s) =>
-                s.title.toLowerCase().includes(termLc) ||
-                (s.aiSummary || '').toLowerCase().includes(termLc) ||
-                (s.ocrRawText || '').toLowerCase().includes(termLc)
-            )
-          : decrypted
-        ).slice(0, 5);
-
-        if (!found.length) {
-          return {
-            replyText: tr(
-              `🔍 No encontré ${wantsRx ? 'recetas' : 'estudios'}${term ? ` sobre *${term}*` : ''} en tu perfil.\n` +
-                `Podés cargarlos con la opción *[${wantsRx ? '2' : '3'}]* del menú.`,
-              `🔍 Ndajuhúi mba'eve${term ? ` "*${term}*"` : ''}. Emombe'u opción *[${wantsRx ? '2' : '3'}]* rupive.`
-            ),
-          };
-        }
-
-        const lines = found
-          .map(
-            (s) =>
-              `• *${s.title}* — ${(s.studyDate || s.createdAt).toLocaleDateString('es-PY', { timeZone: config.timezone })}\n  ${s.aiSummary ? `_${s.aiSummary.slice(0, 140)}_\n  ` : ''}${s.fileUrl}`
-          )
-          .join('\n\n');
-
-        // Adjuntar el archivo del más reciente (vive en /uploads/medical_studies/<name>).
-        const first = found[0];
-        let mediaAttachment: BotResponse['mediaAttachment'];
-        try {
-          const name = first.fileUrl.split('/').pop() || '';
-          const buf = name ? await StorageService.getFile('medical_studies', name) : null;
-          if (buf && buf.length) {
-            const isPdf = /\.pdf$/i.test(name);
-            mediaAttachment = {
-              buffer: buf,
-              filename: `${first.title}`.replace(/[^\p{L}\p{N}\s.-]/gu, '').slice(0, 60) + (isPdf ? '.pdf' : '.jpg'),
-              mimetype: isPdf ? 'application/pdf' : 'image/jpeg',
-              kind: isPdf ? 'document' : 'image',
-              caption: `${first.title} — ${(first.studyDate || first.createdAt).toLocaleDateString('es-PY', { timeZone: config.timezone })}`,
-            };
-          }
-        } catch {
-          /* si falla el adjunto, quedan los links */
-        }
-
-        return {
-          replyText:
-            tr(
-              `📂 Encontré ${found.length} ${wantsRx ? (found.length === 1 ? 'receta' : 'recetas') : found.length === 1 ? 'estudio' : 'estudios'}${term ? ` sobre *${term}*` : ''}:\n\n${lines}`,
-              `📂 Ajuhu ${found.length}${term ? ` "*${term}*"` : ''}:\n\n${lines}`
-            ) + tr('\n\n_Te adjunto el más reciente._', '\n\n_Amondo pe ipyahuvéva._'),
-          mediaAttachment,
-        };
+        return sendDocuments(docScopeFrom(cleanText), docTermFrom(cleanText));
       }
 
       // Heurística y procesamiento de lenguaje natural para actualización de perfil

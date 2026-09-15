@@ -701,6 +701,7 @@ export class BaileysClient {
         mediaFilename,
         isLid,
         audioTranscriptionFailed,
+        channel: 'whatsapp',
       });
 
       // Reply to the exact JID the message arrived on (correct for both @s.whatsapp.net
@@ -734,6 +735,13 @@ export class BaileysClient {
       } else {
         await sendReplyText();
         await sendAttachment();
+      }
+      // Varios adjuntos (ej. "descargar todos mis documentos"): uno por mensaje, en
+      // orden y con una pausa corta — WhatsApp castiga ráfagas de envíos seguidos.
+      for (const extra of response.extraAttachments || []) {
+        await new Promise((r) => setTimeout(r, 900));
+        if (extra.kind === 'image') await this.sendImage(remoteJid, extra.buffer, extra.caption, extra.mimetype);
+        else await this.sendDocument(remoteJid, extra.buffer, extra.filename, extra.mimetype, extra.caption);
       }
 
       // Best-effort: remember the exact JID so later async messages (payment

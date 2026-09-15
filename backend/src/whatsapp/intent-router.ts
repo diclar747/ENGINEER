@@ -39,6 +39,7 @@ export const BOT_INTENTS = [
   'UPLOAD_RX',
   'UPLOAD_STUDY',
   'FIND_DOCUMENT',
+  'DOWNLOAD_DOCUMENTS',
   'STOP_MED',
   'EDIT_PROFILE',
   'STICKERS',
@@ -146,7 +147,8 @@ INTENCIONES (elegí UNA):
 - MENU: pide ver el menú u opciones.
 - VIEW_PROFILE: quiere ver su perfil / ficha médica / datos.
 - UPLOAD_MED / UPLOAD_RX / UPLOAD_STUDY: quiere cargar a su ficha un medicamento / una receta / un estudio o análisis, SIN pedir avisos ni horarios. hasDetails=true si ya escribió el nombre y dosis del medicamento. Si da horarios, una frecuencia ("cada 8 horas") o cuándo tomó la última dosis, es CREATE_MED_REMINDER.
-- FIND_DOCUMENT: pide que le muestren o manden un estudio o receta ya guardado.
+- FIND_DOCUMENT: pide UN estudio o receta puntual ya guardado ("mandame el estudio de sangre", "pasame la receta del cardiólogo").
+- DOWNLOAD_DOCUMENTS: quiere descargar / que le manden TODOS sus documentos, estudios, evaluaciones o recetas ("descargar todos mis documentos", "mandame mis estudios", "quiero mis recetas").
 - STOP_MED: dejó de tomar un medicamento ("ya no tomo X").
 - EDIT_PROFILE: quiere cambiar datos del perfil (contacto de emergencia, dirección, correo, alergias, condiciones, nombre, cédula, grupo sanguíneo). hasDetails=true si ya dice el dato nuevo.
 - STICKERS: quiere el QR, los stickers o el kit.
@@ -219,6 +221,7 @@ function canonicalIntent(rawIntent: string, a: any, m: any): BotIntent | null {
   if (med && has(/CREATE|REMIND|SCHEDULE|ADD|SET|NEW/)) return 'CREATE_MED_REMINDER';
   if (med && has(/QUERY|LIST|CHECK|GET|SHOW|VIEW|ASK/)) return 'QUERY_MEDS';
   if (has(/REMINDER/) && has(/QUERY|LIST|SHOW|VIEW|GET/)) return 'QUERY_REMINDERS';
+  if (has(/DOWNLOAD|DOCUMENT|STUD|PRESCRIP|RECETA|FILE/)) return has(/FIND|SEARCH|ONE|SPECIFIC/) ? 'FIND_DOCUMENT' : 'DOWNLOAD_DOCUMENTS';
   if (has(/STICKER|QR|KIT/)) return 'STICKERS';
   if (has(/PROFILE|PERFIL|FICHA/)) return has(/EDIT|CHANGE|UPDATE|MODIF/) ? 'EDIT_PROFILE' : 'VIEW_PROFILE';
   if (has(/SUPPORT|SOPORTE|HUMAN|AGENT/)) return 'SUPPORT';
@@ -318,6 +321,15 @@ export function refineInterpretation(it: Interpretation, text: string, opts: { i
   ) {
     out.intent = 'CREATE_MED_REMINDER';
   }
+  // "pasame el estudio de sangre" leído como CARGAR un estudio → es pedir uno guardado.
+  if (
+    ['UPLOAD_RX', 'UPLOAD_STUDY', 'UPLOAD_MED'].includes(out.intent) &&
+    mentionsDocs &&
+    /\b(pasame|mandame|enviame|mostrame|dame|traeme|buscame|descarg\w*|quiero ver|necesito ver)\b/.test(t) &&
+    !/\b(carg\w*|sub[ie]\w*|guard\w*|agreg\w*|anot\w*)\b/.test(t)
+  ) {
+    out.intent = /\b(todos?|todas?|mis (estudios|recetas|documentos|analisis))\b/.test(t) ? 'DOWNLOAD_DOCUMENTS' : 'FIND_DOCUMENT';
+  }
   if (['UPLOAD_MED', 'UPLOAD_RX', 'UPLOAD_STUDY', 'OTHER', 'HEALTH_QUESTION'].includes(out.intent) && mentionsAppt && !mentionsDocs) {
     const asks = /[?¿]/.test(text) || /\b(tengo|hay|saber|ver|verific\w*|pasame|mostrame|decime|cuales?|cuando)\b/.test(t);
     const wants = /\b(agend\w*|reserv\w*|anot\w*|record\w*|recuerd\w*|avis\w*|program\w*|registr\w*|sacar|tendre|voy\s+a\s+tener)\b/.test(t);
@@ -344,6 +356,22 @@ const EMPTY_SLOTS = {
 export function quickIntent(text: string): Interpretation | null {
   const t = plain(text).replace(/[¿?¡!.,;:]+/g, ' ').replace(/\s+/g, ' ').trim();
   if (!t || t.split(' ').length > 30) return null;
+  // "pasame el estudio de sangre", "mandame la ecografía" → un documento puntual
+  if (
+    /^(pasame|mandame|enviame|mostrame|dame|traeme|buscame|me (pasas|mandas|envias|podes pasar|podes mandar|podes enviar))\b/.test(t) &&
+    /\b(el|la|los|las|mi|mis) (estudio|analisis|receta|ecografia|radiografia|tomografia|resonancia|laboratorio|electrocardiograma|informe|placa)s?\b/.test(t) &&
+    !/\b(todos?|todas?)\b/.test(t)
+  ) {
+    return { intent: 'FIND_DOCUMENT', ...EMPTY_SLOTS, med: { ...EMPTY_SLOTS.med, times: [] } };
+  }
+  // "descargar todos mis documentos", "mandame mis estudios", "quiero mis recetas"
+  if (
+    /\b(descarg\w*|baj\w*|mand\w*|pas\w*|envi\w*|quiero|necesito|dame|traeme)\b/.test(t) &&
+    /\b(todos?|todas?|mis) (los |las )?(documentos?|estudios?|recetas?|analisis|evaluaciones)\b/.test(t) &&
+    !/\b(carg\w*|sub[ie]\w*|agreg\w*|guard\w*|anot\w*|borr\w*|elimin\w*)\b/.test(t)
+  ) {
+    return { intent: 'DOWNLOAD_DOCUMENTS', ...EMPTY_SLOTS, med: { ...EMPTY_SLOTS.med, times: [] } };
+  }
   const asks =
     /[?¿]/.test(text) ||
     /^(tengo|tenes|hay|cual(es)?|que|cuando|a que hora|me (podes|podrias|puedes|pasas|decis)|podrias|podes|puedes|pasame|decime|dime|mostrame|muestrame|listame|quiero saber|quisiera saber|me gustaria saber|necesito saber|verifica\w*|fijate|revisa\w*|consulta\w*)\b/.test(t) ||

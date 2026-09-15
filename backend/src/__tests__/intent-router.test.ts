@@ -138,3 +138,27 @@ describe('nameMatches — palabras comunes no cuentan', () => {
     expect(nameMatches('borrá el recordatorio Aceme', 'Aceme recardar que')).toBe(true);
   });
 });
+
+describe('quickIntent — descargar documentos', () => {
+  it('pedidos de todos los documentos → DOWNLOAD_DOCUMENTS al instante', () => {
+    for (const x of ['descargar todos mis documentos', 'mandame todos mis estudios', 'quiero mis recetas', 'pasame todas las recetas por favor']) {
+      expect(quickIntent(x)?.intent).toBe('DOWNLOAD_DOCUMENTS');
+    }
+  });
+  it('cargar / borrar documentos NO es descargar', () => {
+    expect(quickIntent('quiero cargar mis estudios')).toBeNull();
+    expect(quickIntent('borrá mis recetas')).toBeNull();
+  });
+});
+
+describe('documentos puntuales', () => {
+  it('"pasame el estudio de sangre" / "mandame la ecografía" → FIND_DOCUMENT sin IA', () => {
+    expect(quickIntent('pasame el estudio de sangre')?.intent).toBe('FIND_DOCUMENT');
+    expect(quickIntent('mandame la ecografía')?.intent).toBe('FIND_DOCUMENT');
+  });
+  it('si la IA lo lee como cargar, se corrige a pedir', () => {
+    const it = normalizeInterpretation({ intent: 'UPLOAD_STUDY' })!;
+    expect(refineInterpretation(it, 'pasame el estudio de sangre').intent).toBe('FIND_DOCUMENT');
+    expect(refineInterpretation(it, 'quiero cargar el estudio de sangre').intent).toBe('UPLOAD_STUDY');
+  });
+});
