@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { BellRing, BellOff, Bell, Loader2, Check, AlertTriangle } from 'lucide-react';
 import {
-  getPushState,
+  getPushStateAndRepair,
   subscribeToPush,
   unsubscribeFromPush,
   sendTestPush,
@@ -9,8 +9,10 @@ import {
 } from '../utils/push';
 
 /**
- * Opt-in card for browser push notifications. Emergency scans then arrive as a
- * push alert on every device where the user accepted, on top of the WhatsApp message.
+ * ÚNICO lugar donde se activan las notificaciones push (dentro de la sesión: panel y
+ * Configuración). Ya no hay pedido automático al entrar — confundía, porque después
+ * esta tarjeta volvía a pedir lo mismo. Si el permiso ya estaba dado, se muestra
+ * "activadas" y la suscripción se completa sola (getPushStateAndRepair).
  */
 export const PushOptIn: React.FC = () => {
   const [state, setState] = useState<PushState | 'loading'>('loading');
@@ -18,7 +20,7 @@ export const PushOptIn: React.FC = () => {
   const [notice, setNotice] = useState<string | null>(null);
 
   useEffect(() => {
-    getPushState().then(setState).catch(() => setState('error'));
+    getPushStateAndRepair().then(setState).catch(() => setState('error'));
   }, []);
 
   if (state === 'loading') {
@@ -47,7 +49,7 @@ export const PushOptIn: React.FC = () => {
       const next = await subscribeToPush();
       setState(next);
       if (next === 'denied') setNotice('Bloqueaste las notificaciones. Habilítalas desde los ajustes del navegador.');
-      if (next === 'subscribed') setNotice('Listo. Te avisaremos aquí ante cada escaneo de emergencia.');
+      if (next === 'subscribed') setNotice('Listo, notificaciones activadas en este dispositivo.');
     } catch {
       setNotice('No se pudo activar. Intenta nuevamente.');
     } finally {
@@ -101,12 +103,12 @@ export const PushOptIn: React.FC = () => {
         </div>
         <div className="min-w-0 flex-1">
           <h3 className="text-sm sm:text-base font-bold text-fg">
-            {subscribed ? 'Alertas de Emergencia Push Activas' : 'Activar Alertas Push en este Dispositivo'}
+            {subscribed ? 'Notificaciones activadas en este dispositivo' : denied ? 'Notificaciones bloqueadas' : 'Activar notificaciones en este dispositivo'}
           </h3>
           <p className="mt-1 text-xs text-fg-soft leading-relaxed">
             {subscribed
-              ? 'Cada escaneo de tu QR llegará como alerta instantánea a este teléfono, además del aviso por WhatsApp.'
-              : 'Recibe una alerta inmediata en tu pantalla cada vez que alguien escanee tu QR de rescate.'}
+              ? 'Te llegan acá, además de WhatsApp: la hora de tu medicación, tus citas médicas y cada escaneo de tu QR de emergencia.'
+              : 'Recibí en la pantalla, además de WhatsApp, el aviso de tu medicación, de tus citas médicas y de cada escaneo de tu QR de emergencia.'}
           </p>
 
           {notice && (
@@ -124,7 +126,7 @@ export const PushOptIn: React.FC = () => {
                 className="inline-flex items-center gap-1.5 px-4 py-2.5 rounded-xl bg-gradient-to-r from-teal-600 to-emerald-600 hover:from-teal-500 hover:to-emerald-500 disabled:opacity-50 text-white text-xs font-black shadow-md shadow-teal-500/20 transition-all hover:scale-105 active:scale-95"
               >
                 {busy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <BellRing className="w-3.5 h-3.5" />}
-                <span>Activar Alertas Push</span>
+                <span>Activar notificaciones</span>
               </button>
             )}
             {subscribed && (
@@ -135,7 +137,7 @@ export const PushOptIn: React.FC = () => {
                   className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl border border-line bg-muted hover:bg-muted disabled:opacity-50 text-fg text-xs font-semibold transition-colors"
                 >
                   {busy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Bell className="w-3.5 h-3.5 text-teal-600 dark:text-teal-400" />}
-                  <span>Enviar Alerta de Prueba</span>
+                  <span>Enviar prueba</span>
                 </button>
                 <button
                   onClick={handleDisable}

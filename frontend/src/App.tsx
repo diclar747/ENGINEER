@@ -3,7 +3,6 @@ import { Routes, Route, Navigate, Outlet, useLocation, useNavigate } from 'react
 import { HeartPulse, QrCode, Download, CreditCard, Lock, Bot, LogOut, ShieldCheck, Settings as SettingsIcon } from 'lucide-react';
 import { Navbar } from './components/Navbar';
 import { PwaInstallPrompt } from './components/PwaInstallPrompt';
-import { PushPrompt } from './components/PushPrompt';
 import { ThemeToggle } from './components/ThemeToggle';
 import { AppShell } from './components/ui/Layout';
 import { Login } from './pages/Login';
@@ -42,11 +41,6 @@ const AppLayout: React.FC = () => (
       <Outlet />
     </main>
     <PwaInstallPrompt />
-    {/* El permiso de notificaciones se pide ACÁ, al abrir la app — no solo
-        después de loguearse. Si todavía no hay cuenta conocida, la suscripción
-        queda anónima y se vincula sola en cuanto el login/registro identifica
-        al usuario (mismo endpoint upsertea por endpoint del navegador). */}
-    <PushPrompt />
     <footer className="border-t border-line/80 py-6 text-center text-[11px] text-fg-muted">
       Doorway Cortex Bio-Pass · Zero-Knowledge Health Passport · AES-256-GCM
     </footer>
@@ -99,7 +93,6 @@ const UserShell: React.FC = () => {
     >
       <Outlet />
       <PwaInstallPrompt />
-      <PushPrompt />
     </AppShell>
   );
 };
