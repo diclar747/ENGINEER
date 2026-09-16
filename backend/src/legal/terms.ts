@@ -80,7 +80,7 @@ export const TERMS_HTML = `<!doctype html>
       datos inexactos cargados por el usuario.</p>
 
       <h2>7. Contacto</h2>
-      <p>Consultas y ejercicio de derechos sobre datos personales: <a href="mailto:${config.supportEmail}">${config.supportEmail}</a></p>
+      <p>Consultas y ejercicio de derechos sobre datos personales: <!--email_off--><a href="mailto:${config.supportEmail}">${config.supportEmail}</a><!--/email_off--></p>
 
       <p class="muted" style="margin-top:2em">Al continuar el registro y responder "ACEPTO", el
       usuario declara haber leído y aceptado estos Términos y Condiciones y la Política de
