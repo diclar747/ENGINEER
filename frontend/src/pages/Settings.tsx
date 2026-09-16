@@ -4,7 +4,8 @@ import { useToast } from '../components/ui/Feedback';
 import { Section, Btn, inputCls } from '../components/ui/Layout';
 import { PushOptIn } from '../components/PushOptIn';
 import { ClientCrypto } from '../utils/crypto';
-import { Lock, Phone, MapPin, MapPinned, Loader2, Save, Send, CheckCircle2 } from 'lucide-react';
+import { Lock, Phone, MapPin, MapPinned, Loader2, Save, Send, CheckCircle2, LifeBuoy, Mail, Copy } from 'lucide-react';
+import { SUPPORT_EMAIL, supportMailto } from '../utils/support';
 import { setSessionPin } from '../utils/pinSession';
 
 type GeoState = 'unknown' | 'granted' | 'denied' | 'prompt' | 'unsupported';
@@ -307,6 +308,27 @@ export const Settings: React.FC = () => {
             </Btn>
           </>
         )}
+      </Section>
+
+      {/* Soporte */}
+      <Section title="Ayuda y soporte" icon={<LifeBuoy className="w-4 h-4" />}>
+        <p className="text-xs text-fg-soft mb-3">
+          ¿Tenés un problema con tu cuenta, tus pagos o necesitás asistencia? Escribinos y te respondemos por correo.
+        </p>
+        <p className="text-sm font-bold text-fg break-all mb-3">{SUPPORT_EMAIL}</p>
+        <div className="flex flex-wrap gap-2">
+          <a href={supportMailto('Soporte Bio-Pass')}>
+            <Btn variant="primary" icon={<Mail className="w-3.5 h-3.5" />}>Escribir a soporte</Btn>
+          </a>
+          <Btn
+            icon={<Copy className="w-3.5 h-3.5" />}
+            onClick={() => {
+              navigator.clipboard?.writeText(SUPPORT_EMAIL).then(() => toast.success('Correo copiado')).catch(() => {});
+            }}
+          >
+            Copiar correo
+          </Btn>
+        </div>
       </Section>
     </div>
   );

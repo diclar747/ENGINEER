@@ -86,11 +86,15 @@ async function askNiro(
       ? ' DATO IMPORTANTE (no lo contradigas): Bio-Pass SÍ permite, por WhatsApp (opción 5 del menú: medicación; opción 6: citas y turnos), ' +
         'programar *recordatorios de toma de medicación* ("cada X horas" o a horas fijas) y *recordatorios de turnos / citas médicas*. ' +
         'NO reserva la cita con el consultorio: solo le avisa al titular antes. ' +
+        `Correo de soporte de Bio-Pass (el único válido, no inventes otro): ${config.supportEmail}. ` +
+        'Por este chat NO atiende ninguna persona ni agente humano: nunca digas que lo conectás con soporte o que alguien le va a responder acá; indicale que escriba a ese correo. ' +
         'El titular puede preguntar "¿qué cita tengo?", "¿cuál es mi próxima toma?", "¿qué estoy tomando?" y el sistema le responde con sus datos reales. ' +
         'NUNCA digas que Bio-Pass no maneja citas, turnos o recordatorios. Si pregunta por sus citas, decile que escriba "¿tengo alguna cita pendiente?".'
       : ' DATO IMPORTANTE (no lo contradigas): además de la ficha médica de emergencia por QR y de guardar medicamentos/recetas/estudios, ' +
         'Bio-Pass —una vez que la persona se registra— permite programar por WhatsApp *recordatorios de toma de medicación* y *recordatorios de turnos / citas médicas* ' +
-        '(no reserva la cita con el consultorio, solo avisa antes). Si preguntan por esto, confirmá que sí y sugerí registrarse (menos de 3 minutos).';
+        '(no reserva la cita con el consultorio, solo avisa antes). Si preguntan por esto, confirmá que sí y sugerí registrarse (menos de 3 minutos). ' +
+        `Correo de soporte de Bio-Pass (el único válido, no inventes otro): ${config.supportEmail}. ` +
+        'Por este chat NO atiende ninguna persona: para hablar con soporte, que escriba a ese correo.';
   const out = await NiroService.chat([
     { role: 'system', content: system + caps + (opts.name ? ` El usuario se llama ${opts.name}.` : '') },
     { role: 'user', content: userText.trim() },
@@ -659,10 +663,10 @@ export class BotStateMachine {
         return {
           replyText: tr(
             `Tu cuenta se creó antes de la Clave de Recuperación, así que este método no está disponible.\n` +
-              `Escribí a *soporte@bio-pass.com* para un reseteo verificado por un administrador.`,
-            `Nde cuenta oñemoheñói Clave de Recuperación mboyve. Ehai *soporte@bio-pass.com*.`,
-            `Sua conta foi criada antes da Chave de Recuperação. Escreva para *soporte@bio-pass.com* para um reset verificado.`,
-            `Your account predates the Recovery Key. Email *soporte@bio-pass.com* for an admin-verified reset.`
+              `Escribí a *${config.supportEmail}* para un reseteo verificado por un administrador.`,
+            `Nde cuenta oñemoheñói Clave de Recuperación mboyve. Ehai *${config.supportEmail}*.`,
+            `Sua conta foi criada antes da Chave de Recuperação. Escreva para *${config.supportEmail}* para um reset verificado.`,
+            `Your account predates the Recovery Key. Email *${config.supportEmail}* for an admin-verified reset.`
           ),
         };
       }
@@ -1008,7 +1012,7 @@ export class BotStateMachine {
       if (clash) {
         return {
           replyText: tr(
-            `Ya hay otra cuenta con ese número. Verificá el número o escribí a *soporte@bio-pass.cnid.com.py*. Probá con otro o escribí *OMITIR*.`,
+            `Ya hay otra cuenta con ese número. Verificá el número o escribí a *${config.supportEmail}*. Probá con otro o escribí *OMITIR*.`,
             `Oĩma ambue cuenta upe número reheve. Eha'ã ambue térã ehai *OMITIR*.`,
             `Já existe outra conta com esse número. Tente outro ou escreva *OMITIR*.`,
             `There's already an account with that number. Try another or type *OMITIR*.`
@@ -4365,7 +4369,7 @@ export class BotStateMachine {
         const clash = await prisma.user.findFirst({ where: { phoneNumber: typed, NOT: { id: user.id } }, select: { id: true } });
         if (clash) {
           return {
-            replyText: `Ya existe otra cuenta con ese número en Bio-Pass. Escribí a soporte@bio-pass.com para que lo resolvamos.`,
+            replyText: `Ya existe otra cuenta con ese número en Bio-Pass. Escribí a ${config.supportEmail} para que lo resolvamos.`,
           };
         }
         await prisma.user.update({ where: { id: user.id }, data: { phoneNumber: typed, whatsappJid: lookup.lid || undefined } });
@@ -4575,8 +4579,14 @@ export class BotStateMachine {
         /\b(hablar\s+con\s+(alguien|una\s+persona|un\s+humano|un\s+agente|un\s+asesor|atenci[oó]n)|atenci[oó]n\s+al\s+cliente|reclamo|queja|necesito\s+ayuda\s+de\s+(alguien|una\s+persona)|contacto\s+humano)\b/.test(lc)
       ) {
         return {
-          replyText: `👨‍⚕️ *Soporte Técnico Doorway Cortex Bio-Pass:*\n\n` +
-            `Para asistencia médica, corporativa o reclamos de facturación, escribí a soporte@bio-pass.com o llamá al +595 21 500 000.`,
+          replyText: tr(
+            `💬 *Soporte Doorway Cortex Bio-Pass*\n\n` +
+              `📧 Escribinos a:\n*${config.supportEmail}*\n\n` +
+              `Contanos tu nombre, tu número de cédula y en qué te podemos ayudar (asistencia, tu cuenta, pagos o reclamos) y te respondemos por ese medio.\n\n` +
+              `📞 También podés llamar al +595 21 500 000.\n\n` +
+              `_Escribí *MENU* para volver a las opciones._`,
+            `💬 *Soporte Bio-Pass*\n\n📧 *${config.supportEmail}*\n📞 +595 21 500 000\n\n_Ehai *MENU*._`
+          ),
         };
       }
 

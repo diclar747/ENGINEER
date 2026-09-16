@@ -3,6 +3,8 @@
  * Servido en GET /api/legal/terminos (HTML) y enlazado por el bot en el registro.
  * BORRADOR — revisar con asesoría legal antes de considerarlo definitivo.
  */
+import { config } from '../config';
+
 export const TERMS_VERSION = '2026-09-09';
 
 export const TERMS_HTML = `<!doctype html>
@@ -78,7 +80,7 @@ export const TERMS_HTML = `<!doctype html>
       datos inexactos cargados por el usuario.</p>
 
       <h2>7. Contacto</h2>
-      <p>Consultas y ejercicio de derechos sobre datos personales: soporte@bio-pass.com</p>
+      <p>Consultas y ejercicio de derechos sobre datos personales: <a href="mailto:${config.supportEmail}">${config.supportEmail}</a></p>
 
       <p class="muted" style="margin-top:2em">Al continuar el registro y responder "ACEPTO", el
       usuario declara haber leído y aceptado estos Términos y Condiciones y la Política de

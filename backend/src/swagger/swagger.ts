@@ -1,5 +1,6 @@
 import swaggerUi from 'swagger-ui-express';
 import { Express } from 'express';
+import { config } from '../config';
 
 export const swaggerDocument = {
   openapi: '3.0.0',
@@ -9,7 +10,7 @@ export const swaggerDocument = {
     description: 'API REST para Mobile Health Passport, WhatsApp Bot (Baileys), Zero-Knowledge Vault, Kits Físicos 3x3cm y Pagos Paraguay/Brasil.',
     contact: {
       name: 'Doorway Cortex Engineering Team',
-      email: 'soporte@bio-pass.com',
+      email: config.supportEmail,
     },
   },
   servers: [

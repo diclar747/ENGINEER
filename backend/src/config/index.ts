@@ -22,10 +22,13 @@ export const config = {
     devEcho: process.env.OTP_DEV_ECHO !== 'false',
   },
 
+  /** Correo de soporte que se muestra en el bot, la app, los términos y la API. */
+  supportEmail: process.env.SUPPORT_EMAIL || 'doorway.cortex.bio.pass@cardnet-ltda.com',
+
   push: {
     vapidPublicKey: process.env.VAPID_PUBLIC_KEY || '',
     vapidPrivateKey: process.env.VAPID_PRIVATE_KEY || '',
-    vapidSubject: process.env.VAPID_SUBJECT || 'mailto:soporte@bio-pass.com',
+    vapidSubject: process.env.VAPID_SUBJECT || 'mailto:doorway.cortex.bio.pass@cardnet-ltda.com',
     get enabled() {
       return !!(this.vapidPublicKey && this.vapidPrivateKey);
     },

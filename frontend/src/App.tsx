@@ -1,7 +1,8 @@
 import React from 'react';
 import { Routes, Route, Navigate, Outlet, useLocation, useNavigate } from 'react-router-dom';
-import { HeartPulse, QrCode, Download, CreditCard, Lock, Bot, LogOut, ShieldCheck, Settings as SettingsIcon } from 'lucide-react';
+import { HeartPulse, QrCode, Download, CreditCard, Lock, Bot, LogOut, ShieldCheck, Settings as SettingsIcon, LifeBuoy } from 'lucide-react';
 import { Navbar } from './components/Navbar';
+import { SUPPORT_EMAIL, supportMailto } from './utils/support';
 import { PwaInstallPrompt } from './components/PwaInstallPrompt';
 import { ThemeToggle } from './components/ThemeToggle';
 import { AppShell } from './components/ui/Layout';
@@ -41,8 +42,14 @@ const AppLayout: React.FC = () => (
       <Outlet />
     </main>
     <PwaInstallPrompt />
-    <footer className="border-t border-line/80 py-6 text-center text-[11px] text-fg-muted">
-      Doorway Cortex Bio-Pass · Zero-Knowledge Health Passport · AES-256-GCM
+    <footer className="border-t border-line/80 py-6 px-4 text-center text-[11px] text-fg-muted space-y-1.5">
+      <p>
+        ¿Necesitás ayuda? Soporte:{' '}
+        <a href={supportMailto()} className="font-semibold text-teal-700 dark:text-teal-400 hover:underline break-all">
+          {SUPPORT_EMAIL}
+        </a>
+      </p>
+      <p>Doorway Cortex Bio-Pass · Zero-Knowledge Health Passport · AES-256-GCM</p>
     </footer>
   </div>
 );
@@ -73,7 +80,10 @@ const UserShell: React.FC = () => {
   return (
     <AppShell
       brand={<><HeartPulse className="w-6 h-6 text-white shrink-0" /><span className="font-black text-white text-base">Bio-Pass</span></>}
-      nav={USER_NAV.map((n) => ({ id: n.id, label: n.label, icon: n.icon, active: active?.id === n.id, onClick: () => navigate(n.path) }))}
+      nav={[
+        ...USER_NAV.map((n) => ({ id: n.id, label: n.label, icon: n.icon, active: active?.id === n.id, onClick: () => navigate(n.path) })),
+        { id: 'support', label: 'Soporte', icon: <LifeBuoy className="w-[18px] h-[18px]" />, href: supportMailto('Soporte Bio-Pass') },
+      ]}
       fab={<HeartPulse className="w-6 h-6" />}
       title={active?.label || 'Mi Pasaporte'}
       subtitle="Pasaporte médico inteligente"
@@ -86,7 +96,9 @@ const UserShell: React.FC = () => {
         </>
       }
       footer={
-        <button onClick={logout} className="w-full flex items-center gap-2 px-3 py-2 rounded-xl text-sm font-bold text-white/80 hover:bg-white/10 hover:text-white transition-colors">
+        // Mismo pie en la barra lateral (degradado, desktop) y en el menú del celular
+        // (fondo claro): el texto blanco solo en lg+, si no quedaba invisible en el celular.
+        <button onClick={logout} className="w-full flex items-center gap-2 px-3 py-2 rounded-xl text-sm font-bold text-fg-soft hover:bg-muted lg:text-white/80 lg:hover:bg-white/10 lg:hover:text-white transition-colors">
           <LogOut className="w-4 h-4" /> Cerrar sesión
         </button>
       }

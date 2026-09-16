@@ -292,6 +292,14 @@ export function refineInterpretation(it: Interpretation, text: string, opts: { i
   if (out.intent === 'QUERY_REMINDERS' && mentionsAppt && !/\b(recordatorios?|alarmas?|remedios?|medicaci|pastillas?)\b/.test(t)) {
     out.intent = 'QUERY_APPOINTMENTS';
   }
+  // "necesito hablar con alguien de soporte", "quiero hacer un reclamo" → soporte (la IA
+  // general llegó a inventar "te conecto con un agente por este chat", que no existe).
+  if (
+    !['SUPPORT', 'EDIT_PROFILE'].includes(out.intent) &&
+    /\b(soporte|reclamo|queja|atencion al cliente|hablar con (alguien|una persona|un humano|un agente|un asesor|una operadora?)|persona real|agente humano|contacto humano)\b/.test(t)
+  ) {
+    out.intent = 'SUPPORT';
+  }
   const mentionsMeds = /\b(medicamentos?|medicacion\w*|remedios?|pastillas?)\b/.test(t);
   if ((out.intent === 'QUERY_APPOINTMENTS' || out.intent === 'QUERY_MEDS') && mentionsAppt && mentionsMeds) {
     out.intent = 'QUERY_REMINDERS';

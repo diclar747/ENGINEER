@@ -162,3 +162,10 @@ describe('documentos puntuales', () => {
     expect(refineInterpretation(it, 'quiero cargar el estudio de sangre').intent).toBe('UPLOAD_STUDY');
   });
 });
+
+describe('soporte', () => {
+  it('"necesito hablar con alguien de soporte" leído como OTHER → SUPPORT', () => {
+    expect(refineInterpretation(normalizeInterpretation({ intent: 'OTHER' })!, 'necesito hablar con alguien de soporte').intent).toBe('SUPPORT');
+    expect(refineInterpretation(normalizeInterpretation({ intent: 'HEALTH_QUESTION' })!, 'quiero hacer un reclamo').intent).toBe('SUPPORT');
+  });
+});
