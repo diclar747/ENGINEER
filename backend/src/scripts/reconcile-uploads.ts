@@ -16,12 +16,19 @@
  * decide. `--import` solo AGREGA filas; nunca borra un archivo ni modifica los
  * registros que ya existen.
  */
+import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
 import { prisma } from '../database/prisma';
 import { config } from '../config';
 
 const FOLDER = 'medical_studies';
+/**
+ * Debajo de esto el archivo no es un documento: son cargas cortadas a la mitad
+ * (PDFs de 0 bytes, miniaturas de 1 KB). Importarlos ensucia la bóveda con
+ * entradas que no se pueden abrir.
+ */
+const MIN_BYTES = 2048;
 
 /** `<prefijo>_<userId>_<epoch>.<ext>` — así los nombra StorageService. */
 function parseName(name: string): { prefix: string; userId: string; ts: number } | null {
@@ -93,7 +100,30 @@ async function main(): Promise<void> {
 
   let creadas = 0;
   let salteadas = 0;
+  // Huella del contenido de lo que YA está registrado: la misma foto mandada tres
+  // veces (pasaba seguido con las reentregas del @lid) no debe entrar tres veces.
+  const vistos = new Set<string>();
+  for (const f of files) {
+    if (!referenced.has(f)) continue;
+    try {
+      vistos.add(crypto.createHash('sha256').update(fs.readFileSync(path.join(dir, f))).digest('hex'));
+    } catch {
+      /* si no se puede leer, no bloquea nada */
+    }
+  }
+
   for (const h of huerfanos) {
+    if (h.size < MIN_BYTES) {
+      console.log(`  ⏭️  ${h.file}: ${h.size} bytes — carga cortada, no es un documento abrible. Lo dejo como está.`);
+      salteadas++;
+      continue;
+    }
+    const sha = crypto.createHash('sha256').update(fs.readFileSync(path.join(dir, h.file))).digest('hex');
+    if (vistos.has(sha)) {
+      console.log(`  ⏭️  ${h.file}: contenido idéntico a uno que ya está cargado — no lo duplico.`);
+      salteadas++;
+      continue;
+    }
     if (!h.info) {
       console.log(`  ⏭️  ${h.file}: no puedo deducir de quién es (nombre fuera de formato) — lo dejo como está.`);
       salteadas++;
@@ -116,6 +146,7 @@ async function main(): Promise<void> {
         fileUrl: `${config.baseUrl}/uploads/${FOLDER}/${h.file}`,
       },
     });
+    vistos.add(sha);
     creadas++;
     console.log(`  ✅ ${h.file} → recuperado para ${h.info.userId.slice(0, 8)}`);
   }
