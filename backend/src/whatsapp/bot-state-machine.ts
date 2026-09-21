@@ -2152,13 +2152,16 @@ export class BotStateMachine {
           case 'when':
             return '📅 ¿Qué día y hora es el turno? (ej: _"mañana 9:00"_, _"15/10 a las 14:30"_)';
           case 'range':
-            return (
-              '📆 ¿*Desde cuándo* y *hasta cuándo* te aviso?\n' +
-              '• _"desde hoy por 7 días"_\n' +
-              '• _"del 01/10/2026 al 31/10/2026"_\n' +
-              '• _"hasta el 30 de abril"_\n\n' +
-              '_Escribí *SIEMPRE* si es un tratamiento permanente (no se corta solo)._'
-            );
+            return d.kind === 'APPOINTMENT'
+              ? '📆 ¿*Desde cuándo* y *hasta cuándo* te aviso de esta cita?\n' +
+                '• _"del 01/10/2026 al 14/10/2026"_\n' +
+                '• _"hasta el 14 de octubre"_\n\n' +
+                '_Escribí *LISTO* para lo normal: te aviso hasta el día del turno y después para solo._'
+              : '📆 ¿*Desde cuándo* y *hasta cuándo* te aviso?\n' +
+                '• _"desde hoy por 7 días"_\n' +
+                '• _"del 01/10/2026 al 31/10/2026"_\n' +
+                '• _"hasta el 30 de abril"_\n\n' +
+                '_Escribí *SIEMPRE* si es un tratamiento permanente (no se corta solo)._';
           case 'lead':
             return (
               '⏱️ ¿Con cuánta anticipación te aviso? Escribime lo que quieras — ' +
@@ -2241,7 +2244,7 @@ export class BotStateMachine {
             `🔔 _Te aviso 10 minutos antes y a la hora de cada toma, por WhatsApp y notificación._\n\n` +
             (rows.length
               ? `✏️ *Cambiar:* _"cambiá el horario del 1 a las 9"_ o *editar 1*\n` +
-                `🛑 *Parar:* *parar 1* (deja de avisar) · ▶️ *activar 1*\n` +
+                `🛑 *Parar:* *parar 1* (deja de avisar) · ▶️ *activar 1* · *parar todos*\n` +
                 `🗑️ *Borrar:* *borrar 1* (lo saca de la lista)\n` +
                 `📆 *Fecha de fin:* _"el 1 hasta el 30/04"_ — al llegar, para solo\n`
               : '') +
@@ -2263,10 +2266,11 @@ export class BotStateMachine {
             `🔔 _Te aviso 1 hora antes (o cuando me pidas) y de nuevo 10 minutos antes, por WhatsApp y notificación._\n\n` +
             (rows.length
               ? `✏️ *Cambiar:* _"la cita 1 pasó a las 17"_ o *editar 1*\n` +
-                `🛑 *Parar el aviso:* *parar 1* · ▶️ *activar 1*\n` +
+                `🛑 *Parar el aviso:* *parar 1* · ▶️ *activar 1* · *parar todos*\n` +
                 `🗑️ *Cancelar la cita:* *borrar 1*\n`
               : '') +
-            `_Cuando pasa el día del turno, el aviso se corta solo._\n` +
+            `📆 *Fecha de corte:* _"la cita 1 hasta el 14/10"_ — llegada esa fecha, para solo\n` +
+            `_Y cuando pasa el día del turno, el aviso también se corta solo._\n` +
             `↩️ *LISTO* para volver al menú`,
           `🩺 *Turno médico*\n\n` +
             (rows.length ? `${MedicationReminderService.format(rows)}\n\n` : '') +
@@ -3046,10 +3050,10 @@ export class BotStateMachine {
                   await updateState('ACTIVE_REMIND_EDIT_PICK', { rdraft: d });
                   const opts =
                     d.kind === 'APPOINTMENT'
-                      ? '*[1]* Nombre/motivo\n*[2]* Fecha y hora\n*[3]* Anticipación del aviso'
+                      ? '*[1]* Nombre/motivo\n*[2]* Fecha y hora\n*[3]* Anticipación del aviso\n*[4]* Desde / hasta cuándo avisar'
                       : d.scheduleKind === 'INTERVAL'
-                        ? '*[1]* Nombre\n*[2]* Cada cuánto\n*[3]* Última toma\n*[4]* Dosis'
-                        : '*[1]* Nombre\n*[2]* Horarios\n*[3]* Dosis';
+                        ? '*[1]* Nombre\n*[2]* Cada cuánto\n*[3]* Última toma\n*[4]* Dosis\n*[5]* Desde / hasta cuándo avisar'
+                        : '*[1]* Nombre\n*[2]* Horarios\n*[3]* Dosis\n*[4]* Desde / hasta cuándo avisar';
                   return { replyText: `✏️ *Editando:* ${MedicationReminderService.describeDraft(d)}\n\n¿Qué querés cambiar?\n${opts}\n\n_O decímelo directo (ej: "a las 9 y a las 21"). *CANCELAR* para dejarlo como está._` };
                 }
                 await updateState('ACTIVE_REMIND_CONFIRM', { rdraft: d });
@@ -3587,6 +3591,30 @@ export class BotStateMachine {
           return { replyText: showList() };
         }
 
+        // parar TODOS / activar TODOS — frenar de una todos los avisos de esta
+        // lista sin borrarlos (se pueden volver a activar). El borrado masivo ya
+        // lo resuelve `bulkReminderDeleteScope`, con su confirmación.
+        const bulkPause = norm(cleanText).match(/^(parar|pausar|detener|frenar|suspender|desactivar|activar|reactivar|reanudar|prender)\s+(todos?|todas?)$/);
+        if (bulkPause) {
+          const activate = /^(activar|reactivar|reanudar|prender)$/.test(bulkPause[1]);
+          if (!rows.length) return { replyText: showList() };
+          const { count } = await prisma.medicationReminder.updateMany({
+            where: { id: { in: rows.map((r) => r.id) } },
+            data: { active: activate },
+          });
+          return {
+            replyText:
+              tr(
+                activate
+                  ? `▶️ Activé los ${count} avisos de esta lista.`
+                  : `🛑 Paré los ${count} avisos de esta lista. No te aviso más hasta que escribas *activar todos* (siguen guardados).`,
+                activate ? `▶️ ${count} oñemyendy.` : `🛑 ${count} oñembopyta.`
+              ) +
+              '\n\n' +
+              showList(await list()),
+          };
+        }
+
         // borrar N / pausar N / activar N
         const cmd = cleanText.match(/^(borrar|eliminar|quitar|sacar|cancelar|pausar|parar|detener|frenar|suspender|desactivar|activar|reactivar|reanudar|retomar)\s+(\d{1,2})/i);
         if (cmd) {
@@ -3632,7 +3660,7 @@ export class BotStateMachine {
           await updateState('ACTIVE_REMIND_EDIT_PICK', { rdraft: editDraft });
           const opts =
             target.kind === 'APPOINTMENT'
-              ? '*[1]* Nombre/motivo\n*[2]* Fecha y hora\n*[3]* Anticipación del aviso'
+              ? '*[1]* Nombre/motivo\n*[2]* Fecha y hora\n*[3]* Anticipación del aviso\n*[4]* Desde / hasta cuándo avisar'
               : target.scheduleKind === 'INTERVAL'
                 ? '*[1]* Nombre\n*[2]* Cada cuánto\n*[3]* Última toma\n*[4]* Dosis\n*[5]* Desde / hasta cuándo avisar'
                 : '*[1]* Nombre\n*[2]* Horarios\n*[3]* Dosis\n*[4]* Desde / hasta cuándo avisar';
@@ -3765,7 +3793,7 @@ export class BotStateMachine {
           }
           const isAppt = draft.kind === 'APPOINTMENT';
           const fieldMap: Record<string, string> = isAppt
-            ? { '1': 'ACTIVE_REMIND_NAME', '2': 'ACTIVE_REMIND_WHEN', '3': 'ACTIVE_REMIND_LEAD' }
+            ? { '1': 'ACTIVE_REMIND_NAME', '2': 'ACTIVE_REMIND_WHEN', '3': 'ACTIVE_REMIND_LEAD', '4': 'ACTIVE_REMIND_RANGE' }
             : draft.scheduleKind === 'INTERVAL'
               ? { '1': 'ACTIVE_REMIND_NAME', '2': 'ACTIVE_REMIND_SCHED', '3': 'ACTIVE_REMIND_LAST', '4': 'ACTIVE_REMIND_DOSE', '5': 'ACTIVE_REMIND_RANGE' }
               : { '1': 'ACTIVE_REMIND_NAME', '2': 'ACTIVE_REMIND_SCHED', '3': 'ACTIVE_REMIND_DOSE', '4': 'ACTIVE_REMIND_RANGE' };
@@ -3829,7 +3857,10 @@ export class BotStateMachine {
         if (state === 'ACTIVE_REMIND_RANGE') {
           draft.rangeAsked = true;
           const txt = cleanText.trim();
-          if (/^(siempre|permanente|sin\s*(fecha|fin|limite)|indefinido|todo\s*el\s*tiempo|para\s*siempre|no\s*se[ck]?)$/i.test(norm(txt))) {
+          // En una cita, "LISTO" = lo normal (avisa hasta el turno y después para
+          // solo, porque el cron la desactiva al pasar la hora). En medicación,
+          // "SIEMPRE" = tratamiento sin fecha de corte.
+          if (/^(siempre|permanente|sin\s*(fecha|fin|limite)|indefinido|todo\s*el\s*tiempo|para\s*siempre|no\s*se[ck]?|listo|normal|lo\s*normal|como\s*siempre|dale|ok)$/i.test(norm(txt))) {
             draft.startsAt = undefined;
             draft.endsAt = undefined;
             return advanceRemind(draft);
@@ -3846,8 +3877,9 @@ export class BotStateMachine {
             return {
               replyText:
                 `😕 No entendí las fechas.\n\n` +
-                `Probá con _"desde hoy por 7 días"_, _"del 01/10/2026 al 31/10/2026"_ o _"hasta el 30 de abril"_.\n` +
-                `_O escribí *SIEMPRE* si no tiene fecha de fin._`,
+                (draft.kind === 'APPOINTMENT'
+                  ? `Probá con _"del 01/10/2026 al 14/10/2026"_ o _"hasta el 14 de octubre"_.\n_O escribí *LISTO* para los avisos normales._`
+                  : `Probá con _"desde hoy por 7 días"_, _"del 01/10/2026 al 31/10/2026"_ o _"hasta el 30 de abril"_.\n_O escribí *SIEMPRE* si no tiene fecha de fin._`),
             };
           }
           draft.startsAt = range.fromYmd ? ymdToDate(range.fromYmd).toISOString() : undefined;

@@ -145,6 +145,24 @@ export class MedicalController {
     res.json({ reminders: rows.map((r) => ({ ...r, times: JSON.parse(r.times || '[]') })) });
   }
 
+  /**
+   * Vigencia del recordatorio tal como la manda el calendario web: desde cuándo
+   * empieza a avisar y cuándo para solo. El bot ya la guardaba; acá faltaba, así
+   * que la fecha de fin que se elegía en la web no llegaba nunca a la base.
+   */
+  private static vigenciaFrom(body: any): { startsAt: Date | null; endsAt: Date | null } {
+    const parse = (v: unknown): Date | null => {
+      if (!v) return null;
+      const d = new Date(String(v));
+      return isNaN(d.getTime()) ? null : d;
+    };
+    let endsAt = parse(body?.endsAt);
+    if (!endsAt && body?.durationDays && Number(body.durationDays) >= 1 && Number(body.durationDays) <= 1095) {
+      endsAt = new Date(Date.now() + Number(body.durationDays) * 86400_000);
+    }
+    return { startsAt: parse(body?.startsAt), endsAt };
+  }
+
   public static async createReminder(req: AuthenticatedRequest, res: Response): Promise<void> {
     if (!req.user) { res.status(401).json({ error: 'Unauthorized' }); return; }
     const kind = req.body?.kind === 'APPOINTMENT' ? 'APPOINTMENT' : 'MED';
@@ -155,8 +173,9 @@ export class MedicalController {
     if (kind === 'APPOINTMENT') {
       const whenAt = new Date(req.body?.whenAt || '');
       if (isNaN(whenAt.getTime())) { res.status(400).json({ error: 'Fecha/hora de turno inválida.' }); return; }
+      const vig = MedicalController.vigenciaFrom(req.body);
       const row = await prisma.medicationReminder.create({
-        data: { userId: req.user.userId, kind, medication, whenAt, times: '[]', leadMinutes },
+        data: { userId: req.user.userId, kind, medication, whenAt, times: '[]', leadMinutes, ...vig },
       });
       res.json({ reminder: { ...row, times: [] } });
       return;
@@ -164,13 +183,7 @@ export class MedicalController {
 
     const dose = req.body?.dose ? String(req.body.dose).trim() : null;
     const scheduleKind = req.body?.scheduleKind === 'INTERVAL' ? 'INTERVAL' : 'CLOCK';
-    let endsAt: Date | null = null;
-    if (req.body?.endsAt) {
-      const e = new Date(req.body.endsAt);
-      if (!isNaN(e.getTime())) endsAt = e;
-    } else if (req.body?.durationDays && Number(req.body.durationDays) >= 1 && Number(req.body.durationDays) <= 1095) {
-      endsAt = new Date(Date.now() + Number(req.body.durationDays) * 86400_000);
-    }
+    const { startsAt, endsAt } = MedicalController.vigenciaFrom(req.body);
 
     if (scheduleKind === 'INTERVAL') {
       const intervalHours = parseInt(String(req.body?.intervalHours), 10);
@@ -179,7 +192,7 @@ export class MedicalController {
       if (isNaN(anchorAt.getTime())) { res.status(400).json({ error: 'Fecha de última toma inválida.' }); return; }
       const nextDoseAt = MedicationReminderService.computeNextDose(anchorAt, intervalHours);
       const row = await prisma.medicationReminder.create({
-        data: { userId: req.user.userId, kind: 'MED', scheduleKind: 'INTERVAL', medication, dose, times: '[]', intervalHours, anchorAt, nextDoseAt, leadMinutes, endsAt },
+        data: { userId: req.user.userId, kind: 'MED', scheduleKind: 'INTERVAL', medication, dose, times: '[]', intervalHours, anchorAt, nextDoseAt, leadMinutes, startsAt, endsAt },
       });
       res.json({ reminder: { ...row, times: [] } });
       return;
@@ -190,7 +203,7 @@ export class MedicalController {
       : [];
     if (!times.length) { res.status(400).json({ error: 'Agregá al menos un horario válido (HH:MM).' }); return; }
     const row = await prisma.medicationReminder.create({
-      data: { userId: req.user.userId, kind: 'MED', scheduleKind: 'CLOCK', medication, dose, times: JSON.stringify(times), leadMinutes, endsAt },
+      data: { userId: req.user.userId, kind: 'MED', scheduleKind: 'CLOCK', medication, dose, times: JSON.stringify(times), leadMinutes, startsAt, endsAt },
     });
     res.json({ reminder: { ...row, times } });
   }
@@ -219,6 +232,24 @@ export class MedicalController {
       const whenAt = new Date(req.body.whenAt);
       if (isNaN(whenAt.getTime())) { res.status(400).json({ error: 'Fecha/hora de turno inválida.' }); return; }
       data.whenAt = whenAt;
+    }
+    // Vigencia. `null` explícito = sacar la fecha (vuelve a ser sin corte); un
+    // valor inválido se rechaza en vez de guardarse como null en silencio.
+    for (const campo of ['startsAt', 'endsAt'] as const) {
+      if (req.body?.[campo] === undefined) continue;
+      if (req.body[campo] === null || req.body[campo] === '') {
+        data[campo] = null;
+        continue;
+      }
+      const d = new Date(String(req.body[campo]));
+      if (isNaN(d.getTime())) { res.status(400).json({ error: `Fecha de ${campo === 'startsAt' ? 'inicio' : 'fin'} inválida.` }); return; }
+      data[campo] = d;
+    }
+    // Volver a poner una fecha de fin futura implica querer recibir los avisos otra
+    // vez: sin esto el recordatorio quedaba apagado por el cierre anterior.
+    if (data.endsAt instanceof Date && data.endsAt.getTime() > Date.now() && current.lastSentSlot === 'ENDED') {
+      data.active = data.active ?? true;
+      data.lastSentSlot = null;
     }
     // Cambio de intervalo o "ya tomé" desde la web → recalcular la próxima toma.
     const nextInterval = req.body?.intervalHours !== undefined ? parseInt(String(req.body.intervalHours), 10) : current.intervalHours;

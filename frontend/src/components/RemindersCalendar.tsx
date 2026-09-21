@@ -19,6 +19,7 @@ interface Reminder {
   anchorAt?: string | null;
   nextDoseAt?: string | null;
   leadMinutes?: number | null;
+  startsAt?: string | null;
   endsAt?: string | null;
   whenAt?: string | null;
   active: boolean;
@@ -85,7 +86,9 @@ const intervalLabel = (h: number) => (h % 24 === 0 ? (h === 24 ? 'cada 24 h' : `
 /**
  * Expande cada recordatorio en ocurrencias puntuales dentro de [from, to]:
  * turno = 1; CLOCK = cada horario fijo de cada día; INTERVAL = pasos de
- * `intervalHours` desde `anchorAt`/`nextDoseAt`. Todo acotado por `endsAt` (MED).
+ * `intervalHours` desde `anchorAt`/`nextDoseAt`. Todo acotado por la vigencia
+ * (`startsAt`…`endsAt`): un recordatorio que arranca el 1/10 no se dibuja en
+ * septiembre, igual que el bot no avisa antes de esa fecha.
  */
 function expandOccurrences(reminders: Reminder[], from: Date, to: Date): Occ[] {
   const out: Occ[] = [];
@@ -105,17 +108,19 @@ function expandOccurrences(reminders: Reminder[], from: Date, to: Date): Occ[] {
     }
 
     const endMs = r.endsAt ? new Date(r.endsAt).getTime() : Infinity;
+    const beginMs = r.startsAt ? new Date(r.startsAt).getTime() : -Infinity;
     const stopMs = Math.min(endMs, toMs);
-    if (stopMs < fromMs) continue;
+    const startMs = Math.max(beginMs, fromMs);
+    if (stopMs < startMs) continue;
 
     if (r.scheduleKind === 'INTERVAL' && r.intervalHours && (r.anchorAt || r.nextDoseAt)) {
       const stepMs = r.intervalHours * 3600_000;
       const base = new Date(r.anchorAt || r.nextDoseAt!).getTime();
-      let k = Math.max(1, Math.ceil((fromMs - base) / stepMs));
+      let k = Math.max(1, Math.ceil((startMs - base) / stepMs));
       for (let i = 0; i < CAP; i++, k++) {
         const tMs = base + k * stepMs;
         if (tMs > stopMs) break;
-        if (tMs >= fromMs)
+        if (tMs >= startMs)
           out.push({ at: new Date(tMs), kind: 'MED', label: r.medication, sub: r.dose || intervalLabel(r.intervalHours), r });
       }
       continue;
@@ -129,7 +134,7 @@ function expandOccurrences(reminders: Reminder[], from: Date, to: Date): Occ[] {
       if (isoAt(k, '00:00').getTime() > stopMs) break;
       for (const time of times) {
         const tMs = isoAt(k, time).getTime();
-        if (tMs >= fromMs && tMs <= stopMs)
+        if (tMs >= startMs && tMs <= stopMs)
           out.push({ at: new Date(tMs), kind: 'MED', label: r.medication, sub: r.dose || 'todos los días', r });
       }
       if (out.length > CAP * 4) break;
@@ -546,7 +551,8 @@ const DayAgenda: React.FC<{
               {o.sub && (
                 <div className="text-[10px] text-fg-muted">
                   {o.sub}
-                  {o.kind === 'MED' && o.r.endsAt ? ` · hasta ${fmtDM(o.r.endsAt)}` : ''}
+                  {o.kind === 'MED' && o.r.startsAt && new Date(o.r.startsAt).getTime() > Date.now() ? ` · desde ${fmtDM(o.r.startsAt)}` : ''}
+                  {o.r.endsAt ? ` · hasta ${fmtDM(o.r.endsAt)}` : ''}
                   {o.kind === 'APPOINTMENT' && o.r.leadMinutes ? ` · aviso ${LEAD_OPTS.find((l) => l.v === o.r.leadMinutes)?.label || `${o.r.leadMinutes} min antes`}` : ''}
                 </div>
               )}
@@ -589,12 +595,19 @@ const EditModal: React.FC<{
   const [anchorTs, setAnchorTs] = useState(r.anchorAt ? isoToDateInput(r.anchorAt) + 'T' + isoToTimeInput(r.anchorAt) : nowLocalInput());
   const [times, setTimes] = useState<string[]>(r.times || []);
   const [timeDraft, setTimeDraft] = useState('');
+  const [starts, setStarts] = useState(r.startsAt ? isoToDateInput(r.startsAt) : '');
   const [ends, setEnds] = useState(r.endsAt ? isoToDateInput(r.endsAt) : '');
+  // Vigencia: vacío = sin límite por ese lado. Es el mismo par desde/hasta que
+  // pide el bot, y es lo que hace que el aviso pare solo al llegar al final.
+  const vigencia = () => ({
+    startsAt: starts ? `${starts}T00:00:00-03:00` : null,
+    endsAt: ends ? `${ends}T23:59:00-03:00` : null,
+  });
 
   const save = () => {
     if (isAppt) {
       if (!name.trim() || !date || !time) return;
-      onSave({ medication: name.trim(), whenAt: `${date}T${time}:00-03:00`, leadMinutes: lead });
+      onSave({ medication: name.trim(), whenAt: `${date}T${time}:00-03:00`, leadMinutes: lead, ...vigencia() });
       return;
     }
     const body: Record<string, unknown> = { medication: name.trim(), dose: dose.trim() || null, leadMinutes: lead };
@@ -605,7 +618,7 @@ const EditModal: React.FC<{
       if (!times.length) return;
       body.times = times;
     }
-    body.endsAt = ends ? `${ends}T23:59:00-03:00` : null;
+    Object.assign(body, vigencia());
     onSave(body);
   };
 
@@ -676,11 +689,22 @@ const EditModal: React.FC<{
                 </div>
               </div>
             )}
-            <label className="block text-[11px] font-bold text-fg-soft">Termina el (opcional)
-              <input type="date" value={ends} onChange={(e) => setEnds(e.target.value)} className={`${inp} w-full mt-1`} />
-            </label>
           </>
         )}
+
+        {/* Vigencia de los avisos, para medicación Y para turnos: llegada la fecha
+            de fin, el recordatorio para solo (lo mismo que hace el bot por chat). */}
+        <div className="flex gap-2">
+          <label className="flex-1 text-[11px] font-bold text-fg-soft">Empieza el (opcional)
+            <input type="date" value={starts} onChange={(e) => setStarts(e.target.value)} className={`${inp} w-full mt-1`} />
+          </label>
+          <label className="flex-1 text-[11px] font-bold text-fg-soft">Termina el (opcional)
+            <input type="date" value={ends} onChange={(e) => setEnds(e.target.value)} className={`${inp} w-full mt-1`} />
+          </label>
+        </div>
+        <p className="text-[10px] text-fg-muted -mt-2">
+          Sin fechas, el aviso sigue hasta que lo pares o lo borres. Con fecha de fin, para solo al llegar.
+        </p>
 
         <div className="flex items-center justify-between pt-1">
           <button type="button" onClick={onDelete} disabled={busy}

@@ -415,14 +415,24 @@ describe('draftNextStep', () => {
       })
     ).toBe('');
   });
-  it('APPOINTMENT: nombre → cuándo → (anticipación por defecto 1 h, no se pregunta)', () => {
+  it('APPOINTMENT: nombre → cuándo → vigencia (anticipación por defecto 1 h, no se pregunta)', () => {
     expect(MedicationReminderService.draftNextStep({ kind: 'APPOINTMENT' })).toBe('name');
     expect(MedicationReminderService.draftNextStep({ kind: 'APPOINTMENT', medication: 'Cardiólogo' })).toBe('when');
+    // Con la fecha del turno ya puesta queda preguntar desde/hasta cuándo avisar:
+    // llegada la fecha final el aviso para solo, igual que en medicación.
     const d: any = { kind: 'APPOINTMENT', medication: 'Cardiólogo', whenAt: new Date().toISOString() };
-    expect(MedicationReminderService.draftNextStep(d)).toBe('');
+    expect(MedicationReminderService.draftNextStep(d)).toBe('range');
     expect(d.leadMinutes).toBe(60);
+    // Ya preguntada (el usuario dijo "LISTO" = avisos normales) → a confirmar.
     expect(
-      MedicationReminderService.draftNextStep({ kind: 'APPOINTMENT', medication: 'Cardiólogo', whenAt: new Date().toISOString(), leadMinutes: 60 })
+      MedicationReminderService.draftNextStep({ kind: 'APPOINTMENT', medication: 'Cardiólogo', whenAt: new Date().toISOString(), leadMinutes: 60, rangeAsked: true })
+    ).toBe('');
+    // O con fecha de corte explícita.
+    expect(
+      MedicationReminderService.draftNextStep({
+        kind: 'APPOINTMENT', medication: 'Cardiólogo', whenAt: new Date().toISOString(), leadMinutes: 60,
+        endsAt: new Date(Date.now() + 86400_000).toISOString(),
+      })
     ).toBe('');
   });
 });

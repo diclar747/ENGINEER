@@ -953,6 +953,9 @@ export class MedicationReminderService {
       if (!d.medication) return 'name';
       if (!d.whenAt) return 'when';
       if (d.leadMinutes === undefined || d.leadMinutes === null) d.leadMinutes = 60;
+      // Desde/hasta cuándo avisar de esta cita. Igual que en medicación: llegada la
+      // fecha final el aviso para solo.
+      if (!d.rangeAsked && !d.endsAt) return 'range';
       return '';
     }
     if (!d.medication) return 'name';
@@ -978,7 +981,16 @@ export class MedicationReminderService {
     if (d.kind === 'APPOINTMENT') {
       const when = d.whenAt ? fmtDateTime(new Date(d.whenAt)) : '—';
       const lead = d.leadMinutes ? ` · aviso ${leadLabel(d.leadMinutes)} antes` : '';
-      return `🩺 *${this.cap(d.medication || 'Consulta médica')}*\n📅 ${when}${lead}`;
+      const dayA = (v: string) => new Date(v).toLocaleDateString('es-PY', { timeZone: TZ(), day: '2-digit', month: '2-digit', year: 'numeric' });
+      const vig =
+        d.startsAt && d.endsAt
+          ? `\n📆 avisos del ${dayA(d.startsAt)} al ${dayA(d.endsAt)}`
+          : d.endsAt
+            ? `\n📆 avisos hasta el ${dayA(d.endsAt)} (después para solo)`
+            : d.startsAt
+              ? `\n📆 avisos desde el ${dayA(d.startsAt)}`
+              : `\n📆 avisos hasta el día del turno (después para solo)`;
+      return `🩺 *${this.cap(d.medication || 'Consulta médica')}*\n📅 ${when}${lead}${vig}`;
     }
     const dose = d.dose ? ` (${d.dose})` : '';
     const day = (v: string) => new Date(v).toLocaleDateString('es-PY', { timeZone: TZ(), day: '2-digit', month: '2-digit', year: 'numeric' });
@@ -1014,6 +1026,8 @@ export class MedicationReminderService {
           // Segundo aviso automático 10 min antes, además del principal — salvo que
           // el principal YA sea de 10 min (no mandar el mismo aviso dos veces).
           secondLeadMinutes: leadMinutes > 10 ? 10 : null,
+          startsAt: d.startsAt && !isNaN(new Date(d.startsAt).getTime()) ? new Date(d.startsAt) : null,
+          endsAt: d.endsAt && !isNaN(new Date(d.endsAt).getTime()) ? new Date(d.endsAt) : null,
         },
       });
       if (created.whenAt) {
@@ -1074,6 +1088,8 @@ export class MedicationReminderService {
           whenAt: d.whenAt ? new Date(d.whenAt) : null,
           leadMinutes,
           secondLeadMinutes: leadMinutes > 10 ? 10 : null,
+          startsAt: d.startsAt && !isNaN(new Date(d.startsAt).getTime()) ? new Date(d.startsAt) : null,
+          endsAt: d.endsAt && !isNaN(new Date(d.endsAt).getTime()) ? new Date(d.endsAt) : null,
           active: true,
           lastSentAt: null,
           lastSentSlot: null,
@@ -1414,14 +1430,18 @@ export class MedicationReminderService {
       if (r.startsAt && nowMs < new Date(r.startsAt).getTime()) continue;
 
       // Fin de la vigencia ("por 3 días" / "hasta el 30/04") → se desactiva solo,
-      // con un aviso de cierre. Vale también para los turnos con fecha de corte.
-      if (r.kind === 'MED' && r.endsAt && nowMs > new Date(r.endsAt).getTime()) {
+      // con un aviso de cierre. Vale igual para medicación y para citas/turnos:
+      // llegada la fecha final, el aviso PARA, que es justo lo que se pidió.
+      if (r.endsAt && nowMs > new Date(r.endsAt).getTime()) {
         const gnEnd = r.user.language === 'GN';
+        const esCita = r.kind === 'APPOINTMENT';
         if (r.lastSentSlot !== 'ENDED') {
           const msg = gnEnd
-            ? `✅ *${r.medication}* — opa pe tratamiento. Ndorohechavéima momandu'a.`
-            : `✅ Terminó el tratamiento de *${r.medication}*. No te aviso más por este. _Si seguís tomándolo, escribí *5* y cargalo de nuevo._`;
-          if (await deliver(r.user.id, r.user.whatsappJid || r.user.phoneNumber, msg, { title: '✅ Tratamiento terminado', body: msg, opts: { tag: `reminder-${r.id}` } })) {
+            ? `✅ *${r.medication}* — opa. Ndorohechavéima momandu'a.`
+            : esCita
+              ? `✅ Llegó la fecha final de los avisos de *${r.medication}*. No te aviso más por esta cita. _Si la seguís necesitando, escribí *6* y cargala de nuevo._`
+              : `✅ Terminó el tratamiento de *${r.medication}*. No te aviso más por este. _Si seguís tomándolo, escribí *5* y cargalo de nuevo._`;
+          if (await deliver(r.user.id, r.user.whatsappJid || r.user.phoneNumber, msg, { title: esCita ? '✅ Avisos terminados' : '✅ Tratamiento terminado', body: msg, opts: { tag: `reminder-${r.id}` } })) {
             await prisma.medicationReminder.update({ where: { id: r.id }, data: { active: false, lastSentSlot: 'ENDED' } });
             sent++;
           }
