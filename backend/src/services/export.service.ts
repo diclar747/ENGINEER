@@ -15,6 +15,19 @@ try {
   // fallback if optional
 }
 
+/**
+ * Nombre con el que un estudio queda guardado DENTRO del zip. Lo usan el
+ * manifiesto y el empaquetado: si se calcularan por separado, el JSON terminaría
+ * apuntando a un archivo que no existe con ese nombre.
+ */
+function inZipName(study: { title?: string | null; studyType?: string | null; studyDate?: Date | null; createdAt: Date; fileUrl?: string | null }): string | null {
+  if (!study.fileUrl) return null;
+  const ext = path.extname(study.fileUrl.split('?')[0]) || '';
+  const safeTitle = (study.title || study.studyType || 'estudio').replace(/[\\/:*?"<>|]+/g, '_');
+  const dateTag = (study.studyDate ? new Date(study.studyDate) : study.createdAt).toISOString().slice(0, 10);
+  return `estudios_medicos/${dateTag}_${safeTitle}${ext}`;
+}
+
 export class ExportService {
   /**
    * A stored fileUrl always looks like `${config.baseUrl}/uploads/<folder>/<name>`
@@ -100,7 +113,11 @@ export class ExportService {
         title: s.title,
         studyType: s.studyType,
         studyDate: s.studyDate,
-        fileUrl: s.fileUrl,
+        // Nombre del archivo DENTRO de este mismo zip (carpeta `estudios_medicos/`),
+        // el mismo que se arma más abajo al empaquetarlo. Antes iba la URL de
+        // /uploads, que ahora exige firma con vencimiento: en un export guardado
+        // por meses sería un enlace muerto.
+        archivoEnEsteZip: inZipName(s),
         aiSummary: ZeroKnowledgeSecurity.kmsDecrypt(s.aiSummary),
         ocrRawText: ZeroKnowledgeSecurity.kmsDecrypt(s.ocrRawText),
         createdAt: s.createdAt,
@@ -159,9 +176,7 @@ export class ExportService {
           missingStudyFiles++;
           continue;
         }
-        const safeTitle = (study.title || study.studyType || 'estudio').replace(/[\\/:*?"<>|]+/g, '_');
-        const dateTag = study.studyDate ? new Date(study.studyDate).toISOString().slice(0, 10) : study.createdAt.toISOString().slice(0, 10);
-        archive.file(localPath, { name: `estudios_medicos/${dateTag}_${safeTitle}${path.extname(localPath)}` });
+        archive.file(localPath, { name: inZipName(study) as string });
       }
 
       // Add readme explanation

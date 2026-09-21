@@ -74,7 +74,10 @@ export class MedicalController {
     res.json({
       success: true,
       message: 'Estudio médico procesado y almacenado exitosamente',
-      study: { ...study, ocrRawText: analysis.rawText, aiSummary: analysis.aiSummary },
+      // Firmado igual que en getStudies: la web mete este objeto directo en la
+      // lista, sin volver a pedir los estudios, así que con la URL cruda la
+      // miniatura del archivo recién subido daba 403 hasta recargar la página.
+      study: { ...withSignedFileUrl(study), ocrRawText: analysis.rawText, aiSummary: analysis.aiSummary },
     });
   }
 
