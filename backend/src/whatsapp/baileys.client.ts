@@ -65,13 +65,15 @@ export class BaileysClient {
    *  reconnect que no lo destruyó) comparan contra esto y se abortan solos, así no
    *  hay doble procesado del mismo inbound. */
   private socketGen = 0;
-  /** Última vez que se procesó un inbound por chat — freno anti-rebote (mismo mensaje entregado dos veces). */
-  private lastInboundAt = new Map<string, number>();
   /** (chat|firma-de-contenido) → timestamp. Dedup por CONTENIDO: la sesión @lid
    *  reentrega el mismo mensaje con id distinto y a >2 s; esto lo corta igual. */
   private recentContent = new Map<string, number>();
-  /** chat → epoch hasta el cual se ignora todo de ese chat (cortafuegos anti-ráfaga). */
-  private burstCooldown = new Map<string, number>();
+  /** chat → cola de procesamiento. Los mensajes de un mismo chat se atienden de a
+   *  uno y en orden (una ráfaga de 20 fotos entra entera, sin pisarse el estado);
+   *  chats distintos siguen en paralelo. */
+  private chatQueues = new Map<string, Promise<void>>();
+  /** chat → cuántos mensajes de ese chat están esperando turno en la cola. */
+  private chatQueueDepth = new Map<string, number>();
   /** epoch del último QR mostrado — solo tras un pareo FRESCO hay ráfaga de historial. */
   private lastQrAt = 0;
   /** control del bucle de "restart required" (515). */
@@ -217,6 +219,51 @@ export class BaileysClient {
       this.seenMsgIds.delete(this.seenMsgIds.values().next().value as string);
     }
     return true;
+  }
+
+  /**
+   * Encola el trabajo de UN mensaje detrás de lo que ya haya pendiente de ESE chat.
+   * Antes los inbound se procesaban en paralelo y los frenos por tiempo (3 s de
+   * cortafuegos, 600 ms de anti-rebote) eran lo único que evitaba que dos mensajes
+   * del mismo usuario se pisaran el estado — al precio de tirar a la basura casi
+   * toda una ráfaga de cargas. Con la cola no se descarta nada: se atiende de a uno,
+   * en orden de llegada, y el estado (`onboardingState`/`onboardingData`) se lee y
+   * escribe sin carreras. Chats distintos siguen avanzando en paralelo.
+   */
+  private enqueueForChat(jid: string, job: () => Promise<void>): void {
+    const depth = (this.chatQueueDepth.get(jid) || 0) + 1;
+    this.chatQueueDepth.set(jid, depth);
+    if (depth > 1) console.log(`[WHATSAPP BOT] En cola para ${jid}: ${depth} mensaje(s) pendiente(s).`);
+    const prev = this.chatQueues.get(jid) || Promise.resolve();
+    const next = prev
+      .catch(() => {})
+      .then(job)
+      .catch((e) => console.error(`[WHATSAPP BOT] Error atendiendo mensaje de ${jid}:`, e))
+      .finally(() => {
+        const left = (this.chatQueueDepth.get(jid) || 1) - 1;
+        if (left <= 0) {
+          this.chatQueueDepth.delete(jid);
+          if (this.chatQueues.get(jid) === next) this.chatQueues.delete(jid);
+        } else {
+          this.chatQueueDepth.set(jid, left);
+        }
+      });
+    this.chatQueues.set(jid, next);
+  }
+
+  /** Espera (hasta `ms`) a que el socket vuelva, para reintentar un envío que falló por un corte. */
+  private async waitForConnection(ms: number): Promise<boolean> {
+    const deadline = Date.now() + ms;
+    while (Date.now() < deadline) {
+      if (this.sock && this.isConnected) return true;
+      await new Promise((r) => setTimeout(r, 500));
+    }
+    return !!(this.sock && this.isConnected);
+  }
+
+  /** ¿Quedan mensajes de este chat esperando turno? (una ráfaga todavía entrando). */
+  private hasQueuedAfter(jid: string): boolean {
+    return (this.chatQueueDepth.get(jid) || 0) > 1;
   }
 
   public async start(): Promise<void> {
@@ -426,22 +473,22 @@ export class BaileysClient {
             continue;
           }
 
-          const dupById = msg.key.id ? !this.markSeen(`id:${msg.key.id}`) : false;
-          const dupByTs = ts ? !this.markSeen(`ts:${msg.key.remoteJid || '?'}|${ts}`) : false;
-          if (dupById || dupByTs) {
+          // Replay del MISMO mensaje físico (mismo key.id) → ya atendido.
+          //
+          // Antes había además un dedup por `ts` (segundo de envío) y un cortafuegos
+          // que ignoraba 3 s de ese chat tras atender un mensaje. Los dos se sacaron:
+          // el timestamp de WhatsApp viene en SEGUNDOS, así que al mandar varias
+          // fotos de la galería de una vez, todas las que caían en el mismo segundo
+          // se descartaban como "duplicadas", y el cortafuegos se comía el resto de
+          // la ráfaga. Resultado: de 20 estudios cargados se guardaban 6 o 7 — los
+          // demás nunca llegaban a la bóveda y por eso después "no se podían
+          // descargar". Ahora NADA se descarta por tiempo: los mensajes de un mismo
+          // chat se encolan y se procesan de a uno, en orden de llegada (ver
+          // `enqueueForChat`). Las reentregas del @lid las sigue filtrando el dedup
+          // por CONTENIDO (fileSha256 / texto) de `processIncomingMessage`.
+          if (msg.key.id && !this.markSeen(`id:${msg.key.id}`)) {
             continue; // ya atendido (replay del mismo mensaje)
           }
-
-          // Cortafuegos anti-ráfaga: tras atender UN mensaje de un chat, se ignora
-          // todo lo que llegue de ESE chat en los próximos 3 s. Una persona en el
-          // registro deja segundos entre paso y paso; una reproducción de historial
-          // vuelca 5-6 mensajes seguidos → solo pasa el primero.
-          const cd = this.burstCooldown.get(msg.key.remoteJid || '') || 0;
-          if (Date.now() < cd) {
-            console.log(`[WHATSAPP BOT] Cortafuegos anti-ráfaga: ignoro ${msg.key.remoteJid} (quedan ${cd - Date.now()}ms)`);
-            continue;
-          }
-          this.burstCooldown.set(msg.key.remoteJid || '', Date.now() + 3000);
 
           if (msg.key.fromMe) {
             // Messages sent FROM the bot's own linked account (e.g. testing by writing
@@ -480,7 +527,9 @@ export class BaileysClient {
           // Acuse explícito: le decimos a WhatsApp que este mensaje ya llegó y se
           // leyó → deja de reempujarlo (era la fuente del bucle de "historial").
           this.sock?.readMessages([msg.key]).catch(() => {});
-          await this.processIncomingMessage(msg);
+          // En cola por chat: una ráfaga de 20 fotos se procesa entera, de a una y
+          // en orden, sin pisarse el estado del usuario entre medio.
+          this.enqueueForChat(jid, () => this.processIncomingMessage(msg));
         }
       });
     } catch (err) {
@@ -567,19 +616,6 @@ export class BaileysClient {
       if (this.recentContent.size > 800) {
         for (const [k, t] of this.recentContent) if (nowMs - t > 180_000) this.recentContent.delete(k);
       }
-    }
-
-    // Guarda extra SOLO contra doble-procesado casi simultáneo del MISMO arribo
-    // físico (dos listeners, o la misma tanda entregada dos veces en el mismo ms).
-    // Ventana chica (600 ms) para no comerse mensajes legítimos rápidos.
-    const prev = this.lastInboundAt.get(remoteJid) || 0;
-    if (nowMs - prev < 600) {
-      console.warn(`[WHATSAPP BOT] Anti-rebote (600ms): ignoro inbound de ${remoteJid} (${nowMs - prev}ms)`);
-      return;
-    }
-    this.lastInboundAt.set(remoteJid, nowMs);
-    if (this.lastInboundAt.size > 500) {
-      for (const [k, t] of this.lastInboundAt) if (nowMs - t > 60_000) this.lastInboundAt.delete(k);
     }
 
     this.logEvent({
@@ -706,7 +742,17 @@ export class BaileysClient {
 
       // Reply to the exact JID the message arrived on (correct for both @s.whatsapp.net
       // and @lid) rather than reconstructing one from the bare phone/lid digits.
-      const sendReplyText = () => this.sendMessage(remoteJid, response.replyText);
+      // Ráfaga de cargas: mientras queden mensajes de ESTE chat esperando turno, los
+      // acuses intermedios sin adjunto no se mandan. Cargar 20 estudios devolvía 20
+      // veces "✅ Guardado en tu bóveda"; ahora sale el del último, que ya refleja el
+      // estado final. Todo lo que lleve archivo adjunto se manda siempre.
+      const sendReplyText = async () => {
+        if (this.hasQueuedAfter(remoteJid) && !response.mediaAttachment && !(response.extraAttachments || []).length) {
+          console.log(`[WHATSAPP BOT] Acuse intermedio omitido (ráfaga en curso) -> ${remoteJid}`);
+          return true;
+        }
+        return this.sendMessage(remoteJid, response.replyText);
+      };
       const sendAttachment = async () => {
         if (!response.mediaAttachment) return;
         if (response.mediaAttachment.kind === 'image') {
@@ -738,10 +784,42 @@ export class BaileysClient {
       }
       // Varios adjuntos (ej. "descargar todos mis documentos"): uno por mensaje, en
       // orden y con una pausa corta — WhatsApp castiga ráfagas de envíos seguidos.
-      for (const extra of response.extraAttachments || []) {
+      //
+      // Cada envío va aislado y con UN reintento: antes, si uno fallaba (o el socket
+      // se caía a mitad de la tanda) se cortaba la lista entera en silencio y la
+      // persona recibía solo los primeros archivos sin enterarse de que faltaban.
+      // Al final se avisa explícitamente qué no se pudo mandar.
+      const extras = response.extraAttachments || [];
+      const failed: string[] = [];
+      for (let i = 0; i < extras.length; i++) {
+        const extra = extras[i];
         await new Promise((r) => setTimeout(r, 900));
-        if (extra.kind === 'image') await this.sendImage(remoteJid, extra.buffer, extra.caption, extra.mimetype);
-        else await this.sendDocument(remoteJid, extra.buffer, extra.filename, extra.mimetype, extra.caption);
+        let ok = false;
+        for (let attempt = 1; attempt <= 2 && !ok; attempt++) {
+          try {
+            ok =
+              extra.kind === 'image'
+                ? await this.sendImage(remoteJid, extra.buffer, extra.caption, extra.mimetype)
+                : await this.sendDocument(remoteJid, extra.buffer, extra.filename, extra.mimetype, extra.caption);
+          } catch (e: any) {
+            console.error(`[WHATSAPP BOT] Adjunto ${i + 1}/${extras.length} falló (intento ${attempt}/2):`, e?.message || e);
+            ok = false;
+          }
+          if (!ok && attempt === 1) {
+            // Puede ser un corte momentáneo del socket: esperamos a que vuelva.
+            await this.waitForConnection(15_000);
+            await new Promise((r) => setTimeout(r, 1_500));
+          }
+        }
+        if (!ok) failed.push(extra.filename || extra.caption || `archivo ${i + 1}`);
+      }
+      if (failed.length) {
+        await this.sendMessage(
+          remoteJid,
+          `⚠️ *No pude mandarte ${failed.length} de ${extras.length} archivo(s):*\n` +
+            failed.map((f) => `• ${f}`).join('\n') +
+            `\n\nVolvé a pedirlos y los reintento.`
+        );
       }
 
       // Best-effort: remember the exact JID so later async messages (payment
@@ -904,7 +982,11 @@ export class BaileysClient {
       }
     }
 
-    return true;
+    // Sin socket no se mandó nada: devolver `true` hacía que el que llama diera el
+    // envío por bueno y siguiera con el resto de la tanda (los archivos "se
+    // enviaban" sin salir nunca del servidor).
+    this.logEvent({ dir: 'out', jid, phone, kind: 'image', preview: caption || '[imagen]', status: 'failed', error: 'bot desconectado' });
+    return false;
   }
 
   /**
@@ -943,7 +1025,8 @@ export class BaileysClient {
       }
     }
 
-    return true;
+    this.logEvent({ dir: 'out', jid, phone, kind: 'document', preview: caption || fileName, status: 'failed', error: 'bot desconectado' });
+    return false;
   }
 
   public getStatus() {

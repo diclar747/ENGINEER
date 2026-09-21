@@ -29,7 +29,10 @@ export interface ReminderDraft {
   whenAt?: string; // ISO — turno (APPOINTMENT)
   whenPendingDate?: string; // YYYY-MM-DD — fecha del turno ya dada, esperando la hora
   leadMinutes?: number;
-  endsAt?: string; // ISO — fin del tratamiento ("por 3 días")
+  startsAt?: string; // ISO — desde cuándo rige ("empiezo el lunes"); vacío = ya
+  /** Ya se preguntó por la vigencia (desde/hasta) — no se vuelve a preguntar. */
+  rangeAsked?: boolean;
+  endsAt?: string; // ISO — fin del tratamiento ("por 3 días" / "hasta el 30/04")
 }
 
 /** Número escrito o en dígitos → entero ("tres" → 3, "10" → 10, "veintiuno" → 21). */
@@ -945,7 +948,7 @@ export class MedicationReminderService {
   }
 
   /** ¿Qué falta preguntar para poder guardar el borrador? '' = listo para confirmar. */
-  static draftNextStep(d: Partial<ReminderDraft>): '' | 'name' | 'sched' | 'last' | 'dose' | 'when' | 'lead' {
+  static draftNextStep(d: Partial<ReminderDraft>): '' | 'name' | 'sched' | 'last' | 'dose' | 'when' | 'lead' | 'range' {
     if (d.kind === 'APPOINTMENT') {
       if (!d.medication) return 'name';
       if (!d.whenAt) return 'when';
@@ -957,6 +960,10 @@ export class MedicationReminderService {
       return 'sched';
     if (d.scheduleKind === 'INTERVAL' && !d.anchorAt) return 'last';
     if (d.dose === undefined) return 'dose';
+    // Vigencia (desde / hasta). Si el texto ya traía la duración ("por 7 días") no
+    // se vuelve a preguntar. Sin fecha de fin el aviso seguiría para siempre, que
+    // es justo lo que la gente reclama de un tratamiento que ya terminó.
+    if (!d.rangeAsked && !d.endsAt) return 'range';
     return '';
   }
 
@@ -974,9 +981,15 @@ export class MedicationReminderService {
       return `🩺 *${this.cap(d.medication || 'Consulta médica')}*\n📅 ${when}${lead}`;
     }
     const dose = d.dose ? ` (${d.dose})` : '';
-    const until = d.endsAt
-      ? `\n📆 hasta el ${new Date(d.endsAt).toLocaleDateString('es-PY', { timeZone: TZ(), day: '2-digit', month: '2-digit' })} (después se desactiva solo)`
-      : '';
+    const day = (v: string) => new Date(v).toLocaleDateString('es-PY', { timeZone: TZ(), day: '2-digit', month: '2-digit', year: 'numeric' });
+    const until =
+      d.startsAt && d.endsAt
+        ? `\n📆 del ${day(d.startsAt)} al ${day(d.endsAt)} (después se desactiva solo)`
+        : d.endsAt
+          ? `\n📆 hasta el ${day(d.endsAt)} (después se desactiva solo)`
+          : d.startsAt
+            ? `\n📆 desde el ${day(d.startsAt)} (sin fecha de fin)`
+            : `\n📆 sin fecha de fin (avisa hasta que lo pares o lo borres)`;
     if (d.scheduleKind === 'INTERVAL') {
       const anchor = d.anchorAt ? new Date(d.anchorAt) : new Date();
       const next = this.computeNextDose(anchor, d.intervalHours || 8);
@@ -1022,6 +1035,7 @@ export class MedicationReminderService {
       medication: this.cap((d.medication || 'Medicación').slice(0, 80)),
       dose: d.dose ? String(d.dose).slice(0, 60) : null,
       leadMinutes: d.leadMinutes ?? 10,
+      startsAt: d.startsAt && !isNaN(new Date(d.startsAt).getTime()) ? new Date(d.startsAt) : null,
       endsAt: d.endsAt && !isNaN(new Date(d.endsAt).getTime()) ? new Date(d.endsAt) : null,
     };
     if (scheduleKind === 'INTERVAL') {
@@ -1072,6 +1086,7 @@ export class MedicationReminderService {
       medication: this.cap((d.medication || 'Medicación').slice(0, 80)),
       dose: d.dose ? String(d.dose).slice(0, 60) : null,
       leadMinutes: d.leadMinutes ?? 10,
+      startsAt: d.startsAt && !isNaN(new Date(d.startsAt).getTime()) ? new Date(d.startsAt) : null,
       endsAt: d.endsAt && !isNaN(new Date(d.endsAt).getTime()) ? new Date(d.endsAt) : null,
       active: true,
       lastSentAt: null,
@@ -1103,6 +1118,7 @@ export class MedicationReminderService {
       intervalHours?: number | null;
       nextDoseAt?: Date | null;
       whenAt?: Date | null;
+      startsAt?: Date | null;
       endsAt?: Date | null;
       active: boolean;
     }>
@@ -1111,9 +1127,11 @@ export class MedicationReminderService {
     return rows
       .map((r, i) => {
         const state = r.active ? '' : ' _(pausado)_';
-        const until = r.endsAt
-          ? ` · hasta ${new Date(r.endsAt).toLocaleDateString('es-PY', { timeZone: TZ(), day: '2-digit', month: '2-digit' })}`
-          : '';
+        const dayShort = (v: Date) => new Date(v).toLocaleDateString('es-PY', { timeZone: TZ(), day: '2-digit', month: '2-digit' });
+        const pend = (r as any).startsAt && new Date((r as any).startsAt).getTime() > Date.now();
+        const until =
+          (pend ? ` · empieza ${dayShort((r as any).startsAt)}` : '') +
+          (r.endsAt ? ` · hasta ${dayShort(r.endsAt)}` : '');
         if (r.kind === 'APPOINTMENT') {
           const w = r.whenAt
             ? new Date(r.whenAt).toLocaleString('es-PY', {
@@ -1391,7 +1409,12 @@ export class MedicationReminderService {
     for (const r of reminders) {
       if (!r.user || (r.user.status !== 'ACTIVE' && r.user.status !== 'EXPIRED')) continue;
 
-      // Fin del tratamiento ("por 3 días") → se desactiva solo, con un aviso de cierre.
+      // Todavía no arrancó ("desde el 01/10"): no se avisa nada hasta esa fecha.
+      // El recordatorio queda guardado y activo, simplemente duerme.
+      if (r.startsAt && nowMs < new Date(r.startsAt).getTime()) continue;
+
+      // Fin de la vigencia ("por 3 días" / "hasta el 30/04") → se desactiva solo,
+      // con un aviso de cierre. Vale también para los turnos con fecha de corte.
       if (r.kind === 'MED' && r.endsAt && nowMs > new Date(r.endsAt).getTime()) {
         const gnEnd = r.user.language === 'GN';
         if (r.lastSentSlot !== 'ENDED') {

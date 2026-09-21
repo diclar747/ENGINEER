@@ -392,15 +392,27 @@ describe('resolveWhen — respuesta tolerante en el paso "¿qué día y hora?"',
 });
 
 describe('draftNextStep', () => {
-  it('MED: pide nombre, luego frecuencia, luego última toma (INTERVAL), luego dosis', () => {
+  it('MED: pide nombre, luego frecuencia, luego última toma (INTERVAL), luego dosis, luego vigencia', () => {
     expect(MedicationReminderService.draftNextStep({ kind: 'MED' })).toBe('name');
     expect(MedicationReminderService.draftNextStep({ kind: 'MED', medication: 'Losartán' })).toBe('sched');
     expect(MedicationReminderService.draftNextStep({ kind: 'MED', medication: 'Losartán', scheduleKind: 'INTERVAL', intervalHours: 8 })).toBe('last');
     expect(
       MedicationReminderService.draftNextStep({ kind: 'MED', medication: 'Losartán', scheduleKind: 'INTERVAL', intervalHours: 8, anchorAt: new Date().toISOString() })
     ).toBe('dose');
+    // Con la dosis ya resuelta queda la vigencia: desde cuándo avisa y cuándo para
+    // solo. Sin fecha de fin el recordatorio seguiría avisando para siempre.
     expect(
       MedicationReminderService.draftNextStep({ kind: 'MED', medication: 'x', scheduleKind: 'CLOCK', times: ['08:00'], dose: null })
+    ).toBe('range');
+    // Ya preguntada (o ya deducida de "por 7 días") → listo para confirmar.
+    expect(
+      MedicationReminderService.draftNextStep({ kind: 'MED', medication: 'x', scheduleKind: 'CLOCK', times: ['08:00'], dose: null, rangeAsked: true })
+    ).toBe('');
+    expect(
+      MedicationReminderService.draftNextStep({
+        kind: 'MED', medication: 'x', scheduleKind: 'CLOCK', times: ['08:00'], dose: null,
+        endsAt: new Date(Date.now() + 7 * 86400_000).toISOString(),
+      })
     ).toBe('');
   });
   it('APPOINTMENT: nombre → cuándo → (anticipación por defecto 1 h, no se pregunta)', () => {

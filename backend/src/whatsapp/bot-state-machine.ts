@@ -15,8 +15,26 @@ import {
   medicationConflicts,
 } from '../services/medication.util';
 import { AiPromptService, PromptScope } from '../services/ai-prompt.service';
-import { MedicationReminderService, ReminderDraft, toNum } from '../services/medication-reminder.service';
+import { MedicationReminderService, ReminderDraft, parseTreatmentEnd, toNum } from '../services/medication-reminder.service';
 import { EmailService } from '../services/email.service';
+import {
+  ALL_DATES,
+  DateRange,
+  addDaysYmd,
+  formatYmd,
+  inRange,
+  parseDateRange,
+  todayYmd,
+  ymdOf,
+  ymdToDate,
+} from '../services/date-range.util';
+import {
+  PACK_THRESHOLD,
+  ZIP_PART_MAX_BYTES,
+  buildReportPdf,
+  buildZipParts,
+  safeFileName,
+} from '../services/download-pack.service';
 import { NlpHandler } from './nlp-handler';
 import { IntentRouter, nowInParaguay, refineInterpretation, nameMatches } from './intent-router';
 import { whatsappBot } from './baileys.client';
@@ -281,7 +299,7 @@ const MID_FLOW_STATES = new Set([
   'ACTIVE_UPLOAD_MED', 'ACTIVE_UPLOAD_RX', 'ACTIVE_UPLOAD_STUDY', 'ACTIVE_RX_CONFIRM', 'ACTIVE_ASK_CATEGORY',
   'ACTIVE_LINK_PHONE', 'ACTIVE_FREE_UPDATE',
   'ACTIVE_REMIND_NAME', 'ACTIVE_REMIND_SCHED', 'ACTIVE_REMIND_LAST',
-  'ACTIVE_REMIND_DOSE', 'ACTIVE_REMIND_WHEN', 'ACTIVE_REMIND_LEAD', 'ACTIVE_REMIND_CONFIRM',
+  'ACTIVE_REMIND_DOSE', 'ACTIVE_REMIND_WHEN', 'ACTIVE_REMIND_LEAD', 'ACTIVE_REMIND_RANGE', 'ACTIVE_REMIND_CONFIRM',
   'ACTIVE_REMIND_EDIT_PICK',
 ]);
 
@@ -306,6 +324,8 @@ const PENDING_STEP_LABEL: Record<string, { es: string; pt: string }> = {
   ACTIVE_ASK_CATEGORY: { es: 'Decirme qué tipo de documento mandaste', pt: 'Dizer que tipo de documento você enviou' },
   ACTIVE_LINK_PHONE: { es: 'Confirmar tu número real de WhatsApp', pt: 'Confirmar seu número real de WhatsApp' },
   ACTIVE_FREE_UPDATE: { es: 'Contarme qué querés actualizar de tu ficha', pt: 'Dizer o que você quer atualizar no seu perfil' },
+  ACTIVE_DOWNLOAD_MENU: { es: 'Elegir qué querés descargar', pt: 'Escolher o que você quer baixar' },
+  ACTIVE_DOWNLOAD_RANGE: { es: 'Decirme de qué fechas querés la descarga', pt: 'Dizer de que datas você quer o download' },
   ACTIVE_REMINDER: { es: 'Recordatorios de medicación', pt: 'Lembretes de medicação' },
   ACTIVE_APPOINTMENTS: { es: 'Citas y turnos médicos', pt: 'Consultas médicas' },
   ACTIVE_REMIND_NAME: { es: 'Decirme el nombre del medicamento o turno', pt: 'Dizer o nome do medicamento ou consulta' },
@@ -314,6 +334,7 @@ const PENDING_STEP_LABEL: Record<string, { es: string; pt: string }> = {
   ACTIVE_REMIND_DOSE: { es: 'Decirme la dosis', pt: 'Dizer a dose' },
   ACTIVE_REMIND_WHEN: { es: 'Decirme el día y hora del turno', pt: 'Dizer o dia e a hora da consulta' },
   ACTIVE_REMIND_LEAD: { es: 'Decirme con cuánta anticipación avisar', pt: 'Dizer com quanta antecedência avisar' },
+  ACTIVE_REMIND_RANGE: { es: 'Decirme desde y hasta cuándo te aviso', pt: 'Dizer de quando até quando avisar' },
   ACTIVE_REMIND_CONFIRM: { es: 'Confirmar el recordatorio (Sí / No)', pt: 'Confirmar o lembrete (Sim / Não)' },
   ACTIVE_REMIND_EDIT_PICK: { es: 'Decirme qué campo querés cambiar', pt: 'Dizer qual campo você quer mudar' },
 };
@@ -1850,6 +1871,8 @@ export class BotStateMachine {
         state === 'ACTIVE_ASK_CATEGORY' ||
         state === 'ACTIVE_REMINDER' ||
         state === 'ACTIVE_APPOINTMENTS' ||
+        state === 'ACTIVE_DOWNLOAD_MENU' ||
+        state === 'ACTIVE_DOWNLOAD_RANGE' ||
         state === 'ACTIVE_FREE_UPDATE' ||
         state === 'ACTIVE_LINK_PHONE' ||
         state.startsWith('ACTIVE_REMIND_') ||
@@ -1883,7 +1906,7 @@ export class BotStateMachine {
             `*[6]* 🩺 *Citas y turnos médicos*\n` +
             `*[7]* 🏷️ Descargar Kit de Stickers (3x3 cm) y QR\n` +
             `*[8]* ✏️ Modificar datos de mi perfil (contacto, dirección, etc.)\n` +
-            `*[9]* 📥 *Descargar todos mis documentos* (estudios y recetas)\n` +
+            `*[9]* 📥 *Descargar* (medicamentos, recetas, estudios, recordatorios, citas, stickers)\n` +
             `*[10]* 💬 Hablar con soporte\n\n` +
             `🔔 _Escribí *NOTIFICACIONES* para activar alertas push en tu celular._\n` +
             `_Respondé con el número, mandá una foto/PDF, o un audio._`,
@@ -1897,7 +1920,7 @@ export class BotStateMachine {
             `*[6]* 🩺 *Turno* médico\n` +
             `*[7]* 🏷️ Kit Stickers (3x3 cm) ha QR\n` +
             `*[8]* ✏️ Emoambue datos de perfil (contacto, óga renda, etc.)\n` +
-            `*[9]* 📥 Emboguejy opa che documento (estudio ha receta)\n` +
+            `*[9]* 📥 Emboguejy (pohã, receta, estudio, momandu'a, turno, sticker)\n` +
             `*[10]* 💬 Soporte ndive\n\n` +
             `🔔 _Ehai *NOTIFICACIONES* rehóvo emyendy hag̃ua alertas push._\n` +
             `_Embohovái papapy reheve, emondo ta'anga/PDF, térã ñe'ẽ._`
@@ -2107,6 +2130,7 @@ export class BotStateMachine {
         dose: 'ACTIVE_REMIND_DOSE',
         when: 'ACTIVE_REMIND_WHEN',
         lead: 'ACTIVE_REMIND_LEAD',
+        range: 'ACTIVE_REMIND_RANGE',
         '': 'ACTIVE_REMIND_CONFIRM',
       };
       const remindQuestion = (step: string, d: Partial<ReminderDraft>): string => {
@@ -2127,6 +2151,14 @@ export class BotStateMachine {
             return '💊 ¿Qué cantidad por toma? (ej: _"1 comprimido"_, _"10 ml"_, _"1 cucharada"_)\n_Escribí *NADA* si no aplica._';
           case 'when':
             return '📅 ¿Qué día y hora es el turno? (ej: _"mañana 9:00"_, _"15/10 a las 14:30"_)';
+          case 'range':
+            return (
+              '📆 ¿*Desde cuándo* y *hasta cuándo* te aviso?\n' +
+              '• _"desde hoy por 7 días"_\n' +
+              '• _"del 01/10/2026 al 31/10/2026"_\n' +
+              '• _"hasta el 30 de abril"_\n\n' +
+              '_Escribí *SIEMPRE* si es un tratamiento permanente (no se corta solo)._'
+            );
           case 'lead':
             return (
               '⏱️ ¿Con cuánta anticipación te aviso? Escribime lo que quieras — ' +
@@ -2187,7 +2219,7 @@ export class BotStateMachine {
       // a ESA lista), sus ejemplos y sus instrucciones.
       const reminderSelect = {
         id: true, kind: true, scheduleKind: true, medication: true, dose: true, times: true,
-        intervalHours: true, nextDoseAt: true, whenAt: true, endsAt: true, active: true,
+        intervalHours: true, nextDoseAt: true, whenAt: true, startsAt: true, endsAt: true, active: true,
         leadMinutes: true, anchorAt: true,
       } as const;
       const listMedReminders = () =>
@@ -2209,7 +2241,9 @@ export class BotStateMachine {
             `🔔 _Te aviso 10 minutos antes y a la hora de cada toma, por WhatsApp y notificación._\n\n` +
             (rows.length
               ? `✏️ *Cambiar:* _"cambiá el horario del 1 a las 9"_ o *editar 1*\n` +
-                `🗑️ *Borrar:* *borrar 1* · ⏸️ *Pausar:* *pausar 1* · ▶️ *activar 1*\n`
+                `🛑 *Parar:* *parar 1* (deja de avisar) · ▶️ *activar 1*\n` +
+                `🗑️ *Borrar:* *borrar 1* (lo saca de la lista)\n` +
+                `📆 *Fecha de fin:* _"el 1 hasta el 30/04"_ — al llegar, para solo\n`
               : '') +
             `↩️ *LISTO* para volver al menú`,
           `⏰ *Pohã momandu'a*\n\n` +
@@ -2228,8 +2262,11 @@ export class BotStateMachine {
             `• _"Dentista el jueves a las 9, avisame 2 horas antes"_\n\n` +
             `🔔 _Te aviso 1 hora antes (o cuando me pidas) y de nuevo 10 minutos antes, por WhatsApp y notificación._\n\n` +
             (rows.length
-              ? `✏️ *Cambiar:* _"la cita 1 pasó a las 17"_ o *editar 1*\n` + `🗑️ *Cancelar:* *borrar 1*\n`
+              ? `✏️ *Cambiar:* _"la cita 1 pasó a las 17"_ o *editar 1*\n` +
+                `🛑 *Parar el aviso:* *parar 1* · ▶️ *activar 1*\n` +
+                `🗑️ *Cancelar la cita:* *borrar 1*\n`
               : '') +
+            `_Cuando pasa el día del turno, el aviso se corta solo._\n` +
             `↩️ *LISTO* para volver al menú`,
           `🩺 *Turno médico*\n\n` +
             (rows.length ? `${MedicationReminderService.format(rows)}\n\n` : '') +
@@ -2243,7 +2280,10 @@ export class BotStateMachine {
       // Manda los ARCHIVOS reales al chat (uno por mensaje), nunca links: los links de
       // /uploads se abren sin sesión. Solo por WhatsApp — el asistente web (/registro)
       // no verifica que quien escribe sea dueño del número, así que ahí se niega.
-      const DOC_MAX = 30;
+      // Tope duro por pedido. Antes eran 30 "los más recientes" y el resto no se
+      // mandaba nunca; ahora, arriba de PACK_THRESHOLD archivos, va todo pero
+      // empaquetado en ZIP por partes, así que el tope solo frena casos absurdos.
+      const DOC_MAX = 500;
       const docKindOf = (name: string, buf: Buffer): { mimetype: string; ext: string; image: boolean } => {
         const ext = (name.split('.').pop() || '').toLowerCase();
         if (buf.subarray(0, 4).toString('latin1') === '%PDF' || ext === 'pdf') return { mimetype: 'application/pdf', ext: 'pdf', image: false };
@@ -2252,7 +2292,18 @@ export class BotStateMachine {
         if (ext === 'heic' || buf.subarray(4, 12).toString('latin1').startsWith('ftyphei')) return { mimetype: 'image/heic', ext: 'heic', image: false };
         return { mimetype: 'image/jpeg', ext: 'jpg', image: true };
       };
-      const sendDocuments = async (scope: 'ALL' | 'STUDIES' | 'PRESCRIPTIONS', term = ''): Promise<BotResponse> => {
+      // Fecha sola guardada como medianoche UTC (cargas desde la web) → se muestra ese
+      // mismo día; convertida a Paraguay (UTC-3) caía el día anterior.
+      const dateOf = (d: Date | null | undefined, fallback: Date) => {
+        const v = d || fallback;
+        const dateOnly = v.getUTCHours() === 0 && v.getUTCMinutes() === 0 && v.getUTCSeconds() === 0;
+        return v.toLocaleDateString('es-PY', { timeZone: dateOnly ? 'UTC' : config.timezone, day: '2-digit', month: '2-digit', year: 'numeric' });
+      };
+      const sendDocuments = async (
+        scope: 'ALL' | 'STUDIES' | 'PRESCRIPTIONS',
+        term = '',
+        range: DateRange = ALL_DATES
+      ): Promise<BotResponse> => {
         if (msg.channel === 'web') {
           return {
             replyText: tr(
@@ -2265,6 +2316,15 @@ export class BotStateMachine {
         if (scope === 'PRESCRIPTIONS') where.studyType = 'PRESCRIPTION';
         if (scope === 'STUDIES') where.NOT = { studyType: 'PRESCRIPTION' };
         let rows = await prisma.medicalStudy.findMany({ where, orderBy: [{ studyDate: 'desc' }, { createdAt: 'desc' }] });
+        // Orden REAL por día, del más viejo al más nuevo. El `orderBy` de la base deja
+        // primero los que no tienen `studyDate` (NULLS FIRST en Postgres), así que la
+        // lista salía mezclada aunque las fechas estuvieran bien cargadas.
+        const stamp = (s: (typeof rows)[number]) => {
+          const d = s.studyDate || s.createdAt;
+          return (ymdOf(d) ?? 0) * 1e6 + (s.studyDate ? 0 : 1) * 1e5 + (s.createdAt.getTime() % 1e5);
+        };
+        rows.sort((a, b) => stamp(a) - stamp(b));
+
         const t = norm(term);
         let notFoundNote = '';
         if (t) {
@@ -2278,29 +2338,34 @@ export class BotStateMachine {
           if (hits.length) rows = hits;
           else if (rows.length) notFoundNote = tr(`🔍 No encontré uno que diga *${term}*, así que te mando todos.\n\n`, `🔍 Ndajuhúi *${term}*.\n\n`);
         }
+
+        // Filtro por rango de fechas del submenú de descargas.
+        const totalAntesDelRango = rows.length;
+        rows = rows.filter((s) => inRange(s.studyDate || s.createdAt, range));
+        const rangeNote = range.fromYmd || range.toYmd ? `📅 _Período: ${range.label}_\n\n` : '';
+
         const what =
           scope === 'PRESCRIPTIONS' ? tr('recetas', 'receta') : scope === 'STUDIES' ? tr('estudios', 'estudio') : tr('estudios ni recetas', 'documento');
         if (!rows.length) {
+          const porElRango = totalAntesDelRango > 0 && (range.fromYmd || range.toYmd);
           return {
             replyText: tr(
-              `📂 No encontré ${what}${t ? ` sobre *${term}*` : ''} guardados en tu perfil.\n\n` +
-                `Podés cargarlos con *[2]* Cargar receta o *[3]* Cargar estudio, o mandame la foto o el PDF directo.`,
+              porElRango
+                ? `📂 No encontré ${what} ${range.label} en tu perfil.\n\n` +
+                  `Tenés ${totalAntesDelRango} guardado(s) en otras fechas — pedime *[9]* de nuevo y escribí *TODO* para verlos sin filtro de fecha.`
+                : `📂 No encontré ${what}${t ? ` sobre *${term}*` : ''} guardados en tu perfil.\n\n` +
+                  `Podés cargarlos con *[2]* Cargar receta o *[3]* Cargar estudio, o mandame la foto o el PDF directo.`,
               `📂 Ndajuhúi ${what}. Emombe'u *[2]* térã *[3]* rupive.`
             ),
           };
         }
-        // Fecha sola guardada como medianoche UTC (cargas desde la web) → se muestra ese
-        // mismo día; convertida a Paraguay (UTC-3) caía el día anterior.
-        const dateOf = (s: (typeof rows)[number]) => {
-          const d = s.studyDate || s.createdAt;
-          const dateOnly = d.getUTCHours() === 0 && d.getUTCMinutes() === 0 && d.getUTCSeconds() === 0;
-          return d.toLocaleDateString('es-PY', { timeZone: dateOnly ? 'UTC' : config.timezone, day: '2-digit', month: '2-digit', year: 'numeric' });
-        };
         const isRx = (s: (typeof rows)[number]) => s.studyType === 'PRESCRIPTION';
-        // Mismo orden que el listado: primero estudios, después recetas.
-        rows = [...rows.filter((s) => !isRx(s)), ...rows.filter(isRx)];
         const toSend = rows.slice(0, DOC_MAX);
-        const attachments: NonNullable<BotResponse['extraAttachments']> = [];
+
+        // Se leen TODOS los archivos primero: así se sabe el peso total y se decide
+        // si van sueltos o empaquetados, y los que ya no están en disco se avisan.
+        type Loaded = { row: (typeof rows)[number]; buf: Buffer; kind: ReturnType<typeof docKindOf>; label: string; safe: string };
+        const loaded: Loaded[] = [];
         const missing: string[] = [];
         for (const s of toSend) {
           const name = (s.fileUrl || '').split('/').pop() || '';
@@ -2309,29 +2374,91 @@ export class BotStateMachine {
             missing.push(s.title);
             continue;
           }
-          const k = docKindOf(name, buf);
-          const label = `${isRx(s) ? '📄 Receta' : '🧪 Estudio'} · ${s.title} · ${dateOf(s)}`;
-          const safe = `${isRx(s) ? 'Receta' : 'Estudio'} ${s.title} ${dateOf(s).replace(/\//g, '-')}`.replace(/[^\p{L}\p{N}\s.-]/gu, '').replace(/\s+/g, ' ').trim().slice(0, 80);
-          attachments.push({ buffer: buf, mimetype: k.mimetype, filename: `${safe}.${k.ext}`, caption: label, kind: k.image ? 'image' : 'document' });
+          const kind = docKindOf(name, buf);
+          const fecha = dateOf(s.studyDate, s.createdAt);
+          loaded.push({
+            row: s,
+            buf,
+            kind,
+            label: `${isRx(s) ? '📄 Receta' : '🧪 Estudio'} · ${s.title} · ${fecha}`,
+            safe: safeFileName(`${fecha.replace(/\//g, '-')} ${isRx(s) ? 'Receta' : 'Estudio'} ${s.title}`, 80),
+          });
         }
+
         const studies = rows.filter((s) => !isRx(s));
         const rxs = rows.filter(isRx);
-        const listBlock = (arr: typeof rows) => arr.slice(0, DOC_MAX).map((s, i) => `${i + 1}. ${s.title} — ${dateOf(s)}`).join('\n');
+        const listBlock = (arr: typeof rows) =>
+          arr.slice(0, 40).map((s, i) => `${i + 1}. ${s.title} — ${dateOf(s.studyDate, s.createdAt)}`).join('\n') +
+          (arr.length > 40 ? `\n… y ${arr.length - 40} más` : '');
         const header =
           notFoundNote +
+          rangeNote +
           `📥 *${tr('Tus documentos médicos', 'Nde documento')}*${t && !notFoundNote ? ` — _${term}_` : ''}\n\n` +
           (studies.length && scope !== 'PRESCRIPTIONS' ? `🧪 *${tr('Estudios y evaluaciones', 'Estudio')} (${studies.length}):*\n${listBlock(studies)}\n\n` : '') +
           (rxs.length && scope !== 'STUDIES' ? `📄 *${tr('Recetas', 'Receta')} (${rxs.length}):*\n${listBlock(rxs)}\n\n` : '');
-        const footer = attachments.length
-          ? tr(
-              attachments.length === 1
-                ? `⬇️ Te lo mando acá abajo. Tocalo para abrirlo o guardarlo en tu teléfono.`
-                : `⬇️ Te mando los ${attachments.length} acá abajo, uno por mensaje. Tocá cada uno para abrirlo o guardarlo en tu teléfono.`,
-              `⬇️ Amondo ko'ápe.`
-            ) +
-            (rows.length > DOC_MAX ? tr(`\n\n_Tenés ${rows.length}: te mando los ${DOC_MAX} más recientes. Para otros, pedime uno puntual (ej: "mandame el estudio de sangre")._`, '') : '') +
-            (missing.length ? tr(`\n\n⚠️ _No encontré el archivo de: ${missing.join(', ')}. Volvé a cargarlo si lo necesitás._`, '') : '')
-          : tr('⚠️ No pude recuperar los archivos. Probá de nuevo en un rato o escribí a soporte.', '⚠️ Ndaikatúi.');
+
+        if (!loaded.length) {
+          return {
+            replyText:
+              header +
+              tr('⚠️ No pude recuperar los archivos. Probá de nuevo en un rato o escribí a soporte.', '⚠️ Ndaikatúi.') +
+              (missing.length ? tr(`\n\n⚠️ _Faltan en el archivo: ${missing.join(', ')}._`, '') : ''),
+          };
+        }
+
+        const missingNote = missing.length
+          ? tr(`\n\n⚠️ _No encontré el archivo de: ${missing.join(', ')}. Volvé a cargarlo si lo necesitás._`, '')
+          : '';
+        const truncNote =
+          rows.length > DOC_MAX ? tr(`\n\n_Tenés ${rows.length}: te mando los ${DOC_MAX} más recientes. Acotá el rango de fechas para ver el resto._`, '') : '';
+
+        // Muchos archivos (o mucho peso) → ZIP por partes. Mandar 40 adjuntos sueltos
+        // no llega entero: WhatsApp corta la tanda y la persona se queda sin saber
+        // qué le faltó.
+        const totalBytes = loaded.reduce((n, l) => n + l.buf.length, 0);
+        if (loaded.length > PACK_THRESHOLD || totalBytes > ZIP_PART_MAX_BYTES) {
+          const parts = await buildZipParts(
+            loaded.map((l) => ({ name: `${l.safe}.${l.kind.ext}`, buffer: l.buf })),
+            safeFileName(`Bio-Pass ${scope === 'PRESCRIPTIONS' ? 'recetas' : scope === 'STUDIES' ? 'estudios' : 'documentos'} ${user!.fullName || ''}`.trim(), 60)
+          );
+          const mb = (n: number) => `${(n / 1024 / 1024).toFixed(1)} MB`;
+          return {
+            replyText:
+              header +
+              tr(
+                `📦 *Son ${loaded.length} archivos (${mb(totalBytes)}) — te los mando comprimidos en ${parts.length} parte(s).*\n\n` +
+                  parts.map((p, i) => `${i + 1}. ${p.filename} — ${p.contains.length} archivo(s), ${mb(p.buffer.length)}`).join('\n') +
+                  `\n\n⬇️ _Van uno por mensaje acá abajo. Descargá **todas** las partes y abrí cada ZIP en tu teléfono._`,
+                `📦 ${loaded.length} archivo (${mb(totalBytes)}) — ${parts.length} parte.`
+              ) +
+              truncNote +
+              missingNote,
+            extraAttachments: parts.map((p) => ({
+              buffer: p.buffer,
+              mimetype: 'application/zip',
+              filename: p.filename,
+              caption: p.filename,
+              kind: 'document' as const,
+            })),
+          };
+        }
+
+        const attachments: NonNullable<BotResponse['extraAttachments']> = loaded.map((l) => ({
+          buffer: l.buf,
+          mimetype: l.kind.mimetype,
+          filename: `${l.safe}.${l.kind.ext}`,
+          caption: l.label,
+          kind: l.kind.image ? ('image' as const) : ('document' as const),
+        }));
+        const footer =
+          tr(
+            attachments.length === 1
+              ? `⬇️ Te lo mando acá abajo. Tocalo para abrirlo o guardarlo en tu teléfono.`
+              : `⬇️ Te mando los ${attachments.length} acá abajo, uno por mensaje. Tocá cada uno para abrirlo o guardarlo en tu teléfono.`,
+            `⬇️ Amondo ko'ápe.`
+          ) +
+          truncNote +
+          missingNote;
         return { replyText: header + footer, extraAttachments: attachments };
       };
       /** "estudios" / "recetas" / todo, según lo que pidió. */
@@ -2349,6 +2476,180 @@ export class BotStateMachine {
         return n.split(/\s+/).filter((w) => w.length >= 3 && !GENERIC.test(w)).join(' ').trim();
       };
 
+      // ---- Submenú de descargas ([9]) ----
+      // Antes [9] era una sola cosa ("descargar todos mis documentos") y bajaba
+      // estudios y recetas mezclados, sin poder elegir período. Ahora cada tipo de
+      // información se descarga por separado y SIEMPRE pidiendo un rango de fechas
+      // (o *TODO* si la persona lo quiere completo).
+      type DlOpt = 'MEDS' | 'RX' | 'STUDIES' | 'REMINDERS' | 'APPTS' | 'STICKERS' | 'ALL';
+      const DL_BY_NUMBER: Record<string, DlOpt> = {
+        '1': 'MEDS', '2': 'RX', '3': 'STUDIES', '4': 'REMINDERS', '5': 'APPTS', '6': 'STICKERS', '7': 'ALL',
+      };
+      const DL_LABEL: Record<DlOpt, string> = {
+        MEDS: '💊 Medicamentos (lo que estás tomando)',
+        RX: '📄 Recetas médicas',
+        STUDIES: '🧪 Estudios / evaluaciones médicas',
+        REMINDERS: '⏰ Recordatorios de medicación',
+        APPTS: '🩺 Citas y turnos médicos',
+        STICKERS: '🏷️ Kit de Stickers (3x3 cm) y QR',
+        ALL: '📥 Todos mis documentos (estudios y recetas)',
+      };
+      const downloadMenuText = (): string =>
+        tr(
+          `📥 *¿Qué querés descargar?*\n\n` +
+            `*[1]* 💊 Descargar *medicamento* (lo que estás tomando)\n` +
+            `*[2]* 📄 Descargar *receta* médica\n` +
+            `*[3]* 🧪 Descargar *estudio* / evaluación médica\n` +
+            `*[4]* ⏰ Descargar *recordatorios de medicación* (horarios de tus remedios)\n` +
+            `*[5]* 🩺 Descargar *citas y turnos* médicos\n` +
+            `*[6]* 🏷️ Descargar *Kit de Stickers* (3x3 cm) y QR\n` +
+            `*[7]* 📥 Descargar *todos mis documentos* (estudios y recetas)\n\n` +
+            `_Respondé con el número. Después te pido el período de fechas._\n` +
+            `↩️ *MENU* para volver.`,
+          `📥 *Mba'épa emboguejyse?*\n\n` +
+            `*[1]* 💊 Pohã\n*[2]* 📄 Receta\n*[3]* 🧪 Estudio\n*[4]* ⏰ Momandu'a\n*[5]* 🩺 Turno\n*[6]* 🏷️ Sticker ha QR\n*[7]* 📥 Opa documento\n\n_Embohovái papapy reheve._`
+        );
+      const askRangeText = (opt: DlOpt): string =>
+        tr(
+          `📅 *${DL_LABEL[opt]}*\n\n` +
+            `¿De qué fechas lo querés?\n\n` +
+            `Escribime el período, por ejemplo:\n` +
+            `• *05/01/2021 a 30/04/2021*\n` +
+            `• *05 de enero de 2021 a 30 de abril de 2021*\n` +
+            `• *último mes* · *últimos 3 meses* · *este año* · *2024*\n\n` +
+            `📦 Escribí *TODO* si lo querés completo, sin filtro de fechas.\n` +
+            `↩️ *MENU* para volver.`,
+          `📅 *${DL_LABEL[opt]}*\n\nMba'e ára guive? Ehai: *05/01/2021 a 30/04/2021* térã *TODO*.\n↩️ *MENU*.`
+        );
+
+      /** Rango de fechas → texto para el encabezado del PDF. */
+      const rangeSubtitle = (range: DateRange) =>
+        range.fromYmd || range.toYmd ? `Período: ${range.label}` : 'Período: todas las fechas';
+
+      /** Ejecuta la descarga elegida. */
+      const runDownload = async (opt: DlOpt, range: DateRange): Promise<BotResponse> => {
+        const userName = user!.fullName || 'Titular Bio-Pass';
+        const asDoc = (buffer: Buffer, filename: string, caption: string): BotResponse['extraAttachments'] => [
+          { buffer, mimetype: 'application/pdf', filename, caption, kind: 'document' as const },
+        ];
+
+        if (opt === 'STICKERS') {
+          const org = user!.organizationId ? await prisma.organization.findUnique({ where: { id: user!.organizationId } }) : null;
+          const sticker = await QrPdfService.generateStickerPdf({
+            emergencyToken: user!.emergencyToken,
+            userName,
+            bloodType: user!.bloodType || 'O Positivo',
+            organizationName: org?.name,
+            organizationLogoUrl: org?.logoUrl || undefined,
+          });
+          return {
+            replyText:
+              `🏷️ *Tu Kit de Emergencia Bio-Pass*\n\n` +
+              `🌐 *Tu enlace público:* ${config.publicEmergencyBaseUrl}/${user!.emergencyToken}\n\n` +
+              `⬇️ Te mando el PDF de stickers (3x3 cm) acá abajo.\n\n` +
+              `💡 _Imprimilo en papel Contact (vinilo adhesivo) resistente al agua y pegalo en tu celular, casco o billetera._`,
+            extraAttachments: asDoc(sticker.pdfBuffer, safeFileName(`Bio-Pass stickers ${userName}`, 60) + '.pdf', 'Kit de stickers 3x3 cm y QR'),
+          };
+        }
+
+        if (opt === 'MEDS') {
+          // La medicación en curso no es un archivo: se arma un PDF con la lista.
+          // `addedAt` marca cuándo entró cada una, y es lo que se filtra por período.
+          const all = parseMedications(user!.currentMedications);
+          const sel = all.filter((m) => inRange(m.addedAt ? new Date(m.addedAt) : null, range));
+          if (!sel.length) {
+            return {
+              replyText: all.length
+                ? `💊 No tenés medicamentos cargados ${range.label}.\n\nTenés ${all.length} en total — pedí *[9]* → *[1]* y escribí *TODO* para bajar la lista completa.`
+                : `💊 Todavía no tenés medicación cargada.\n\nCargala con *[1]* del menú o mandame la foto de la caja o de la receta.`,
+            };
+          }
+          const pdf = await buildReportPdf({
+            title: 'Medicación en curso',
+            userName,
+            subtitle: rangeSubtitle(range),
+            sections: [
+              {
+                heading: `Medicamentos (${sel.length})`,
+                lines: sel.map((m) => {
+                  const bits = [m.dose, m.frequency].filter(Boolean).join(' · ');
+                  const desde = m.since ? ` · desde ${m.since}` : '';
+                  const alta = m.addedAt ? ` · cargado el ${new Date(m.addedAt).toLocaleDateString('es-PY', { timeZone: config.timezone })}` : '';
+                  return `• ${m.name}${bits ? ` — ${bits}` : ''}${desde}${alta}`;
+                }),
+              },
+            ],
+          });
+          return {
+            replyText: `💊 *Tu medicación (${sel.length})* — ${range.label}\n\n⬇️ Te mando el PDF acá abajo.`,
+            extraAttachments: asDoc(pdf, safeFileName(`Bio-Pass medicacion ${userName}`, 60) + '.pdf', `Medicación — ${range.label}`),
+          };
+        }
+
+        if (opt === 'REMINDERS' || opt === 'APPTS') {
+          const appt = opt === 'APPTS';
+          const rows = await prisma.medicationReminder.findMany({
+            where: appt ? { userId: user!.id, kind: 'APPOINTMENT' } : { userId: user!.id, NOT: { kind: 'APPOINTMENT' } },
+            orderBy: appt ? { whenAt: 'asc' } : { createdAt: 'asc' },
+            select: { ...reminderSelect, createdAt: true },
+          });
+          // Citas: por la fecha del turno. Recordatorios: entra el que estuvo VIGENTE
+          // en algún momento del período (desde que se creó/empezó hasta que terminó).
+          const sel = rows.filter((r) => {
+            if (appt) return inRange(r.whenAt, range);
+            const desde = ymdOf(r.startsAt || r.createdAt);
+            const hasta = ymdOf(r.endsAt);
+            if (range.toYmd && desde != null && desde > range.toYmd) return false;
+            if (range.fromYmd && hasta != null && hasta < range.fromYmd) return false;
+            return true;
+          });
+          if (!sel.length) {
+            return {
+              replyText: appt
+                ? `🩺 No tenés citas ${range.label}.\n\nAgendalas con *[6]* del menú.`
+                : `⏰ No tenés recordatorios vigentes ${range.label}.\n\nCargalos con *[5]* del menú.`,
+            };
+          }
+          const fmtDay = (d: Date | null | undefined) => (d ? new Date(d).toLocaleDateString('es-PY', { timeZone: config.timezone }) : '—');
+          const pdf = await buildReportPdf({
+            title: appt ? 'Citas y turnos médicos' : 'Recordatorios de medicación',
+            userName,
+            subtitle: rangeSubtitle(range),
+            sections: [
+              {
+                heading: appt ? `Citas (${sel.length})` : `Recordatorios (${sel.length})`,
+                lines: sel.map((r) => {
+                  if (appt) {
+                    const w = r.whenAt
+                      ? new Date(r.whenAt).toLocaleString('es-PY', { timeZone: config.timezone, day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' })
+                      : 'sin fecha';
+                    return `• ${r.medication} — ${w}${r.active ? '' : ' (cancelado/pausado)'}`;
+                  }
+                  const horas = (() => {
+                    try {
+                      const arr = JSON.parse(r.times || '[]');
+                      return Array.isArray(arr) ? (arr as string[]).join(', ') : '';
+                    } catch {
+                      return '';
+                    }
+                  })();
+                  const horario = r.scheduleKind === 'INTERVAL' ? `cada ${r.intervalHours} h` : horas || 'sin horario';
+                  const vig = `desde ${fmtDay(r.startsAt || r.createdAt)} hasta ${r.endsAt ? fmtDay(r.endsAt) : 'sin fecha de fin'}`;
+                  return `• ${r.medication}${r.dose ? ` (${r.dose})` : ''} — ${horario} · ${vig}${r.active ? '' : ' (pausado)'}`;
+                }),
+              },
+            ],
+          });
+          const base = appt ? 'citas y turnos' : 'recordatorios';
+          return {
+            replyText: `${appt ? '🩺' : '⏰'} *${appt ? 'Tus citas' : 'Tus recordatorios'} (${sel.length})* — ${range.label}\n\n⬇️ Te mando el PDF acá abajo.`,
+            extraAttachments: asDoc(pdf, safeFileName(`Bio-Pass ${base} ${userName}`, 60) + '.pdf', `${appt ? 'Citas' : 'Recordatorios'} — ${range.label}`),
+          };
+        }
+
+        return sendDocuments(opt === 'RX' ? 'PRESCRIPTIONS' : opt === 'STUDIES' ? 'STUDIES' : 'ALL', '', range);
+      };
+
       // =====================================================================
       // INTÉRPRETE DE INTENCIÓN (IA) — ver intent-router.ts.
       // Corre ANTES de las reglas de cada sub-modo: la IA ve el mensaje junto con
@@ -2359,7 +2660,7 @@ export class BotStateMachine {
       // =====================================================================
       const lowerFirst = (s: string) => s.charAt(0).toLowerCase() + s.slice(1);
       // Sub-modos sin datos a medio cargar: si la persona pide otra cosa, se sale solo.
-      const SOFT_MODES = new Set(['ACTIVE_MEMBER', 'ACTIVE_REMINDER', 'ACTIVE_APPOINTMENTS', 'ACTIVE_UPLOAD_MED', 'ACTIVE_UPLOAD_RX', 'ACTIVE_UPLOAD_STUDY', 'ACTIVE_EDIT_MENU', 'ACTIVE_FREE_UPDATE']);
+      const SOFT_MODES = new Set(['ACTIVE_MEMBER', 'ACTIVE_REMINDER', 'ACTIVE_APPOINTMENTS', 'ACTIVE_UPLOAD_MED', 'ACTIVE_UPLOAD_RX', 'ACTIVE_UPLOAD_STUDY', 'ACTIVE_EDIT_MENU', 'ACTIVE_FREE_UPDATE', 'ACTIVE_DOWNLOAD_MENU', 'ACTIVE_DOWNLOAD_RANGE']);
       const hardPending = !SOFT_MODES.has(subMode);
       const pendingNote = (): string =>
         hardPending
@@ -2431,7 +2732,19 @@ export class BotStateMachine {
         !/[?¿]/.test(cleanText) &&
         !/\b(cita|turno|consulta|recordatorio|borr\w*|elimin\w*|cancel\w*|sal[ií]r?|menu|perfil|error|olvid\w*|equivoqu\w*|tengo|hay|ayuda|soporte)\b/.test(norm(cleanText));
 
-      if (!msg.routed && !msg.mediaBuffer && cleanText && !shortStepAnswer) {
+      // El submenú de descargas se contesta con un número (1-7) o con un período
+      // ("05/01/2021 a 30/04/2021", "último mes", "TODO"). Eso es la respuesta al
+      // paso, no un pedido nuevo: mandarlo al intérprete hacía que una fecha se
+      // leyera como el día de un turno y la descarga nunca llegara.
+      const downloadStepAnswer =
+        (subMode === 'ACTIVE_DOWNLOAD_MENU' && /^[1-7]$/.test(cleanText.trim())) ||
+        (subMode === 'ACTIVE_DOWNLOAD_RANGE' && !!parseDateRange(cleanText)) ||
+        // Misma razón en la vigencia de un recordatorio ("del 01/10 al 31/10" son
+        // 4 palabras, así que no entraba en el atajo de respuesta corta).
+        (subMode === 'ACTIVE_REMIND_RANGE' &&
+          (!!parseDateRange(cleanText) || !!parseTreatmentEnd(cleanText) || /^(siempre|permanente|indefinido)/.test(norm(cleanText))));
+
+      if (!msg.routed && !msg.mediaBuffer && cleanText && !shortStepAnswer && !downloadStepAnswer) {
         const ctxRows = await listForUser();
         const stepKey = Object.keys(REMIND_STATE).find((k) => REMIND_STATE[k] === subMode);
         const ctxDraft: Partial<ReminderDraft> = getTempData().rdraft || {};
@@ -3104,6 +3417,50 @@ export class BotStateMachine {
         return saveEstudio(msg.mediaBuffer, msg.mediaFilename || 'estudio.jpg');
       }
 
+      // Sub-modo: submenú de descargas ([9]) — elegir QUÉ.
+      if (subMode === 'ACTIVE_DOWNLOAD_MENU') {
+        if (isResetCmd(cleanText) || /^(men[uú]|inicio|salir|listo|volver)$/i.test(norm(cleanText))) {
+          await updateState('ACTIVE_MEMBER', { dl: null });
+          return { replyText: activeMenu() };
+        }
+        const opt = DL_BY_NUMBER[cleanText.trim()];
+        if (!opt) {
+          return { replyText: tr('Elegí una opción del *1* al *7*, o escribí *MENU* para volver.\n\n', 'Eiporavo *1*–*7*.\n\n') + downloadMenuText() };
+        }
+        // El kit de stickers no tiene historial: se genera al momento, sin fechas.
+        if (opt === 'STICKERS') {
+          await updateState('ACTIVE_MEMBER', { dl: null });
+          return runDownload(opt, ALL_DATES);
+        }
+        await updateState('ACTIVE_DOWNLOAD_RANGE', { dl: { opt } });
+        return { replyText: askRangeText(opt) };
+      }
+
+      // Sub-modo: submenú de descargas — elegir DESDE / HASTA.
+      if (subMode === 'ACTIVE_DOWNLOAD_RANGE') {
+        const opt = ((getTempData().dl || {}).opt || 'ALL') as DlOpt;
+        if (isResetCmd(cleanText) || /^(men[uú]|inicio|salir|volver)$/i.test(norm(cleanText))) {
+          await updateState('ACTIVE_MEMBER', { dl: null });
+          return { replyText: activeMenu() };
+        }
+        if (/^(atras|atrás|cambiar|otra)$/i.test(norm(cleanText))) {
+          await updateState('ACTIVE_DOWNLOAD_MENU', { dl: null });
+          return { replyText: downloadMenuText() };
+        }
+        const range = parseDateRange(cleanText);
+        if (!range) {
+          return {
+            replyText:
+              tr(
+                `😕 No entendí ese período.\n\n`,
+                `😕 Ndaikatúi aikuaa upe ára.\n\n`
+              ) + askRangeText(opt),
+          };
+        }
+        await updateState('ACTIVE_MEMBER', { dl: null });
+        return runDownload(opt, range);
+      }
+
       // Sub-modo: llegó un archivo sin haber elegido categoría
       if (subMode === 'ACTIVE_ASK_CATEGORY') {
         const pend = getTempData().pendingUpload as { name: string } | undefined;
@@ -3231,17 +3588,17 @@ export class BotStateMachine {
         }
 
         // borrar N / pausar N / activar N
-        const cmd = cleanText.match(/^(borrar|eliminar|quitar|sacar|pausar|desactivar|activar|reactivar)\s+(\d{1,2})/i);
+        const cmd = cleanText.match(/^(borrar|eliminar|quitar|sacar|cancelar|pausar|parar|detener|frenar|suspender|desactivar|activar|reactivar|reanudar|retomar)\s+(\d{1,2})/i);
         if (cmd) {
           const idx = parseInt(cmd[2], 10) - 1;
           const target = rows[idx];
           if (!target) return { replyText: tr(`No hay ${apptMode ? 'una cita' : 'un recordatorio'} *${idx + 1}* en esta lista.`, `Ndaipóri *${idx + 1}*.`) + '\n\n' + showList() };
           const verb = cmd[1].toLowerCase();
-          if (/^(borrar|eliminar|quitar|sacar)/.test(verb)) {
+          if (/^(borrar|eliminar|quitar|sacar|cancelar)/.test(verb)) {
             await prisma.medicationReminder.delete({ where: { id: target.id } });
             return { replyText: tr(`🗑️ ${apptMode ? 'Cancelé la cita' : 'Borré el recordatorio de'} *${target.medication}*.`, `🗑️ Aipe'a *${target.medication}*.`) + '\n\n' + showList(await list()) };
           }
-          const activate = /^(activar|reactivar)/.test(verb);
+          const activate = /^(activar|reactivar|reanudar|retomar)/.test(verb);
           await prisma.medicationReminder.update({ where: { id: target.id }, data: { active: activate } });
           return { replyText: tr(`${activate ? '▶️ Activé' : '⏸️ Pausé'} el aviso de *${target.medication}*.`, `*${target.medication}* ${activate ? 'oñemyendy' : 'oñembopyta'}.`) + '\n\n' + showList(await list()) };
         }
@@ -3266,15 +3623,19 @@ export class BotStateMachine {
             anchorAt: target.anchorAt ? new Date(target.anchorAt).toISOString() : undefined,
             whenAt: target.whenAt ? new Date(target.whenAt).toISOString() : undefined,
             leadMinutes: target.leadMinutes,
+            startsAt: target.startsAt ? new Date(target.startsAt).toISOString() : undefined,
             endsAt: target.endsAt ? new Date(target.endsAt).toISOString() : undefined,
+            // Ya tiene vigencia decidida: editar el horario no debe volver a
+            // preguntar desde/hasta (se cambia eligiendo la opción de fechas).
+            rangeAsked: true,
           };
           await updateState('ACTIVE_REMIND_EDIT_PICK', { rdraft: editDraft });
           const opts =
             target.kind === 'APPOINTMENT'
               ? '*[1]* Nombre/motivo\n*[2]* Fecha y hora\n*[3]* Anticipación del aviso'
               : target.scheduleKind === 'INTERVAL'
-                ? '*[1]* Nombre\n*[2]* Cada cuánto\n*[3]* Última toma\n*[4]* Dosis'
-                : '*[1]* Nombre\n*[2]* Horarios\n*[3]* Dosis';
+                ? '*[1]* Nombre\n*[2]* Cada cuánto\n*[3]* Última toma\n*[4]* Dosis\n*[5]* Desde / hasta cuándo avisar'
+                : '*[1]* Nombre\n*[2]* Horarios\n*[3]* Dosis\n*[4]* Desde / hasta cuándo avisar';
           return {
             replyText:
               `✏️ *Editando:* ${MedicationReminderService.describeDraft(editDraft)}\n\n` +
@@ -3406,8 +3767,8 @@ export class BotStateMachine {
           const fieldMap: Record<string, string> = isAppt
             ? { '1': 'ACTIVE_REMIND_NAME', '2': 'ACTIVE_REMIND_WHEN', '3': 'ACTIVE_REMIND_LEAD' }
             : draft.scheduleKind === 'INTERVAL'
-              ? { '1': 'ACTIVE_REMIND_NAME', '2': 'ACTIVE_REMIND_SCHED', '3': 'ACTIVE_REMIND_LAST', '4': 'ACTIVE_REMIND_DOSE' }
-              : { '1': 'ACTIVE_REMIND_NAME', '2': 'ACTIVE_REMIND_SCHED', '3': 'ACTIVE_REMIND_DOSE' };
+              ? { '1': 'ACTIVE_REMIND_NAME', '2': 'ACTIVE_REMIND_SCHED', '3': 'ACTIVE_REMIND_LAST', '4': 'ACTIVE_REMIND_DOSE', '5': 'ACTIVE_REMIND_RANGE' }
+              : { '1': 'ACTIVE_REMIND_NAME', '2': 'ACTIVE_REMIND_SCHED', '3': 'ACTIVE_REMIND_DOSE', '4': 'ACTIVE_REMIND_RANGE' };
           const target = fieldMap[cleanText.trim()];
           if (!target) {
             return { replyText: `😕 Respondé con el número (*${Object.keys(fieldMap).join('*, *')}*) de lo que querés cambiar, o *CANCELAR*.` };
@@ -3461,6 +3822,36 @@ export class BotStateMachine {
           draft.dose = /^(nada|no|no\s+aplica|ningun[ao]?|omitir|skip|-|s[ií]|ok+|dale|listo|sin\s+dosis)$/i.test(cleanText.trim())
             ? null
             : cleanText.trim().slice(0, 60) || null;
+          return advanceRemind(draft);
+        }
+
+        // Vigencia del recordatorio: desde cuándo empieza a avisar y cuándo para solo.
+        if (state === 'ACTIVE_REMIND_RANGE') {
+          draft.rangeAsked = true;
+          const txt = cleanText.trim();
+          if (/^(siempre|permanente|sin\s*(fecha|fin|limite)|indefinido|todo\s*el\s*tiempo|para\s*siempre|no\s*se[ck]?)$/i.test(norm(txt))) {
+            draft.startsAt = undefined;
+            draft.endsAt = undefined;
+            return advanceRemind(draft);
+          }
+          // "por 7 días" / "durante 2 semanas" — misma lectura que en texto libre.
+          const dur = parseTreatmentEnd(txt);
+          if (dur) {
+            draft.endsAt = dur.toISOString();
+            return advanceRemind(draft);
+          }
+          const range = parseDateRange(txt);
+          if (!range || (!range.fromYmd && !range.toYmd)) {
+            draft.rangeAsked = false;
+            return {
+              replyText:
+                `😕 No entendí las fechas.\n\n` +
+                `Probá con _"desde hoy por 7 días"_, _"del 01/10/2026 al 31/10/2026"_ o _"hasta el 30 de abril"_.\n` +
+                `_O escribí *SIEMPRE* si no tiene fecha de fin._`,
+            };
+          }
+          draft.startsAt = range.fromYmd ? ymdToDate(range.fromYmd).toISOString() : undefined;
+          draft.endsAt = range.toYmd ? ymdToDate(range.toYmd, true).toISOString() : undefined;
           return advanceRemind(draft);
         }
 
@@ -4541,23 +4932,12 @@ export class BotStateMachine {
         cleanText === '7' ||
         /\b(qr|q\.?r\.?|sticker|stickers|calcoman[ií]a|kit\s+(de\s+)?(emergencia|stickers|rescate)|c[oó]digo\s+(qr|de\s+emergencia|de\s+rescate)|mi\s+c[oó]digo)\b/.test(lc)
       ) {
-        const org = user.organizationId
-          ? await prisma.organization.findUnique({ where: { id: user.organizationId } })
-          : null;
-        const sticker = await QrPdfService.generateStickerPdf({
-          emergencyToken: user.emergencyToken,
-          userName: user.fullName || 'Usuario Bio-Pass',
-          bloodType: user.bloodType || 'O Positivo',
-          organizationName: org?.name,
-          organizationLogoUrl: org?.logoUrl || undefined,
-        });
-
-        return {
-          replyText: `📱 *TU KIT DE EMERGENCIA BIO-PASS*\n\n` +
-            `🌐 *Tu enlace público:* ${config.publicEmergencyBaseUrl}/${user.emergencyToken}\n\n` +
-            `📄 *Descarga tu PDF de Stickers (3x3 cm):*\n${sticker.fileUrl}\n\n` +
-            `💡 *Recomendación:* Imprime en papel Contact (vinilo adhesivo) resistente al agua y pégalo en tu celular, casco o billetera.`,
-        };
+        // El PDF va COMO ARCHIVO, nunca como link. El nombre real tiene guiones
+        // bajos ("qr_stickers/sticker_<token>.pdf") y WhatsApp los toma como marca
+        // de cursiva: se los comía del texto y el link que veía la persona
+        // ("qrstickers/stickerd95c…") daba error. Además /uploads se sirve sin
+        // sesión, así que mandar el archivo también es lo correcto en seguridad.
+        return runDownload('STICKERS', ALL_DATES);
       }
       if (
         cleanText === '8' ||
@@ -4566,12 +4946,18 @@ export class BotStateMachine {
         await updateState('ACTIVE_EDIT_MENU', {});
         return { replyText: await getEditMenuText() };
       }
-      // [9] Descargar todos mis documentos
+      // [9] Descargar — abre el submenú de descargas (cada cosa por separado y con
+      // rango de fechas). Un pedido en lenguaje natural que nombra algo PUNTUAL
+      // ("mandame el estudio de sangre") sigue yendo derecho al archivo: pedirle el
+      // período a quien ya dijo qué quiere es un paso de más.
       if (
         cleanText === '9' ||
         /\b(descarg\w*|baj\w*)\b.{0,30}\b(documentos?|estudios?|recetas?|an[aá]lisis|todo)\b/.test(lc)
       ) {
-        return sendDocuments(cleanText === '9' ? 'ALL' : docScopeFrom(cleanText), cleanText === '9' ? '' : docTermFrom(cleanText));
+        const term = cleanText === '9' ? '' : docTermFrom(cleanText);
+        if (term) return sendDocuments(docScopeFrom(cleanText), term);
+        await updateState('ACTIVE_DOWNLOAD_MENU', { dl: null });
+        return { replyText: downloadMenuText() };
       }
       if (
         cleanText === '10' ||

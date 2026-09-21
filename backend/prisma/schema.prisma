@@ -169,7 +169,8 @@ model MedicationReminder {
   nextDoseAt    DateTime?                        // INTERVAL: próxima toma calculada
   leadMinutes   Int       @default(10)           // anticipación del pre-aviso (MED) / del aviso (APPOINTMENT)
   secondLeadMinutes Int?                         // APPOINTMENT: segundo aviso automático (ej. 10 min antes, además del principal)
-  endsAt        DateTime?                        // MED: fin del tratamiento ("por 3 días") — se desactiva solo al pasar
+  startsAt      DateTime?                        // inicio de la vigencia: antes de esta fecha NO se avisa nada
+  endsAt        DateTime?                        // fin de la vigencia ("por 3 días" / "hasta el 30/04") — se desactiva solo al pasar
   whenAt        DateTime?                        // APPOINTMENT: fecha y hora del turno
   active        Boolean   @default(true)
   lastSentAt    DateTime?
