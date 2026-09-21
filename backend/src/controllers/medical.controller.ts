@@ -3,6 +3,7 @@ import { AuthenticatedRequest } from '../security/jwt';
 import { prisma } from '../database/prisma';
 import { StorageService } from '../storage/storage.service';
 import { OcrAiService } from '../services/ocr-ai.service';
+import { withSignedFileUrl } from '../security/signed-url';
 import { ZeroKnowledgeSecurity } from '../security/zero-knowledge';
 import { MedicationReminderService } from '../services/medication-reminder.service';
 
@@ -26,8 +27,9 @@ export class MedicalController {
       orderBy: { createdAt: 'desc' },
     });
     // ocrRawText/aiSummary van cifrados at-rest (clave KMS del server) → se descifran al vuelo.
+    // `fileUrl` sale FIRMADO y con vencimiento: /uploads ya no entrega nada suelto.
     const studies = rows.map((s) => ({
-      ...s,
+      ...withSignedFileUrl(s),
       ocrRawText: ZeroKnowledgeSecurity.kmsDecrypt(s.ocrRawText),
       aiSummary: ZeroKnowledgeSecurity.kmsDecrypt(s.aiSummary),
     }));

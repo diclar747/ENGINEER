@@ -2489,14 +2489,16 @@ export class BotStateMachine {
       const DL_BY_NUMBER: Record<string, DlOpt> = {
         '1': 'MEDS', '2': 'RX', '3': 'STUDIES', '4': 'REMINDERS', '5': 'APPTS', '6': 'STICKERS', '7': 'ALL',
       };
+      // Título de la opción elegida, en el idioma del titular (se usa al pedir las
+      // fechas y en el nombre de los archivos que se mandan).
       const DL_LABEL: Record<DlOpt, string> = {
-        MEDS: '💊 Medicamentos (lo que estás tomando)',
-        RX: '📄 Recetas médicas',
-        STUDIES: '🧪 Estudios / evaluaciones médicas',
-        REMINDERS: '⏰ Recordatorios de medicación',
-        APPTS: '🩺 Citas y turnos médicos',
-        STICKERS: '🏷️ Kit de Stickers (3x3 cm) y QR',
-        ALL: '📥 Todos mis documentos (estudios y recetas)',
+        MEDS: tr('💊 Medicamentos (lo que estás tomando)', '💊 Pohã', '💊 Medicamentos (o que você toma)', '💊 Medication (what you take)'),
+        RX: tr('📄 Recetas médicas', '📄 Receta', '📄 Receitas médicas', '📄 Prescriptions'),
+        STUDIES: tr('🧪 Estudios / evaluaciones médicas', '🧪 Estudio', '🧪 Exames / avaliações médicas', '🧪 Tests / medical reports'),
+        REMINDERS: tr('⏰ Recordatorios de medicación', "⏰ Momandu'a", '⏰ Lembretes de medicação', '⏰ Medication reminders'),
+        APPTS: tr('🩺 Citas y turnos médicos', '🩺 Turno', '🩺 Consultas e agendamentos', '🩺 Medical appointments'),
+        STICKERS: tr('🏷️ Kit de Stickers (3x3 cm) y QR', '🏷️ Sticker ha QR', '🏷️ Kit de Adesivos (3x3 cm) e QR', '🏷️ Sticker Kit (3x3 cm) and QR'),
+        ALL: tr('📥 Todos mis documentos (estudios y recetas)', '📥 Opa documento', '📥 Todos os meus documentos', '📥 All my documents'),
       };
       const downloadMenuText = (): string =>
         tr(
@@ -2511,7 +2513,27 @@ export class BotStateMachine {
             `_Respondé con el número. Después te pido el período de fechas._\n` +
             `↩️ *MENU* para volver.`,
           `📥 *Mba'épa emboguejyse?*\n\n` +
-            `*[1]* 💊 Pohã\n*[2]* 📄 Receta\n*[3]* 🧪 Estudio\n*[4]* ⏰ Momandu'a\n*[5]* 🩺 Turno\n*[6]* 🏷️ Sticker ha QR\n*[7]* 📥 Opa documento\n\n_Embohovái papapy reheve._`
+            `*[1]* 💊 Pohã\n*[2]* 📄 Receta\n*[3]* 🧪 Estudio\n*[4]* ⏰ Momandu'a\n*[5]* 🩺 Turno\n*[6]* 🏷️ Sticker ha QR\n*[7]* 📥 Opa documento\n\n_Embohovái papapy reheve._`,
+          `📥 *O que você quer baixar?*\n\n` +
+            `*[1]* 💊 Baixar *medicamento* (o que você está tomando)\n` +
+            `*[2]* 📄 Baixar *receita* médica\n` +
+            `*[3]* 🧪 Baixar *exame* / avaliação médica\n` +
+            `*[4]* ⏰ Baixar *lembretes de medicação* (horários dos seus remédios)\n` +
+            `*[5]* 🩺 Baixar *consultas e agendamentos* médicos\n` +
+            `*[6]* 🏷️ Baixar *Kit de Adesivos* (3x3 cm) e QR\n` +
+            `*[7]* 📥 Baixar *todos os meus documentos* (exames e receitas)\n\n` +
+            `_Responda com o número. Depois eu peço o período de datas._\n` +
+            `↩️ *MENU* para voltar.`,
+          `📥 *What do you want to download?*\n\n` +
+            `*[1]* 💊 Download *medication* (what you're taking)\n` +
+            `*[2]* 📄 Download *prescription*\n` +
+            `*[3]* 🧪 Download *test* / medical report\n` +
+            `*[4]* ⏰ Download *medication reminders* (your dosing times)\n` +
+            `*[5]* 🩺 Download *medical appointments*\n` +
+            `*[6]* 🏷️ Download *Sticker Kit* (3x3 cm) and QR\n` +
+            `*[7]* 📥 Download *all my documents* (tests and prescriptions)\n\n` +
+            `_Reply with the number. I'll ask for the date range next._\n` +
+            `↩️ *MENU* to go back.`
         );
       const askRangeText = (opt: DlOpt): string =>
         tr(
@@ -2523,7 +2545,22 @@ export class BotStateMachine {
             `• *último mes* · *últimos 3 meses* · *este año* · *2024*\n\n` +
             `📦 Escribí *TODO* si lo querés completo, sin filtro de fechas.\n` +
             `↩️ *MENU* para volver.`,
-          `📅 *${DL_LABEL[opt]}*\n\nMba'e ára guive? Ehai: *05/01/2021 a 30/04/2021* térã *TODO*.\n↩️ *MENU*.`
+          `📅 *${DL_LABEL[opt]}*\n\nMba'e ára guive? Ehai: *05/01/2021 a 30/04/2021* térã *TODO*.\n↩️ *MENU*.`,
+          `📅 *${DL_LABEL[opt]}*\n\n` +
+            `De que datas você quer?\n\n` +
+            `Escreva o período, por exemplo:\n` +
+            `• *05/01/2021 a 30/04/2021*\n` +
+            `• *5 de janeiro de 2021 a 30 de abril de 2021*\n` +
+            `• *último mês* · *últimos 3 meses* · *este ano* · *2024*\n\n` +
+            `📦 Escreva *TUDO* se quiser completo, sem filtro de datas.\n` +
+            `↩️ *MENU* para voltar.`,
+          `📅 *${DL_LABEL[opt]}*\n\n` +
+            `Which dates do you want?\n\n` +
+            `Type the period, for example:\n` +
+            `• *05/01/2021 to 30/04/2021*\n` +
+            `• *last month* · *last 3 months* · *this year* · *2024*\n\n` +
+            `📦 Type *ALL* if you want everything, with no date filter.\n` +
+            `↩️ *MENU* to go back.`
         );
 
       /** Rango de fechas → texto para el encabezado del PDF. */

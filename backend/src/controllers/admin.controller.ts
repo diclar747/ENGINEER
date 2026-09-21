@@ -1,5 +1,6 @@
 import { Request, Response } from 'express';
 import { prisma } from '../database/prisma';
+import { withSignedFileUrls } from '../security/signed-url';
 import { adminCredentialsOk, generateAdminToken, AdminRequest } from '../security/admin';
 import { AiPromptService } from '../services/ai-prompt.service';
 
@@ -287,7 +288,8 @@ export class AdminController {
       },
     });
     if (!user) { res.status(404).json({ error: 'No encontrado' }); return; }
-    res.json({ user });
+    // El panel de admin también abre los archivos por URL: van firmados igual.
+    res.json({ user: { ...user, medicalStudies: withSignedFileUrls(user.medicalStudies) } });
   }
 
   static async deleteReminder(req: AdminRequest, res: Response): Promise<void> {

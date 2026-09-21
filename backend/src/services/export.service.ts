@@ -4,6 +4,7 @@ import archiver from 'archiver';
 import { prisma } from '../database/prisma';
 import { StorageService } from '../storage/storage.service';
 import { config } from '../config';
+import { EXPORT_URL_TTL_SECONDS, signPath } from '../security/signed-url';
 import { ZeroKnowledgeSecurity } from '../security/zero-knowledge';
 
 // Register zip encrypt plugin if available
@@ -118,7 +119,11 @@ export class ExportService {
       } as archiver.ArchiverOptions & { encryptionMethod: string; password: string });
 
       output.on('close', () => {
-        const downloadUrl = `${config.baseUrl}/api/export/download/${filename}?token=${user.emergencyToken}`;
+        // Firmada y con vencimiento. Antes el `token` era el de emergencia (público,
+        // el del QR) y encima el endpoint ni lo miraba: cualquiera con el nombre del
+        // archivo se bajaba el export completo del titular.
+        const { exp, sig } = signPath(`exports/${filename}`, EXPORT_URL_TTL_SECONDS);
+        const downloadUrl = `${config.baseUrl}/api/export/download/${filename}?exp=${exp}&sig=${sig}`;
         const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24 hours
         resolve({
           downloadUrl,

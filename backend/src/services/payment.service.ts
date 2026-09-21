@@ -385,12 +385,20 @@ export class PaymentService {
       `Bienvenido a *Doorway Cortex Bio-Pass*, ${updatedUser.fullName || ''}.\n\n` +
       `✅ Tu código de emergencia ya está activo.\n` +
       `🌐 *Tu enlace público:* ${emergencyUrl}\n\n` +
-      `📄 *Descarga tu Kit de Stickers (3x3 cm):*\n${sticker.fileUrl}\n\n` +
+      `📄 *Tu Kit de Stickers (3x3 cm) va acá abajo, como archivo.*\n\n` +
       (updatedUser.email ? `📧 Te enviamos el comprobante a ${updatedUser.email}.\n\n` : '') +
       `🔔 *Activá notificaciones push en tu celular* (además del aviso acá por WhatsApp cada vez que alguien escanea tu QR):\n${config.frontendUrl}/push/${updatedUser.emergencyToken}\n\n` +
       `⚙️ Escribí *MENU* para ver todas tus opciones: cargar medicación, recetas y estudios (por separado), ver tu perfil médico, programar recordatorios de medicación y turnos, descargar tu Kit de Stickers/QR, modificar tus datos de emergencia, o hablar con soporte.`;
 
-    await whatsappBot.sendMessage(updatedUser.whatsappJid || updatedUser.phoneNumber, welcomeMsg);
+    const destino = updatedUser.whatsappJid || updatedUser.phoneNumber;
+    await whatsappBot.sendMessage(destino, welcomeMsg);
+    // El PDF va como ARCHIVO, no como link: el nombre real lleva guiones bajos
+    // ("qr_stickers/sticker_<token>.pdf") y WhatsApp los interpreta como marca de
+    // cursiva y se los come, así que el enlace que veía la persona daba 404.
+    // Además /uploads ya no entrega nada sin una URL firmada.
+    await whatsappBot
+      .sendDocument(destino, sticker.pdfBuffer, `Bio-Pass stickers ${updatedUser.fullName || ''}`.trim() + '.pdf', 'application/pdf', 'Kit de stickers 3x3 cm y QR')
+      .catch((e) => console.error('[payment] no se pudo mandar el PDF de stickers:', e?.message || e));
     return true;
   }
 }

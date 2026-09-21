@@ -10,6 +10,7 @@ import { whatsappBot } from './whatsapp/baileys.client';
 import { CronService } from './services/cron.service';
 import { PushService } from './services/push.service';
 import { globalLimiter } from './security/rate-limit';
+import { uploadsGuard } from './security/signed-url';
 
 const app = express();
 
@@ -36,8 +37,10 @@ app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 app.use('/api', globalLimiter);
 
-// Static uploads serving
-app.use('/uploads', express.static(config.storage.uploadDir));
+// Archivos subidos. El portero va ANTES del static: sin firma vigente no se
+// entrega nada (salvo los logos de organización, que son branding público y se
+// muestran en la ficha de emergencia antes de cualquier login).
+app.use('/uploads', uploadsGuard, express.static(config.storage.uploadDir));
 
 // API Routes
 app.use('/api', routes);

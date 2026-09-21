@@ -6,7 +6,7 @@
 // y Android lo rellenaba entero — salía un blob irreconocible en la barra de estado).
 // v8: sin `icon` en las notificaciones — Android lo mostraba como imagen grande a la
 // derecha (logo viejo) repitiendo el logo que ya aparece a la izquierda.
-const CACHE_NAME = 'biopass-cache-v8';
+const CACHE_NAME = 'biopass-cache-v9';
 
 // Only truly static, rarely-changing assets are pre-cached. The app shell
 // (index.html) and hashed JS/CSS are handled network-first so a new deploy
@@ -51,6 +51,12 @@ self.addEventListener('fetch', (event) => {
 
   // API: never intercept (encrypted medical data, auth, live status).
   if (url.pathname.startsWith('/api/')) return;
+
+  // Archivos subidos (estudios, recetas, cédulas): NUNCA se cachean. Caían en la
+  // regla de imágenes cache-first, así que una radiografía quedaba guardada en el
+  // navegador. Además ahora vienen con URL firmada que vence: cada carga trae una
+  // firma distinta, así que cachearlas solo llenaba el disco sin acertar nunca.
+  if (url.pathname.startsWith('/uploads/')) return;
 
   const isHashedAsset =
     url.pathname.startsWith('/assets/') || /\.(js|css)$/.test(url.pathname);

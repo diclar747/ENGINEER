@@ -1,5 +1,6 @@
 import { Request, Response } from 'express';
 import { prisma } from '../database/prisma';
+import { withSignedFileUrls } from '../security/signed-url';
 import { EmergencyService } from '../services/emergency.service';
 import { ZeroKnowledgeSecurity } from '../security/zero-knowledge';
 
@@ -104,7 +105,9 @@ export class EmergencyController {
         encryptionSalt: user.encryptionSalt,
         encryptedMedicalBlob: user.encryptedMedicalBlob,
       },
-      medicalStudies: user.medicalStudies,
+      // Firmadas y con vencimiento corto: el médico las abre en la consulta, la URL
+      // no queda viva después.
+      medicalStudies: withSignedFileUrls(user.medicalStudies),
       emergencyContacts: user.emergencyContacts,
     });
   }

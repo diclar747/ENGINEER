@@ -6,6 +6,7 @@ import { prisma } from '../database/prisma';
 import path from 'path';
 import fs from 'fs';
 import { config } from '../config';
+import { isValidSignature } from '../security/signed-url';
 
 export class ExportController {
   public static async createFullExport(req: AuthenticatedRequest, res: Response): Promise<void> {
@@ -54,6 +55,12 @@ export class ExportController {
   public static async downloadExportFile(req: Request, res: Response): Promise<void> {
     const { filename } = req.params;
     const sanitizedFilename = path.basename(filename);
+    // Sin firma vigente no se entrega: este endpoint no validaba NADA, así que el
+    // export completo (toda la bóveda del titular) se bajaba solo con el nombre.
+    if (!isValidSignature(`exports/${sanitizedFilename}`, req.query.exp, req.query.sig)) {
+      res.status(403).send('Enlace inválido o vencido. Generá la exportación de nuevo desde tu cuenta.');
+      return;
+    }
     const filePath = path.join(config.storage.uploadDir, 'exports', sanitizedFilename);
 
     if (!fs.existsSync(filePath)) {
