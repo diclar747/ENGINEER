@@ -19,7 +19,6 @@ export interface EmergencyAccessData {
     medicationAlerts: string[];
     /** Horario de toma programado (recordatorios activos, sin turnos médicos). */
     medicationSchedule: Array<{ medication: string; dose?: string; times: string[] }>;
-    address: string;
     photoUrl?: string;
     organization?: {
       name: string;
@@ -184,7 +183,9 @@ export class EmergencyService {
         currentMedications: medications.map((m) => ({ name: m.name, dose: m.dose, frequency: m.frequency })),
         medicationAlerts: medicationConflicts(medications, user.severeAllergies, user.contraindicatedMeds),
         medicationSchedule,
-        address: user.address || 'No especificada',
+        // El domicilio NO viaja en la ficha pública: la abre cualquiera que escanee
+        // el QR y saber dónde vive el titular no ayuda a asistirlo en la calle.
+        // Aparece recién en Modo Consulta, con el PIN (ver unlockConsultationMode).
         photoUrl: user.photoUrl || undefined,
         organization: user.organization
           ? {

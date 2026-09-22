@@ -43,6 +43,10 @@ export const EmergencyView: React.FC = () => {
   const [consultationUnlocked, setConsultationUnlocked] = useState(false);
   const [decryptedData, setDecryptedData] = useState<any>(null);
   const [medicalStudies, setMedicalStudies] = useState<any[]>([]);
+  // Datos que solo se muestran con el PIN: domicilio, cédula, email y los
+  // teléfonos de los contactos. La ficha pública no los trae.
+  const [privateUser, setPrivateUser] = useState<any>(null);
+  const [privateContacts, setPrivateContacts] = useState<any[]>([]);
 
   useEffect(() => {
     fetchEmergencyData();
@@ -104,6 +108,8 @@ export const EmergencyView: React.FC = () => {
     const res = await api.post(`/emergency/${token}/consultation`, { pin });
     if (res.data.success) {
       setMedicalStudies(res.data.medicalStudies || []);
+      setPrivateUser(res.data.user || null);
+      setPrivateContacts(res.data.emergencyContacts || []);
 
       if (res.data.user?.encryptedMedicalBlob && res.data.user?.encryptionSalt) {
         try {
@@ -220,9 +226,13 @@ export const EmergencyView: React.FC = () => {
                       CI: {user.ciNumber}
                     </span>
                   )}
-                  <span className="text-[11px] text-rose-100 flex items-center gap-1">
-                    <MapPin className="w-3 h-3" /> {user.address || 'Paraguay / Brasil'}
-                  </span>
+                  {/* El domicilio aparece recién en Modo Consulta: la ficha pública
+                      la abre cualquiera que escanee el QR. */}
+                  {consultationUnlocked && privateUser?.address && (
+                    <span className="text-[11px] text-rose-100 flex items-center gap-1">
+                      <MapPin className="w-3 h-3" /> {privateUser.address}
+                    </span>
+                  )}
                 </div>
               </div>
             </div>
@@ -319,7 +329,7 @@ export const EmergencyView: React.FC = () => {
                   className="flex-1 sm:flex-none px-5 py-2.5 rounded-xl bg-teal-600 hover:bg-teal-500 text-white font-bold text-xs flex items-center justify-center gap-1.5 shadow-md shadow-teal-600/25 transition-colors"
                 >
                   <Phone className="w-3.5 h-3.5" />
-                  <span>Llamar</span>
+                  <span>{consultationUnlocked ? contact.phoneNumber : 'Llamar'}</span>
                 </a>
               </div>
             </div>
@@ -361,6 +371,58 @@ export const EmergencyView: React.FC = () => {
                 PRIVADO
               </span>
             </div>
+
+            {/* Datos de contacto del titular. Fuera del Modo Consulta no se muestran:
+                la ficha pública solo necesita decir a QUIÉN llamar, no dónde vive ni
+                con qué número. */}
+            {(privateUser || privateContacts.length > 0) && (
+              <div className="space-y-3">
+                <h4 className="text-xs font-black uppercase tracking-wider text-fg-muted">Datos del titular</h4>
+                <div className="bg-panel p-4 rounded-2xl border border-line/90 grid gap-2.5 sm:grid-cols-2">
+                  {privateUser?.ciNumber && (
+                    <div>
+                      <span className="text-[10px] font-bold uppercase tracking-wide text-fg-muted block">Cédula</span>
+                      <span className="text-xs text-fg font-medium">{privateUser.ciNumber}</span>
+                    </div>
+                  )}
+                  {privateUser?.address && (
+                    <div>
+                      <span className="text-[10px] font-bold uppercase tracking-wide text-fg-muted block">Domicilio</span>
+                      <span className="text-xs text-fg font-medium">{privateUser.address}</span>
+                    </div>
+                  )}
+                  {privateUser?.email && (
+                    <div>
+                      <span className="text-[10px] font-bold uppercase tracking-wide text-fg-muted block">Email</span>
+                      <span className="text-xs text-fg font-medium break-all">{privateUser.email}</span>
+                    </div>
+                  )}
+                </div>
+
+                {privateContacts.length > 0 && (
+                  <div className="bg-panel p-4 rounded-2xl border border-line/90 space-y-2.5">
+                    <span className="text-[10px] font-bold uppercase tracking-wide text-fg-muted block">
+                      Contactos de emergencia ({privateContacts.length})
+                    </span>
+                    {privateContacts.map((c: any) => (
+                      <div key={c.id || c.phoneNumber} className="flex items-center justify-between gap-3 border-b border-line/70 pb-2.5 last:border-0 last:pb-0">
+                        <div>
+                          <p className="text-xs font-bold text-fg">{c.fullName}</p>
+                          <p className="text-[11px] text-fg-muted">{c.relationship || 'Familiar / Tutor'}</p>
+                        </div>
+                        <a
+                          href={`tel:${c.phoneNumber}`}
+                          className="px-3 py-2 rounded-xl bg-teal-600 hover:bg-teal-500 text-white font-bold text-[11px] flex items-center gap-1.5 shrink-0 transition-colors"
+                        >
+                          <Phone className="w-3 h-3" />
+                          <span>{c.phoneNumber}</span>
+                        </a>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
 
             {/* Decrypted Clinical History Details */}
             {decryptedData && (
