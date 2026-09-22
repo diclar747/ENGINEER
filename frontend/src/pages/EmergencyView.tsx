@@ -90,7 +90,7 @@ export const EmergencyView: React.FC = () => {
     setCallNotice(null);
     try {
       await api.post(`/emergency/${token}/call-contact`);
-      setCallNotice(`📞 Notificación y llamada iniciada a ${data.emergencyContact.fullName} (${data.emergencyContact.phoneNumber})`);
+      setCallNotice(`📞 Notificación y llamada iniciada a ${data.emergencyContact.fullName}.`);
       // Open mobile dialer immediately
       window.location.href = `tel:${data.emergencyContact.phoneNumber}`;
     } catch (err: any) {
@@ -309,12 +309,17 @@ export const EmergencyView: React.FC = () => {
                 <p className="text-xs text-fg-muted">{contact.relationship || 'Familiar / Tutor'}</p>
               </div>
               <div className="flex items-center gap-2">
+                {/* El número NO se muestra: esta ficha la abre cualquiera que escanee
+                    el QR, y el teléfono del familiar es un dato privado. El botón
+                    marca igual (sigue siendo un `tel:`, así funciona aunque falle la
+                    red) y el número lo ve recién el teclado del teléfono. */}
                 <a
                   href={`tel:${contact.phoneNumber}`}
-                  className="flex-1 sm:flex-none px-4 py-2.5 rounded-xl bg-teal-600 hover:bg-teal-500 text-white font-bold text-xs flex items-center justify-center gap-1.5 shadow-md shadow-teal-600/25 transition-colors"
+                  aria-label={`Llamar a ${contact.fullName}`}
+                  className="flex-1 sm:flex-none px-5 py-2.5 rounded-xl bg-teal-600 hover:bg-teal-500 text-white font-bold text-xs flex items-center justify-center gap-1.5 shadow-md shadow-teal-600/25 transition-colors"
                 >
                   <Phone className="w-3.5 h-3.5" />
-                  <span>{contact.phoneNumber}</span>
+                  <span>Llamar</span>
                 </a>
               </div>
             </div>

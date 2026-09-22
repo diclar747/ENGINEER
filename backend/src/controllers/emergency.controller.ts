@@ -159,10 +159,11 @@ export class EmergencyController {
       user.fullName || 'Titular Bio-Pass'
     );
 
+    // Sin el número en la respuesta: la ficha es pública (la abre quien escanee el
+    // QR) y el teléfono del familiar no tiene por qué aparecer en pantalla.
     res.json({
       success: true,
-      message: `Llamada de rescate en curso a ${contact.fullName} (${contact.phoneNumber})`,
-      contactPhone: contact.phoneNumber,
+      message: `Llamada de rescate en curso a ${contact.fullName}`,
       contactName: contact.fullName,
       callSid: callResult.callSid,
     });
