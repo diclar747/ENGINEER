@@ -2,6 +2,7 @@ import { prisma } from '../database/prisma';
 import { ZeroKnowledgeSecurity } from '../security/zero-knowledge';
 import { OcrAiService } from '../services/ocr-ai.service';
 import { PaymentService } from '../services/payment.service';
+import { AccountPurgeService } from '../services/account-purge.service';
 import { BancardService } from '../services/bancard.service';
 import { QrPdfService } from '../services/qr-pdf.service';
 import { StorageService } from '../storage/storage.service';
@@ -301,6 +302,7 @@ const MID_FLOW_STATES = new Set([
   'ACTIVE_REMIND_NAME', 'ACTIVE_REMIND_SCHED', 'ACTIVE_REMIND_LAST',
   'ACTIVE_REMIND_DOSE', 'ACTIVE_REMIND_WHEN', 'ACTIVE_REMIND_LEAD', 'ACTIVE_REMIND_RANGE', 'ACTIVE_REMIND_CONFIRM',
   'ACTIVE_REMIND_EDIT_PICK',
+  'ACTIVE_CHURN_REASON', 'ACTIVE_CHURN_OFFER', 'ACTIVE_CHURN_FINAL', 'ACTIVE_CHURN_CONFIRM_DELETE',
 ]);
 
 const PENDING_STEP_LABEL: Record<string, { es: string; pt: string }> = {
@@ -337,6 +339,10 @@ const PENDING_STEP_LABEL: Record<string, { es: string; pt: string }> = {
   ACTIVE_REMIND_RANGE: { es: 'Decirme desde y hasta cuándo te aviso', pt: 'Dizer de quando até quando avisar' },
   ACTIVE_REMIND_CONFIRM: { es: 'Confirmar el recordatorio (Sí / No)', pt: 'Confirmar o lembrete (Sim / Não)' },
   ACTIVE_REMIND_EDIT_PICK: { es: 'Decirme qué campo querés cambiar', pt: 'Dizer qual campo você quer mudar' },
+  ACTIVE_CHURN_REASON: { es: 'Contarme por qué querés dar de baja tu Bio-Pass', pt: 'Contar por que você quer cancelar seu Bio-Pass' },
+  ACTIVE_CHURN_OFFER: { es: 'Responder si querés tus 15 días de gracia (Sí / No)', pt: 'Responder se você quer seus 15 dias de cortesia (Sim / Não)' },
+  ACTIVE_CHURN_FINAL: { es: 'Elegir entre pausar tu cuenta o borrarla definitivamente', pt: 'Escolher entre pausar sua conta ou apagá-la definitivamente' },
+  ACTIVE_CHURN_CONFIRM_DELETE: { es: 'Confirmar el borrado definitivo escribiendo CONFIRMAR', pt: 'Confirmar a exclusão definitiva escrevendo CONFIRMAR' },
 };
 
 /** Descripción corta de "en qué pregunta había quedado" para el mensaje de timeout. */
@@ -1876,7 +1882,8 @@ export class BotStateMachine {
         state === 'ACTIVE_FREE_UPDATE' ||
         state === 'ACTIVE_LINK_PHONE' ||
         state.startsWith('ACTIVE_REMIND_') ||
-        state.startsWith('ACTIVE_EDIT_')
+        state.startsWith('ACTIVE_EDIT_') ||
+        state.startsWith('ACTIVE_CHURN_')
           ? state
           : 'ACTIVE_MEMBER';
 
@@ -1924,6 +1931,128 @@ export class BotStateMachine {
             `*[10]* 💬 Soporte ndive\n\n` +
             `🔔 _Ehai *NOTIFICACIONES* rehóvo emyendy hag̃ua alertas push._\n` +
             `_Embohovái papapy reheve, emondo ta'anga/PDF, térã ñe'ẽ._`
+        );
+
+      // ---------- Baja voluntaria ("El Puente de la Empatía") ----------
+      // Paso 1: detección y contención — motivo de la baja.
+      const churnReasonText = (): string =>
+        tr(
+          `Hola, *${user!.fullName || 'titular Bio-Pass'}*. Notamos que querés dar de baja tu Bio-Pass. Lamentamos mucho que estés considerando dejarnos — valoramos enormemente el tiempo que compartimos.\n\n` +
+            `Antes de despedirnos, ¿nos contás qué te motivó a tomar esta decisión?\n\n` +
+            `*[1]* El servicio no cubrió mis expectativas\n` +
+            `*[2]* El costo actual se me complica\n` +
+            `*[3]* No estoy pudiendo pagar en este momento\n` +
+            `*[4]* Otro motivo`,
+          `Mba'éichapa, *${user!.fullName || 'titular Bio-Pass'}*. Rohecha reipotaha opa ne Bio-Pass. Emombe'úpa oréve mba'érepa?\n\n` +
+            `*[1]* Servicio ndaha'éi porã\n*[2]* Hepyeteve\n*[3]* Ndaikatúi ahepyme'ẽ ko'ág̃a\n*[4]* Ambue mba'e`,
+          `Olá, *${user!.fullName || 'titular Bio-Pass'}*. Notamos que você quer cancelar seu Bio-Pass. Lamentamos muito que esteja considerando nos deixar — valorizamos muito o tempo que compartilhamos.\n\n` +
+            `Antes de nos despedirmos, você nos conta o que motivou essa decisão?\n\n` +
+            `*[1]* O serviço não atendeu minhas expectativas\n` +
+            `*[2]* O custo atual está complicado\n` +
+            `*[3]* Não estou conseguindo pagar neste momento\n` +
+            `*[4]* Outro motivo`,
+          `Hi, *${user!.fullName || 'Bio-Pass member'}*. We noticed you want to cancel your Bio-Pass. We're sorry to see you considering leaving — we really value the time we've shared.\n\n` +
+            `Before we say goodbye, could you tell us what led to this decision?\n\n` +
+            `*[1]* The service didn't meet my expectations\n` +
+            `*[2]* The current cost is a strain\n` +
+            `*[3]* I can't make the payment right now\n` +
+            `*[4]* Another reason`
+        );
+
+      // Paso 2: respuesta empática + regalo de 15 días, según motivo.
+      const churnOfferText = (reason: '1' | '2' | '3' | '4'): string => {
+        const name = user!.fullName || (lang === 'pt' ? 'titular' : lang === 'en' ? 'there' : 'titular');
+        if (reason === '1') {
+          return tr(
+            `${name}, gracias por tu sinceridad. Si el servicio no estuvo a la altura de lo que esperabas, asumimos la responsabilidad — no queremos que te vayas con esa impresión. Nos gustaría revisar tu caso personalmente, y mientras tanto te regalamos *15 días de acceso libre* para que veas las mejoras que estamos implementando.\n\n¿Nos das la oportunidad de reivindicarnos?\n\n*[1]* Sí, dame esos 15 días\n*[2]* No, de todas formas quiero continuar con la baja`,
+            `Aguyje ne sinceridad rehe. Roikuaave hag̃ua nde caso, romoï 15 ára tekoresãi rehe.\n\n*[1]* Heẽ\n*[2]* Nahániri, aikuaáma`,
+            `${name}, obrigado pela sua sinceridade. Se o serviço não esteve à altura, assumimos a responsabilidade — não queremos que você vá com essa impressão. Gostaríamos de revisar seu caso pessoalmente e, enquanto isso, te damos *15 dias de acesso livre* para ver as melhorias que estamos implementando.\n\nVocê nos dá a chance de nos reabilitarmos?\n\n*[1]* Sim, quero esses 15 dias\n*[2]* Não, mesmo assim quero continuar com o cancelamento`,
+            `${name}, thanks for your honesty. If the service didn't live up to what you expected, that's on us — we don't want you to leave with that impression. We'd like to personally review your case, and in the meantime we're giving you *15 days of free access* to see the improvements we're rolling out.\n\nWill you give us a chance to make it right?\n\n*[1]* Yes, give me those 15 days\n*[2]* No, I still want to go ahead with the cancellation`
+          );
+        }
+        if (reason === '2' || reason === '3') {
+          return tr(
+            `${name}, te entendemos perfectamente. Las situaciones económicas complejas nos atraviesan a todos en algún momento, y lo más importante para nosotros no es una transacción, sino cuidar tu bienestar y el de tu familia. Queremos darte una mano real hoy.\n\n` +
+              `No te pedimos que pagues ahora ni que te des de baja. Te regalamos *15 días de gracia total* en tu Bio-Pass, con acceso completo e ininterrumpido. Resolvé tus prioridades con tranquilidad — recién evaluamos el siguiente paso cuando estés recuperado.\n\n` +
+              `¿Activamos este respiro para vos?\n\n*[1]* Sí, activar mis 15 días de gracia\n*[2]* No, de todas formas quiero continuar con la baja`,
+            `Roikuaa porã ndéve. Romoï 15 ára gratis ne Bio-Pass-pe, ani rehepyme'ẽ ko'ág̃a.\n\n*[1]* Heẽ\n*[2]* Nahániri, aikuaáma`,
+            `${name}, entendemos perfeitamente. Situações financeiras complexas atingem a todos em algum momento, e o mais importante para nós não é uma transação, mas cuidar do seu bem-estar e da sua família. Queremos te dar uma mão real hoje.\n\n` +
+              `Não pedimos que pague agora nem que cancele. Damos a você *15 dias de cortesia total* no seu Bio-Pass, com acesso completo e ininterrupto. Resolva suas prioridades com tranquilidade — só avaliamos o próximo passo quando você estiver recuperado.\n\n` +
+              `Ativamos essa folga para você?\n\n*[1]* Sim, ativar meus 15 dias de cortesia\n*[2]* Não, mesmo assim quero continuar com o cancelamento`,
+            `${name}, we completely understand. Complex financial situations happen to all of us at some point, and what matters most to us isn't a transaction — it's looking after your wellbeing and your family's. We want to give you real help today.\n\n` +
+              `We're not asking you to pay now or to cancel. We're giving you *15 full days of grace* on your Bio-Pass, with complete, uninterrupted access. Sort out your priorities in peace — we'll only look at next steps once you're back on your feet.\n\n` +
+              `Shall we activate this breather for you?\n\n*[1]* Yes, activate my 15 grace days\n*[2]* No, I still want to go ahead with the cancellation`
+          );
+        }
+        return tr(
+          `${name}, gracias por contarnos. Antes de que te vayas, queremos ofrecerte algo: *15 días de acceso libre* a tu Bio-Pass, sin costo, para que lo pienses con calma y sigas contando con tu historial médico y tu QR de emergencia mientras tanto.\n\n¿Activamos este respiro para vos?\n\n*[1]* Sí, activar mis 15 días de gracia\n*[2]* No, de todas formas quiero continuar con la baja`,
+          `Aguyje ore mombe'u haguã. Romoï 15 ára gratis.\n\n*[1]* Heẽ\n*[2]* Nahániri, aikuaáma`,
+          `${name}, obrigado por nos contar. Antes de você ir, queremos te oferecer algo: *15 dias de acesso livre* ao seu Bio-Pass, sem custo, para você pensar com calma e continuar com seu histórico médico e seu QR de emergência enquanto isso.\n\nAtivamos essa folga para você?\n\n*[1]* Sim, ativar meus 15 dias de cortesia\n*[2]* Não, mesmo assim quero continuar com o cancelamento`,
+          `${name}, thanks for telling us. Before you go, we'd like to offer you something: *15 days of free access* to your Bio-Pass, at no cost, so you can think it over calmly while still keeping your medical history and emergency QR active.\n\nShall we activate this breather for you?\n\n*[1]* Yes, activate my 15 grace days\n*[2]* No, I still want to go ahead with the cancellation`
+        );
+      };
+
+      const churnAlreadyUsedText = (): string =>
+        tr(
+          `Ya usamos este mismo respiro con vos antes, así que esta vez no podemos repetirlo — pero antes de que te vayas, queremos que tengas presente algo importante.`,
+          `Peteĩma roikuaa ko respiro. Ame'ẽ mboyve, oimeraẽ mba'e importante.`,
+          `Já usamos essa mesma folga com você antes, então dessa vez não podemos repetir — mas antes de você ir, queremos que saiba de algo importante.`,
+          `We've already used this same breather with you before, so we can't repeat it this time — but before you go, there's something important we want you to know.`
+        );
+
+      const churnAcceptedText = (expiry: Date): string => {
+        const fecha = expiry.toLocaleDateString('es-PY', { day: '2-digit', month: '2-digit', year: 'numeric' });
+        return tr(
+          `Excelente, *${user!.fullName || ''}*. Tus *15 días de respiro* ya están activos en tu cuenta de Bio-Pass (vencimiento: ${fecha}). No tenés que hacer ningún trámite ni ingresar tarjetas ahora. Seguí disfrutando tu plataforma con total normalidad. Estamos para acompañarte. ¡Que tengas un gran día! 🙌\n\n_Escribí *MENU* para ver las opciones._`,
+          `Néi! Ne 15 ára oñemyendýma (${fecha} peve). Ehai *MENU*.`,
+          `Excelente, *${user!.fullName || ''}*. Seus *15 dias de folga* já estão ativos na sua conta Bio-Pass (vencimento: ${fecha}). Você não precisa fazer nenhum trâmite nem inserir cartões agora. Continue aproveitando sua plataforma normalmente. Estamos aqui para te acompanhar. Tenha um ótimo dia! 🙌\n\n_Escreva *MENU* para ver as opções._`,
+          `Excellent, *${user!.fullName || ''}*. Your *15 grace days* are now active on your Bio-Pass account (expiry: ${fecha}). No paperwork or card details needed right now. Keep enjoying your platform as usual. We're here for you. Have a great day! 🙌\n\n_Type *MENU* to see the options._`
+        );
+      };
+
+      // Paso 4: última instancia antes de la baja definitiva — pausar vs. borrar todo.
+      const churnFinalText = (): string =>
+        tr(
+          `Comprendido, *${user!.fullName || ''}*. Respetamos tu decisión, pero antes de la baja definitiva queremos asegurarnos de que tengas presente algo importante.\n\n` +
+            `Si cancelás ahora y eliminamos tu cuenta, vas a perder todo tu historial acumulado: tus registros de salud, tus estudios y recetas guardadas, y tus preferencias personalizadas. *Esto no se puede deshacer.*\n\n` +
+            `Aunque no uses el servicio ahora, ¿qué te parece si simplemente *pausamos* tu perfil en vez de borrarlo? Así, si en el futuro decidís volver, todo tu historial va a estar ordenado y esperándote intacto — sin perder nada de lo que ya construiste. _(Mientras esté en pausa, tu QR de emergencia queda desactivado.)_\n\n` +
+            `*[1]* Sí, dejámelo pausado y seguro para más adelante\n` +
+            `*[2]* No, igual quiero borrar todo y dar la baja definitiva`,
+          `Rorespeta ne decisión. Nde historial opáta cancelamo. ¿Ñamboyke térã ñamboguete opavave?\n\n*[1]* Emboyke la\n*[2]* Emboguete opavave`,
+          `Entendido, *${user!.fullName || ''}*. Respeitamos sua decisão, mas antes do cancelamento definitivo queremos garantir que você tenha presente algo importante.\n\n` +
+            `Se você cancelar agora e eliminarmos sua conta, vai perder todo o seu histórico acumulado: seus registros de saúde, exames e receitas salvos, e suas preferências personalizadas. *Isso não pode ser desfeito.*\n\n` +
+            `Mesmo que você não use o serviço agora, que tal simplesmente *pausarmos* seu perfil em vez de apagá-lo? Assim, se no futuro decidir voltar, todo o seu histórico estará organizado e esperando por você intacto — sem perder nada do que já construiu. _(Enquanto estiver em pausa, seu QR de emergência fica desativado.)_\n\n` +
+            `*[1]* Sim, deixe pausado e seguro para mais tarde\n` +
+            `*[2]* Não, mesmo assim quero apagar tudo e cancelar definitivamente`,
+          `Understood, *${user!.fullName || ''}*. We respect your decision, but before the final cancellation we want to make sure you're aware of something important.\n\n` +
+            `If you cancel now and we delete your account, you'll lose your entire accumulated history: your health records, saved studies and prescriptions, and your personalized preferences. *This cannot be undone.*\n\n` +
+            `Even if you're not using the service right now, what if we simply *paused* your profile instead of deleting it? That way, if you decide to come back in the future, your whole history will be organized and waiting for you, intact — without losing anything you've already built. _(While paused, your emergency QR is deactivated.)_\n\n` +
+            `*[1]* Yes, keep it paused and safe for later\n` +
+            `*[2]* No, I still want to delete everything and cancel for good`
+        );
+
+      const churnPausedText = (): string =>
+        tr(
+          `Listo, *${user!.fullName || ''}*. Tu cuenta quedó *pausada* — tu historial médico, estudios y recetas siguen intactos y a salvo. Tu QR de emergencia queda desactivado mientras estés en pausa.\n\nCuando quieras volver, escribime *REACTIVAR* y retomamos justo donde lo dejaste. Las puertas siempre están abiertas. 🤍`,
+          `Oĩma, ne cuenta opytu'u. Ne historial opyta ha'ete. Ehai *REACTIVAR* eju jey haguã.`,
+          `Pronto, *${user!.fullName || ''}*. Sua conta ficou *pausada* — seu histórico médico, exames e receitas continuam intactos e seguros. Seu QR de emergência fica desativado enquanto estiver em pausa.\n\nQuando quiser voltar, escreva *REATIVAR* e retomamos exatamente de onde parou. As portas estão sempre abertas. 🤍`,
+          `Done, *${user!.fullName || ''}*. Your account is now *paused* — your medical history, studies and prescriptions remain intact and safe. Your emergency QR is deactivated while paused.\n\nWhenever you want to come back, just type *REACTIVATE* and we'll pick up right where you left off. The door is always open. 🤍`
+        );
+
+      const churnConfirmDeleteText = (): string =>
+        tr(
+          `Antes de continuar: esto es *irreversible*. Vamos a eliminar físicamente tu cuenta, tu historial médico, estudios, recetas y contactos de emergencia — no hay forma de recuperarlos después.\n\nSi estás seguro, escribí *CONFIRMAR* para proceder. Cualquier otra cosa cancela la baja y volvés al menú.`,
+          `Ko'ã mba'e ndaikatuvéima ojevy. Ehai *CONFIRMAR* remboguete hag̃ua opavave. Ambue mba'e omboyke la baja.`,
+          `Antes de continuar: isso é *irreversível*. Vamos eliminar fisicamente sua conta, histórico médico, exames, receitas e contatos de emergência — não há como recuperá-los depois.\n\nSe tiver certeza, escreva *CONFIRMAR* para prosseguir. Qualquer outra coisa cancela o cancelamento e você volta ao menu.`,
+          `Before continuing: this is *irreversible*. We're going to permanently delete your account, medical history, studies, prescriptions and emergency contacts — there's no way to recover them afterwards.\n\nIf you're sure, type *CONFIRM* to proceed. Anything else cancels the cancellation and takes you back to the menu.`
+        );
+
+      const churnDeletedText = (): string =>
+        tr(
+          `Entendido, *${user!.fullName || ''}*. Procedimos a la eliminación total de tus registros de nuestros servidores, tal como lo solicitaste. Lamentamos ver partir tu historial, pero agradecemos el tiempo que compartimos con Bio-Pass. Las puertas siempre estarán abiertas. ¡Mucho éxito! 🙏`,
+          `Oĩma. Roguete opavave nde registro. Aguyje ore ndive rejapo hag̃ua ko tiempo. Okẽ oĩ opáicha g̃uarã.`,
+          `Entendido, *${user!.fullName || ''}*. Procedemos com a eliminação total dos seus registros dos nossos servidores, conforme solicitado. Lamentamos ver seu histórico partir, mas agradecemos o tempo que compartilhamos com o Bio-Pass. As portas estarão sempre abertas. Muito sucesso! 🙏`,
+          `Understood, *${user!.fullName || ''}*. We've gone ahead and permanently deleted your records from our servers, as requested. We're sorry to see your history go, but we're grateful for the time we shared with Bio-Pass. The door will always be open. All the best! 🙏`
         );
 
       const medUpdateMsg = (r: {
@@ -3148,6 +3277,10 @@ export class BotStateMachine {
               return redispatch('ACTIVE_MEMBER', 'NOTIFICACIONES');
             case 'LINK_PHONE':
               return redispatch('ACTIVE_MEMBER', 'VINCULAR');
+            case 'UNSUBSCRIBE': {
+              await updateState('ACTIVE_CHURN_REASON', { rdraft: null, pendingUpload: null, pendingDelete: null, _timeoutPromptShown: false });
+              return { replyText: churnReasonText() };
+            }
             case 'EDIT_PROFILE':
               if (subMode.startsWith('ACTIVE_EDIT_') || subMode === 'ACTIVE_FREE_UPDATE') break; // ya está en ese flujo
               return it.hasDetails ? redispatch('ACTIVE_MEMBER', cleanText) : redispatch('ACTIVE_MEMBER', '8');
@@ -3440,6 +3573,63 @@ export class BotStateMachine {
             '👍 Ok, la receta quedó guardada y no toqué tu medicación.\n\n_Mandá otra receta o escribí *LISTO*._',
             '👍 Oĩma, receta oñeguarda.\n\n_Emondo ambue térã ehai *LISTO*._'
           ),
+        };
+      }
+
+      // ---------- Baja voluntaria ("El Puente de la Empatía") ----------
+      // Paso 1 → eligió motivo [1]-[4]: respuesta empática + oferta de 15 días
+      // (o, si ya la usó antes, directo al último paso sin repetirla).
+      if (subMode === 'ACTIVE_CHURN_REASON') {
+        const reasonMatch = cleanText.trim().match(/^[1-4]$/);
+        if (!reasonMatch) {
+          return { replyText: tr('Elegí una opción del *1* al *4*.\n\n', 'Eiporavo *1* - *4*.\n\n') + churnReasonText() };
+        }
+        const reason = reasonMatch[0] as '1' | '2' | '3' | '4';
+        if (user.retentionOfferUsedAt) {
+          await updateState('ACTIVE_CHURN_FINAL', { churnReason: reason });
+          return { replyText: `${churnAlreadyUsedText()}\n\n${churnFinalText()}` };
+        }
+        await updateState('ACTIVE_CHURN_OFFER', { churnReason: reason });
+        return { replyText: churnOfferText(reason) };
+      }
+
+      // Paso 2 → responde a la oferta de 15 días.
+      if (subMode === 'ACTIVE_CHURN_OFFER') {
+        if (cleanText.trim() === '1' || isAffirmative(cleanText)) {
+          const expiry = await PaymentService.grantCourtesyDays(user.id, 15);
+          await updateState('ACTIVE_MEMBER', { churnReason: null });
+          return { replyText: churnAcceptedText(expiry) };
+        }
+        await updateState('ACTIVE_CHURN_FINAL', {});
+        return { replyText: churnFinalText() };
+      }
+
+      // Paso 4 → última instancia: pausar vs. borrar todo.
+      if (subMode === 'ACTIVE_CHURN_FINAL') {
+        if (cleanText.trim() === '1' || isAffirmative(cleanText)) {
+          const latestSub = await prisma.subscription.findFirst({ where: { userId: user.id }, orderBy: { createdAt: 'desc' } });
+          if (latestSub) await prisma.subscription.update({ where: { id: latestSub.id }, data: { status: 'PAUSED' } });
+          await prisma.user.update({ where: { id: user.id }, data: { status: 'PAUSED', onboardingState: 'PAUSED' } });
+          return { replyText: churnPausedText() };
+        }
+        if (cleanText.trim() === '2' || isNegative(cleanText)) {
+          await updateState('ACTIVE_CHURN_CONFIRM_DELETE', {});
+          return { replyText: churnConfirmDeleteText() };
+        }
+        return { replyText: tr('Elegí *[1]* o *[2]*.\n\n', 'Eiporavo *[1]* térã *[2]*.\n\n') + churnFinalText() };
+      }
+
+      // Confirmación dura antes del borrado físico e irreversible.
+      if (subMode === 'ACTIVE_CHURN_CONFIRM_DELETE') {
+        if (/^confirmar$|^confirm$/i.test(cleanText.trim())) {
+          await AccountPurgeService.purgeUser(user.id);
+          return { replyText: churnDeletedText() };
+        }
+        await updateState('ACTIVE_MEMBER', {});
+        return {
+          replyText:
+            tr('👍 No borré nada — seguís siendo parte de Bio-Pass.', '👍 Nda\'aguetei mba\'eve.') +
+            `\n\n_${tr('Escribí *MENU* para ver las opciones.', 'Ehai *MENU*.')}_`,
         };
       }
 
@@ -5073,6 +5263,34 @@ export class BotStateMachine {
 
       // Menú por defecto del miembro activo
       return { replyText: activeMenu() };
+    }
+
+    // Cuenta pausada por baja voluntaria (no por falta de pago): sin multa ni pago
+    // pendiente, solo espera que el titular quiera volver.
+    if (user.status === 'PAUSED') {
+      if (/^(reactivar|reactivame|reactiva|activar|volver|reactivate|activate)$/i.test(norm(cleanText))) {
+        const latestSub = await prisma.subscription.findFirst({ where: { userId: user.id }, orderBy: { createdAt: 'desc' } });
+        const stillValid = !!latestSub && latestSub.expiryDate > new Date();
+        const newStatus = stillValid ? 'ACTIVE' : 'EXPIRED';
+        // onboardingState solo se pisa a 'ACTIVE_MEMBER' si de verdad vuelve activo:
+        // ese valor por sí solo ya destraba el menú completo del titular más abajo,
+        // así que si en realidad venció mientras estaba en pausa, tiene que caer en
+        // el flujo de pago (EXPIRED), no en el menú.
+        await prisma.user.update({
+          where: { id: user.id },
+          data: newStatus === 'ACTIVE' ? { status: newStatus, onboardingState: 'ACTIVE_MEMBER' } : { status: newStatus },
+        });
+        if (latestSub) await prisma.subscription.update({ where: { id: latestSub.id }, data: { status: newStatus } });
+        return BotStateMachine.handleMessage({ ...msg, body: 'MENU', routed: true });
+      }
+      return {
+        replyText: tr(
+          `⏸️ *Tu Bio-Pass está en pausa.*\n\nTu historial médico, estudios y recetas siguen intactos y a salvo — no se borró nada. Tu QR de emergencia está desactivado mientras estés en pausa.\n\n_Escribí *REACTIVAR* cuando quieras volver a usarlo._`,
+          `⏸️ *Ne Bio-Pass opytu'u.*\n\n_Ehai *REACTIVAR* eju jeývo._`,
+          `⏸️ *Seu Bio-Pass está em pausa.*\n\nSeu histórico, exames e receitas continuam intactos e seguros — nada foi apagado. Seu QR de emergência está desativado enquanto estiver em pausa.\n\n_Escreva *REATIVAR* quando quiser voltar a usá-lo._`,
+          `⏸️ *Your Bio-Pass is paused.*\n\nYour medical history, studies and prescriptions are still intact and safe — nothing was deleted. Your emergency QR is deactivated while paused.\n\n_Type *REACTIVATE* whenever you want to come back._`
+        ),
+      };
     }
 
     // Expired or cancelled member

@@ -401,4 +401,28 @@ export class PaymentService {
       .catch((e) => console.error('[payment] no se pudo mandar el PDF de stickers:', e?.message || e));
     return true;
   }
+
+  /**
+   * Respiro sin cobrar (flujo de retención de baja voluntaria): suma `days` a la
+   * suscripción vigente (o crea una si no había) y reactiva al usuario, igual que
+   * `admin.controller.extendSubscription` pero pensado para uso desde el bot.
+   */
+  public static async grantCourtesyDays(userId: string, days: number): Promise<Date> {
+    const latest = await prisma.subscription.findFirst({ where: { userId }, orderBy: { createdAt: 'desc' } });
+    const base = latest && latest.expiryDate > new Date() ? new Date(latest.expiryDate) : new Date();
+    base.setDate(base.getDate() + days);
+
+    if (latest) {
+      await prisma.subscription.update({
+        where: { id: latest.id },
+        data: { expiryDate: base, status: 'ACTIVE', finePending: false, fineAmount: 0, lastNotification: 'NONE' },
+      });
+    } else {
+      await prisma.subscription.create({
+        data: { userId, plan: 'MONTHLY', country: 'PARAGUAY', currency: 'PYG', amount: 0, status: 'ACTIVE', expiryDate: base, lastNotification: 'NONE' },
+      });
+    }
+    await prisma.user.update({ where: { id: userId }, data: { status: 'ACTIVE', retentionOfferUsedAt: new Date() } });
+    return base;
+  }
 }

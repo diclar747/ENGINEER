@@ -31,6 +31,7 @@ export const BOT_INTENTS = [
   'EDIT_REMINDER',
   'MARK_TAKEN',
   'CANCEL',
+  'UNSUBSCRIBE',
   'THANKS',
   'GREETING',
   'MENU',
@@ -142,6 +143,7 @@ INTENCIONES (elegí UNA):
 - EDIT_REMINDER: quiere CAMBIAR algo de un recordatorio o turno que YA existe en la lista ("cambiá el horario del losartán a las 9 y a las 21", "mi turno con el dentista pasó a las 17", "avisame 30 minutos antes del turno"). target identifica cuál; los datos nuevos van en appointment / med.
 - MARK_TAKEN: avisa que ya tomó un medicamento ("ya tomé", "recién tomé el ibuprofeno").
 - CANCEL: quiere salir / dejar lo que estaba haciendo / dice que fue un error ("salir", "salí", "cancelar", "olvidalo", "fue por error", "no quiero nada", "dejalo"). Si el bot espera un Sí/No y dice "no", es ANSWER_CURRENT_STEP.
+- UNSUBSCRIBE: quiere cancelar/dar de baja su SUSCRIPCIÓN, cuenta o membresía de Bio-Pass, o borrar/eliminar su cuenta de forma definitiva ("quiero darme de baja", "cancelar mi suscripción", "quiero eliminar mi cuenta", "ya no quiero pagar Bio-Pass", "quiero borrar mi cuenta", "dar de baja mi cuenta"). NO es esto un simple "cancelar" suelto sin mencionar cuenta/suscripción/servicio/membresía (eso es CANCEL), ni cancelar un turno o recordatorio puntual (eso es DELETE_REMINDER).
 - THANKS: solo agradece o confirma que leyó ("gracias", "ok gracias", "perfecto", "dale").
 - GREETING: solo saluda ("hola", "buenas tardes").
 - MENU: pide ver el menú u opciones.
@@ -165,7 +167,7 @@ DATOS:
 - med.name, med.dose ("50 mg", "1 comprimido"), med.times ["HH:mm"] para horarios fijos, med.intervalHours para "cada N horas" (cada 2 días = 48), med.lastTakenMinutesAgo ("tomé hace una hora"=60, "recién"=0), med.durationDays ("por 7 días"=7). null / [] si no aplica.
 
 EJEMPLOS (intención):
-"¿tengo alguna cita pendiente?" → QUERY_APPOINTMENTS · "me gustaría saber si tengo turno hoy" → QUERY_APPOINTMENTS (dateFilter "today") · "listame mis recordatorios" → QUERY_REMINDERS · "quiero agendar un turno con el cardiólogo" → CREATE_APPOINTMENT · "ibuprofeno cada 8 horas, tomé hace una hora" → CREATE_MED_REMINDER · "quiero cargar mi receta" → UPLOAD_RX · "borrá el turno del dentista" → DELETE_REMINDER · "nada, fue un error" → CANCEL.
+"¿tengo alguna cita pendiente?" → QUERY_APPOINTMENTS · "me gustaría saber si tengo turno hoy" → QUERY_APPOINTMENTS (dateFilter "today") · "listame mis recordatorios" → QUERY_REMINDERS · "quiero agendar un turno con el cardiólogo" → CREATE_APPOINTMENT · "ibuprofeno cada 8 horas, tomé hace una hora" → CREATE_MED_REMINDER · "quiero cargar mi receta" → UPLOAD_RX · "borrá el turno del dentista" → DELETE_REMINDER · "nada, fue un error" → CANCEL · "quiero darme de baja de Bio-Pass" → UNSUBSCRIBE · "cancelá mi suscripción" → UNSUBSCRIBE.
 
 Respondé ÚNICAMENTE este JSON, sin texto extra:
 {"intent":"...","dateFilter":null,"appointment":{"description":null,"date":null,"time":null,"leadMinutes":null},"med":{"name":null,"dose":null,"times":[],"intervalHours":null,"lastTakenMinutesAgo":null,"durationDays":null},"target":{"index":null,"name":null,"scope":null},"hasDetails":false}`;
@@ -212,6 +214,12 @@ function canonicalIntent(rawIntent: string, a: any, m: any): BotIntent | null {
   const has = (re: RegExp) => re.test(up);
   const appt = has(/APPOINT|CITA|TURNO|CONSULT|MEETING/);
   const med = has(/MED|DOSE|PILL|DRUG|REMEDIO/);
+  // Antes que cualquier regla genérica de DELETE/CANCEL (que apunta a un
+  // recordatorio puntual): "DELETE_ACCOUNT", "CANCEL_SUBSCRIPTION", etc. son
+  // nombres muy plausibles que el modelo puede inventar para la baja de cuenta,
+  // y contienen "DELETE"/"CANCEL" — si se evalúan después, la regla genérica de
+  // abajo los captura primero y la baja termina tratada como borrar un recordatorio.
+  if (has(/UNSUBSCRIBE|SUBSCRIPTION|MEMBERSHIP|ACCOUNT|CHURN/) && has(/CANCEL|DELETE|REMOVE|TERMINATE|CLOSE|DEACTIVAT/)) return 'UNSUBSCRIBE';
   if ((appt || med || has(/REMINDER/)) && has(/EDIT|CHANGE|UPDATE|MODIF|RESCHEDUL|MOVE/)) return 'EDIT_REMINDER';
   if (appt && has(/QUERY|LIST|CHECK|GET|SHOW|VIEW|ASK|SEARCH|FIND|PENDING/)) return 'QUERY_APPOINTMENTS';
   if (appt && has(/CREATE|REMIND|SCHEDULE|ADD|BOOK|SET|NEW|REGISTER|SAVE/)) return 'CREATE_APPOINTMENT';
@@ -228,6 +236,7 @@ function canonicalIntent(rawIntent: string, a: any, m: any): BotIntent | null {
   if (has(/NOTIF|PUSH/)) return 'NOTIFICATIONS';
   if (has(/THANK/)) return 'THANKS';
   if (has(/GREET|HELLO/)) return 'GREETING';
+  if (has(/UNSUBSCRIBE|CANCEL_SUBSCRIPTION|CANCEL_ACCOUNT|CANCEL_MEMBERSHIP|DELETE_ACCOUNT|CHURN|TERMINATE_ACCOUNT|CLOSE_ACCOUNT/)) return 'UNSUBSCRIBE';
   if (has(/EXIT|CANCEL|ABORT|QUIT|STOP_FLOW/)) return 'CANCEL';
   // Sin nombre reconocible pero con datos concretos → el pedido de alta es inequívoco.
   if (a && typeof a === 'object' && (a.date || a.time)) return 'CREATE_APPOINTMENT';
@@ -364,6 +373,18 @@ const EMPTY_SLOTS = {
 export function quickIntent(text: string): Interpretation | null {
   const t = plain(text).replace(/[¿?¡!.,;:]+/g, ' ').replace(/\s+/g, ' ').trim();
   if (!t || t.split(' ').length > 30) return null;
+  // Baja voluntaria: vía determinística, SIN depender de la IA (si Niro está caído
+  // o sin saldo, esto no puede quedar sin respuesta). "cancelar" solo (sin mencionar
+  // cuenta/suscripción/servicio) sigue siendo CANCEL — salir del paso actual.
+  if (
+    /\b(suscripcion|membresia|cuenta|servicio|plan|bio ?pass)\b/.test(t) &&
+    /\b(cancel\w*|dar de baja|darme de baja|baja\b|eliminar\w*|borrar\w*|desactivar\w*|cerrar\w*|dejar de pagar)\b/.test(t)
+  ) {
+    return { intent: 'UNSUBSCRIBE', ...EMPTY_SLOTS, med: { ...EMPTY_SLOTS.med, times: [] } };
+  }
+  if (/\b(quiero|necesito|quisiera) (darme de baja|cancelar mi cuenta|eliminar mi cuenta|borrar mi cuenta)\b/.test(t)) {
+    return { intent: 'UNSUBSCRIBE', ...EMPTY_SLOTS, med: { ...EMPTY_SLOTS.med, times: [] } };
+  }
   // "pasame el estudio de sangre", "mandame la ecografía" → un documento puntual
   if (
     /^(pasame|mandame|enviame|mostrame|dame|traeme|buscame|me (pasas|mandas|envias|podes pasar|podes mandar|podes enviar))\b/.test(t) &&

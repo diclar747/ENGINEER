@@ -54,7 +54,10 @@ export class EmergencyService {
       },
     });
 
-    if (!user) {
+    // PAUSED = baja voluntaria "congelada": el titular pidió pausar en vez de
+    // borrar su cuenta — el historial queda intacto, pero el QR de emergencia
+    // se desactiva mientras esté en pausa (se reactiva solo al volver por WhatsApp).
+    if (!user || user.status === 'PAUSED') {
       return null;
     }
 

@@ -19,6 +19,7 @@ enum UserStatus {
   ACTIVE
   EXPIRED
   CANCELLED
+  PAUSED // baja voluntaria "congelada": el titular pausó su cuenta en vez de borrarla — datos intactos, QR desactivado, el cron de purga GDPR lo saltea
   PURGED
 }
 
@@ -118,6 +119,7 @@ model User {
   lastInteractionAt     DateTime?           // Último mensaje entrante procesado — usado para detectar abandono a mitad de un paso
 
   status                UserStatus          @default(PENDING_PAYMENT)
+  retentionOfferUsedAt  DateTime?           // cuándo se usó el "respiro de 15 días" de la baja voluntaria — solo se ofrece una vez por cuenta
 
   failedPinAttempts     Int                 @default(0)
   pinLockedUntil        DateTime?

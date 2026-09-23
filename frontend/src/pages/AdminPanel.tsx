@@ -14,7 +14,7 @@ import {
 
 const STATUS_COLOR: Record<string, string> = {
   PAID: CH.emerald, PENDING: CH.amber, FAILED: CH.rose, EXPIRED: CH.slate,
-  ACTIVE: CH.emerald, PENDING_PAYMENT: CH.amber, CANCELLED: CH.rose, PURGED: CH.slate,
+  ACTIVE: CH.emerald, PENDING_PAYMENT: CH.amber, CANCELLED: CH.rose, PAUSED: CH.sky, PURGED: CH.slate,
 };
 const rangePreset = (days: number) => {
   const to = new Date();
@@ -34,6 +34,7 @@ const fdatetime = (s?: string) => (s ? new Date(s).toLocaleString('es-PY') : 'â€
 const STATUS: Record<string, string> = {
   ACTIVE: 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-300', PENDING_PAYMENT: 'bg-amber-500/15 text-amber-600 dark:text-amber-300',
   EXPIRED: 'bg-slate-500/15 text-fg-soft', CANCELLED: 'bg-rose-500/15 text-rose-600 dark:text-rose-300',
+  PAUSED: 'bg-sky-500/15 text-sky-600 dark:text-sky-300',
   PURGED: 'bg-muted text-fg-muted', PAID: 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-300',
   PENDING: 'bg-amber-500/15 text-amber-600 dark:text-amber-300', FAILED: 'bg-rose-500/15 text-rose-600 dark:text-rose-300',
 };

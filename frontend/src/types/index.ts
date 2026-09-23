@@ -21,7 +21,7 @@ export interface User {
   address?: string;
   email?: string;
   photoUrl?: string;
-  status: 'PENDING_PAYMENT' | 'ACTIVE' | 'EXPIRED' | 'CANCELLED' | 'PURGED';
+  status: 'PENDING_PAYMENT' | 'ACTIVE' | 'EXPIRED' | 'CANCELLED' | 'PAUSED' | 'PURGED';
   emergencyToken: string;
   encryptionSalt?: string;
   encryptedMedicalBlob?: string;
