@@ -2191,11 +2191,23 @@ export class BotStateMachine {
         });
         const rx = studies.filter((s) => s.studyType === 'PRESCRIPTION');
         const est = studies.filter((s) => s.studyType !== 'PRESCRIPTION');
-        const rows = (arr: typeof studies): string =>
-          arr
-            .slice(0, 5)
-            .map((s) => `• ${s.title} — ${(s.studyDate || s.createdAt).toLocaleDateString('es-PY', { timeZone: config.timezone })}`)
-            .join('\n') || tr('_Nada cargado._', '_Ndaipóri._');
+        // Antes cortaba en 5 sin avisar: el encabezado decía "(9)" y se veían 5.
+        // El tope alto solo evita pasar el largo máximo de un mensaje de WhatsApp.
+        const ROWS_MAX = 60;
+        const rows = (arr: typeof studies): string => {
+          if (!arr.length) return tr('_Nada cargado._', '_Ndaipóri._');
+          // Fecha sola guardada a medianoche UTC (cargas web) → mostrar ese mismo día,
+          // no el anterior (misma regla que en la descarga de documentos).
+          const fmt = (v: Date) => {
+            const dateOnly = v.getUTCHours() === 0 && v.getUTCMinutes() === 0 && v.getUTCSeconds() === 0;
+            return v.toLocaleDateString('es-PY', { timeZone: dateOnly ? 'UTC' : config.timezone });
+          };
+          const lines = arr.slice(0, ROWS_MAX).map((s) => `• ${s.title} — ${fmt(s.studyDate || s.createdAt)}`);
+          if (arr.length > ROWS_MAX) {
+            lines.push(tr(`_… y ${arr.length - ROWS_MAX} más. Escribí *9* para descargarlos todos._`, `_… ha ${arr.length - ROWS_MAX} ve. Ehai *9*._`));
+          }
+          return lines.join('\n');
+        };
         const conflicts = medicationConflicts(meds, user!.severeAllergies, user!.contraindicatedMeds);
         const reminders = await prisma.medicationReminder.findMany({
           where: { userId: user!.id, OR: [{ NOT: { kind: 'APPOINTMENT' } }, { whenAt: { gte: new Date() } }] },
