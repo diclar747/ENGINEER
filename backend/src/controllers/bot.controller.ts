@@ -12,7 +12,7 @@ export class BotController {
     res.json({
       success: true,
       service: 'Baileys WhatsApp Web Engine',
-      botNumber: config.baileys.botNumber,
+      botNumber: whatsappBot.botNumber(),
       ...status,
     });
   }
@@ -26,14 +26,14 @@ export class BotController {
   /** Solo botNumber — endpoint público que usa el login para el link "registrate por WhatsApp". */
   public static async publicInfo(_req: Request, res: Response): Promise<void> {
     const s = whatsappBot.getStatus();
-    res.json({ botNumber: config.baileys.botNumber, connected: s.connected });
+    res.json({ botNumber: whatsappBot.botNumber(), connected: s.connected });
   }
 
   /** Feed de movimientos del bot (panel admin). */
   public static async getEvents(req: Request, res: Response): Promise<void> {
     const { limit, dir, phone, status } = req.query as Record<string, string>;
     res.json({
-      status: { service: 'Baileys WhatsApp Web Engine', botNumber: config.baileys.botNumber, ...whatsappBot.getStatus() },
+      status: { service: 'Baileys WhatsApp Web Engine', botNumber: whatsappBot.botNumber(), ...whatsappBot.getStatus() },
       events: whatsappBot.getEvents({
         limit: limit ? parseInt(limit, 10) : 120,
         dir: dir || undefined,

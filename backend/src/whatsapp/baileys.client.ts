@@ -1029,6 +1029,20 @@ export class BaileysClient {
     return false;
   }
 
+  private lastMeNumber: string | null = null;
+
+  /**
+   * Número REAL del WhatsApp vinculado (el que escaneó el QR). Es el que tiene que
+   * ir en los links wa.me: la variable WHATSAPP_BOT_NUMBER puede haber quedado con
+   * un número anterior si se re-vinculó el bot con otro teléfono.
+   */
+  public botNumber(): string {
+    const me: any = this.sock?.user;
+    const n = me?.id ? String(me.id).split(':')[0].split('@')[0].replace(/\D/g, '') : '';
+    if (n.length >= 7) this.lastMeNumber = n;
+    return this.lastMeNumber || config.baileys.botNumber;
+  }
+
   public getStatus() {
     const me: any = this.sock?.user;
     return {

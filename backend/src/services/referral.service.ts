@@ -42,7 +42,7 @@ export class ReferralService {
   /** Link de WhatsApp con el mensaje y el código ya escritos. */
   static inviteLink(code: string): string {
     const text = `Hola! Quiero mi Bio-Pass. Me invitaron con el código ${code}`;
-    return `https://wa.me/${config.baileys.botNumber}?text=${encodeURIComponent(text)}`;
+    return `https://wa.me/${whatsappBot.botNumber()}?text=${encodeURIComponent(text)}`;
   }
 
   /**
