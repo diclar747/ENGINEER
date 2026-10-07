@@ -1,7 +1,9 @@
+import path from 'path';
 import { prisma } from '../database/prisma';
 import { ZeroKnowledgeSecurity } from '../security/zero-knowledge';
 import { OcrAiService } from '../services/ocr-ai.service';
-import { PaymentService } from '../services/payment.service';
+import { PaymentService, fmtGs, fmtUsd } from '../services/payment.service';
+import { ReferralService } from '../services/referral.service';
 import { AccountPurgeService } from '../services/account-purge.service';
 import { BancardService } from '../services/bancard.service';
 import { QrPdfService } from '../services/qr-pdf.service';
@@ -324,6 +326,8 @@ const PENDING_STEP_LABEL: Record<string, { es: string; pt: string }> = {
   ACTIVE_UPLOAD_STUDY: { es: 'Subir tu estudio o análisis', pt: 'Enviar seu exame ou análise' },
   ACTIVE_RX_CONFIRM: { es: 'Confirmar los medicamentos leídos de tu receta', pt: 'Confirmar os medicamentos lidos da receita' },
   ACTIVE_ASK_CATEGORY: { es: 'Decirme qué tipo de documento mandaste', pt: 'Dizer que tipo de documento você enviou' },
+  ACTIVE_EDIT_DELDOC: { es: 'Elegir qué estudio o receta borrar', pt: 'Escolher qual exame ou receita apagar' },
+  ACTIVE_EDIT_DELMED: { es: 'Elegir qué medicamento quitar', pt: 'Escolher qual medicamento remover' },
   ACTIVE_LINK_PHONE: { es: 'Confirmar tu número real de WhatsApp', pt: 'Confirmar seu número real de WhatsApp' },
   ACTIVE_FREE_UPDATE: { es: 'Contarme qué querés actualizar de tu ficha', pt: 'Dizer o que você quer atualizar no seu perfil' },
   ACTIVE_DOWNLOAD_MENU: { es: 'Elegir qué querés descargar', pt: 'Escolher o que você quer baixar' },
@@ -409,6 +413,43 @@ function isRecoverPinCmd(text: string): boolean {
   return /\b(recuperar pin|recupera pin|olvide mi pin|olvide el pin|olvide mi clave|perdi mi pin|perdi el pin|no recuerdo mi pin|resetear mi pin|recuperar mi pin|forgot my pin|reset my pin|recover pin|esqueci meu pin|esqueci minha senha|recuperar minha senha)\b/.test(t);
 }
 
+/** ¿Pregunta por el precio o los planes? (ES / PT / EN / GN) */
+export function isPriceQuestion(text: string): boolean {
+  const t = norm(text);
+  if (!t || t.split(/\s+/).length > 14) return false;
+  if (/\b(medicament\w*|remedio|pastilla|estudio|analisis|receta|consulta|turno|cita)\b/.test(t)) return false;
+  return (
+    /\b(precio|precios|costo|costos|tarifa|tarifas|mensualidad|preco|precos|pricing|price|hepy)\b/.test(t) ||
+    /\bcuanto (cuesta|sale|vale|cobran|cobra|se paga|hay que pagar|tengo que pagar|debo pagar|pago|seria)\b/.test(t) ||
+    /\bcuanto (es|esta|sale) (el|la|un|una)? ?(plan|cuota|mensualidad|servicio|suscripcion|anual|mensual|bio ?pass|renovacion)\b/.test(t) ||
+    /\b(que|cual) (es el )?(precio|costo|valor)\b/.test(t) ||
+    /\b(quanto custa|quanto e|how much)\b/.test(t)
+  );
+}
+
+/** ¿Pide su link/código de la promo "traé un cliente"? */
+export function isPromoRequest(text: string): boolean {
+  const t = norm(text);
+  if (!t || t.split(/\s+/).length > 14) return false;
+  return (
+    /^(promo|promocion|promociones|invitar|invitacion|referidos?|referir|mi codigo|mi link)$/.test(t) ||
+    /\b(promo\w*|mes gratis|meses gratis|codigo de (invitacion|referido|promo)|link de invitacion)\b/.test(t) ||
+    /\b(invit\w+|tra(er|igo|e)|recomend\w+|refer\w+) (a )?(un|una|unos|mis|mi|otro|otra|alguien)? ?(amig\w*|client\w*|famil\w*|person\w*|conocid\w*|alguien)\b/.test(t)
+  );
+}
+
+/** ¿Quiere pagar / renovar o saber hasta cuándo tiene el servicio? */
+export function isRenewRequest(text: string): boolean {
+  const t = norm(text);
+  if (!t || t.split(/\s+/).length > 12) return false;
+  return (
+    /^(pagar|pago|renovar|renovacion|renuevo|mi plan|mi suscripcion|vencimiento)$/.test(t) ||
+    /\b(renov\w+|quiero pagar|como (pago|puedo pagar|hago para pagar|se paga)|donde (pago|puedo pagar)|formas? de pago|medios? de pago|pagar (mi|la|el) (cuota|plan|suscripcion|mensualidad|bio ?pass))\b/.test(t) ||
+    /\b(cuando|hasta cuando) (se )?(vence|vencio|venceria|tengo|dura|caduca)\b.{0,25}\b(bio ?pass|plan|suscripcion|servicio|cuenta|cuota|pago)\b/.test(t) ||
+    /\b(cuando vence|hasta cuando tengo) (mi|el|la)? ?(bio ?pass|plan|suscripcion|servicio|cuenta)\b/.test(t)
+  );
+}
+
 const OTP_TTL_MS = 10 * 60 * 1000;
 /** Genera un código de 6 dígitos y lo persiste hasheado en OtpCode (key = phone o "email:<id>"). */
 async function issueOtp(key: string): Promise<string> {
@@ -467,6 +508,27 @@ export class BotStateMachine {
       },
     });
 
+    // Confirmación de un pago por alias desde el WhatsApp de cobranzas: "OK BIO-…".
+    // Solo por WhatsApp real (el asistente web no verifica de quién es el número)
+    // y solo desde los números cargados en el panel (pay.admin.whatsapp).
+    const okPay = cleanText.match(/^\s*(ok|confirmar|confirmo|confirmado|pagado|acreditar|acreditado|aprobar)\s+(BIO-\d+-\d+)\s*$/i);
+    if (okPay && msg.channel !== 'web') {
+      const { adminWhatsapp } = await PaymentService.getPaymentMethods();
+      const mine = [rawPhone, (user?.phoneNumber || '').replace(/\D/g, '')].filter(Boolean);
+      if (adminWhatsapp.some((a) => mine.includes(a))) {
+        const ref = okPay[2].toUpperCase();
+        const ord = await prisma.paymentOrder.findUnique({ where: { referenceCode: ref }, include: { user: { select: { fullName: true } } } });
+        if (!ord) return { replyText: `❌ No existe ninguna orden *${ref}*. Revisá el código.` };
+        if (ord.status === 'PAID') return { replyText: `ℹ️ La orden *${ref}* ya estaba acreditada.` };
+        const ok = await PaymentService.handlePaymentSuccess(ref);
+        return {
+          replyText: ok
+            ? `✅ Pago *${ref}* acreditado. ${ord.user?.fullName || 'El titular'} ya tiene su Bio-Pass activo y recibió el aviso.`
+            : `❌ No pude acreditar *${ref}*. Probá desde el panel → Pagos.`,
+        };
+      }
+    }
+
     // Check if user doesn't exist
     if (!user) {
       user = await prisma.user.create({
@@ -487,6 +549,26 @@ export class BotStateMachine {
       // saludo, se responde eso primero — no hace falta empujar directo el
       // menú de idiomas. La persona puede seguir preguntando (el mismo gate
       // sigue activo en STEP1_WELCOME) y decide sola cuándo registrarse.
+      const LANG_MENU0 = `*[1]* Español 🇪🇸\n*[2]* Guaraní 🇵🇾\n*[3]* Português 🇧🇷\n*[4]* English 🇬🇧`;
+      // Llegó con el link de un titular (promo "traé un cliente"): queda anotado quién lo invitó.
+      const invitedBy0 = await ReferralService.attach(user.id, ReferralService.findCode(cleanText)).catch(() => null);
+      if (invitedBy0) {
+        return {
+          replyText:
+            `👋 *¡Hola! Bienvenido a Doorway Cortex Bio-Pass* — tu pasaporte médico de emergencia.\n\n` +
+            `🎁 Venís invitado por *${invitedBy0}*. ¡Qué bueno!\n\n` +
+            `${await PaymentService.priceText('es')}\n\n` +
+            `_El registro dura menos de 3 minutos. Elegí tu idioma para empezar:_\n${LANG_MENU0}`,
+        };
+      }
+      if (isPriceQuestion(cleanText)) {
+        return {
+          replyText:
+            `👋 *¡Hola! Bienvenido a Doorway Cortex Bio-Pass* — tu pasaporte médico de emergencia.\n\n` +
+            `${await PaymentService.priceText('es')}\n\n` +
+            `_Cuando quieras registrarte (dura menos de 3 minutos), elegí tu idioma:_\n${LANG_MENU0}`,
+        };
+      }
       const c0 = norm(cleanText);
       const isLangChoice0 = c0 === '1' || c0 === '2' || c0 === '3' || c0 === '4' || /espanol|guarani|portug|brasil|ingles|english/.test(c0);
       if (!isLangChoice0 && !isSmallTalk(cleanText) && cleanText.trim().length >= 4) {
@@ -554,6 +636,57 @@ export class BotStateMachine {
       user.language === 'GN' ? 'gn' : user.language === 'PT' ? 'pt' : user.language === 'EN' ? 'en' : 'es';
     const tr = (es: string, gn: string, pt?: string, en?: string) =>
       lang === 'gn' ? gn : lang === 'pt' ? pt ?? es : lang === 'en' ? en ?? es : es;
+
+    // Promo "traé un cliente": si todavía no pagó nunca y menciona un código de
+    // invitación en cualquier paso del registro, queda anotado quién lo invitó.
+    let invitedBy: string | null = null;
+    if (user.status === 'PENDING_PAYMENT' && !user.referredById && cleanText) {
+      invitedBy = await ReferralService.attach(user.id, ReferralService.findCode(cleanText)).catch(() => null);
+    }
+
+    // Comprobante de una transferencia / alias: se guarda en la orden pendiente y
+    // se avisa a cobranzas. No activa solo: lo confirma una persona.
+    const receiveProof = async (buffer: Buffer, filename?: string, mime?: string): Promise<BotResponse> => {
+      const f = (filename || '').toLowerCase();
+      const m = (mime || '').toLowerCase();
+      const ext = m.includes('pdf') || f.endsWith('.pdf') ? 'pdf' : m.includes('png') || f.endsWith('.png') ? 'png' : m.includes('webp') ? 'webp' : 'jpg';
+      const r = await PaymentService.attachProof(user!.id, buffer, ext, mime);
+      if (!r) {
+        return { replyText: tr('No encontré una orden de pago pendiente a tu nombre. Escribí *PAGAR* y te paso los datos.', 'Ndajuhúi orden de pago. Ehai *PAGAR*.') };
+      }
+      return {
+        replyText: tr(
+          `🧾 *Recibí tu comprobante.*\n\n💰 ${r.formattedAmount}\n🔢 Ref. ${r.referenceCode}\n\n` +
+            `Lo verificamos y, apenas se confirme que el pago entró, tu Bio-Pass queda activo y te aviso por acá.\n_En horario hábil suele demorar pocas horas._`,
+          `🧾 *Ahupytýma ne comprobante.*\n\n💰 ${r.formattedAmount}\n🔢 Ref. ${r.referenceCode}\n\n_Rohecháta ha romomarandúta._`,
+          `🧾 *Recebi seu comprovante.*\n\n💰 ${r.formattedAmount}\n🔢 Ref. ${r.referenceCode}\n\n` +
+            `Vamos verificar e, assim que o pagamento for confirmado, seu Bio-Pass fica ativo e aviso por aqui.`,
+          `🧾 *Got your receipt.*\n\n💰 ${r.formattedAmount}\n🔢 Ref. ${r.referenceCode}\n\n` +
+            `We'll verify it and, as soon as the payment is confirmed, your Bio-Pass is activated and I'll let you know here.`
+        ),
+      };
+    };
+
+    // Datos para pagar la renovación (reutiliza la orden pendiente; no crea una por mensaje).
+    const renewalInfo = async (intro: string): Promise<BotResponse> => {
+      const order = await PaymentService.getRenewalOrder(user!.id);
+      return { replyText: `${intro}\n\n${PaymentService.payBlock(order, lang)}\n\n🔢 _Ref. ${order.referenceCode}_` };
+    };
+
+    // "¿Cuánto cuesta?" en cualquier momento: se contesta con los precios reales,
+    // sin IA y sin mover el paso en el que está la persona.
+    if (!msg.mediaBuffer && !msg.routed && isPriceQuestion(cleanText)) {
+      const isMember = user.status === 'ACTIVE' || state.startsWith('ACTIVE');
+      const tail =
+        state === 'STEP1_WELCOME' || state === 'UNREGISTERED'
+          ? `_Cuando quieras registrarte, elegí tu idioma:_\n*[1]* Español 🇪🇸\n*[2]* Guaraní 🇵🇾\n*[3]* Português 🇧🇷\n*[4]* English 🇬🇧`
+          : isMember
+            ? tr('_Escribí *RENOVAR* para ver cómo pagar, o *MENU* para las opciones._', '_Ehai *RENOVAR* térã *MENU*._', '_Escreva *RENOVAR* para ver como pagar, ou *MENU*._', '_Type *RENOVAR* to see how to pay, or *MENU*._')
+            : user.status === 'CANCELLED' || user.status === 'EXPIRED'
+              ? tr('_Escribí *PAGAR* y te paso los datos para reactivar tu cuenta._', '_Ehai *PAGAR*._', '_Escreva *PAGAR* para reativar sua conta._', '_Type *PAGAR* to reactivate your account._')
+              : tr('_Seguimos con tu registro: respondé lo último que te pedí._', '_Jasegi: embohovái pe ajerure va\'ekue._', '_Continuamos seu cadastro: responda o último que pedi._', "_Let's continue your sign-up: answer my last question._");
+      return { replyText: `${await PaymentService.priceText(lang)}\n\n${tail}` };
+    }
 
     // Nota de voz que no se pudo transcribir (audio cortado, ilegible, o falló el
     // servicio): sin esto, `cleanText` queda vacío y se procesa igual que un
@@ -650,8 +783,13 @@ export class BotStateMachine {
     // Comando global — funciona en CUALQUIER paso del registro: "reiniciar",
     // "empezar de nuevo", "volver a empezar", "menu", "cancelar", "de nuevo"…
     // Para un miembro ACTIVO no se borra nada: se lo lleva a su menú.
-    if (isResetCmd(cleanText) || forceRestartFromTimeout) {
-      if (user.status === 'ACTIVE') {
+    // Tampoco se reinicia a quien ya fue socio y está vencido (período de gracia),
+    // en espera por falta de pago o en pausa: antes un simple "menu" lo mandaba a
+    // registrarse de cero. Vencido = sigue con su menú; en espera / pausa = lo
+    // atiende su bloque propio más abajo.
+    const heldAccount = user.status === 'CANCELLED' || user.status === 'PAUSED';
+    if ((isResetCmd(cleanText) || forceRestartFromTimeout) && !heldAccount) {
+      if (user.status === 'ACTIVE' || user.status === 'EXPIRED') {
         // Miembro activo: no se toca su ficha. Se lo deja en el menú.
         await updateState('ACTIVE_MEMBER', {});
         // "menu"/"inicio"/"volver al inicio"/"opciones" YA significan "mostrame
@@ -894,6 +1032,14 @@ export class BotStateMachine {
       // sin que eso cuente como "no eligió, arranco en español igual".
       // Se queda en este mismo paso: puede seguir preguntando, y arranca el
       // registro recién cuando efectivamente elige un idioma.
+      if (invitedBy) {
+        return {
+          replyText:
+            `🎁 ¡Genial! Anoté que venís invitado por *${invitedBy}*.\n\n` +
+            `_Para empezar tu registro (menos de 3 minutos), elegí tu idioma:_\n` +
+            `*[1]* Español 🇪🇸\n*[2]* Guaraní 🇵🇾\n*[3]* Português 🇧🇷\n*[4]* English 🇬🇧`,
+        };
+      }
       if (!isLangChoice && !isSmallTalk(cleanText) && cleanText.trim().length >= 4) {
         const ai = await askNiro(cleanText, { scope: 'PRE_REGISTRO' });
         if (ai) {
@@ -1682,6 +1828,19 @@ export class BotStateMachine {
       };
     }
 
+    // Menú de planes: Paraguay en guaraníes; Brasil, resto de Sudamérica y EE.UU. en dólares.
+    const planMenu = async (): Promise<string> => {
+      const pr = await PaymentService.getPlanPrices();
+      return (
+        `🇵🇾 *Paraguay:*\n` +
+        `*[1]* ${tr('Plan Mensual', 'Plan Mensual', 'Plano Mensal', 'Monthly Plan')} — ${fmtGs(pr.PY.MONTHLY)}\n` +
+        `*[2]* ${tr('Plan Anual', 'Plan Anual', 'Plano Anual', 'Annual Plan')} — ${fmtGs(pr.PY.ANNUAL)} ${tr('(12 meses, pagás 10)', '(12 meses)', '(12 meses, paga 10)', '(12 months, pay 10)')}\n\n` +
+        `🌎 *${tr('Brasil, resto de Sudamérica y EE.UU.', 'Brasil, Sudamérica ha EE.UU.', 'Brasil, resto da América do Sul e EUA', 'Brazil, rest of South America and USA')}:*\n` +
+        `*[3]* ${tr('Plan Mensual', 'Plan Mensual', 'Plano Mensal', 'Monthly Plan')} — ${fmtUsd(pr.USA.MONTHLY)}\n` +
+        `*[4]* ${tr('Plan Anual', 'Plan Anual', 'Plano Anual', 'Annual Plan')} — ${fmtUsd(pr.USA.ANNUAL)} ${tr('(12 meses)', '(12 meses)', '(12 meses)', '(12 months)')}\n\n`
+      );
+    };
+
     // STEP 7B: RECOVERY KEY CONFIRMATION
     if (state === 'STEP7B_RECOVERY') {
       const t = norm(cleanText);
@@ -1697,14 +1856,7 @@ export class BotStateMachine {
         };
       }
 
-      const pr = await PaymentService.getPlanPrices();
-      const gs = (n: number) => `Gs. ${n.toLocaleString('es-PY')}`;
-      const rs = (n: number) => `R$ ${n.toLocaleString('pt-BR')}`;
-      const us = (n: number) => `U$ ${n.toFixed(2)}`;
-      const menu =
-        `🇵🇾 *Paraguay:*\n*[1]* Plan Mensual (${gs(pr.PY.MONTHLY)} / mes)\n*[2]* Plan Anual (${gs(pr.PY.ANNUAL)} / año)\n\n` +
-        `🇧🇷 *Brasil:*\n*[3]* Plano Mensal (${rs(pr.BR.MONTHLY)} / mês)\n*[4]* Plano Anual (${rs(pr.BR.ANNUAL)} / ano)\n\n` +
-        `🇺🇸 *USA:*\n*[5]* Plan Mensual (${us(pr.USA.MONTHLY)}/mes)\n*[6]* Plan Anual (${us(pr.USA.ANNUAL)})\n\n`;
+      const menu = await planMenu();
 
       await updateState('STEP8_PAYMENT', {});
       return {
@@ -1713,50 +1865,44 @@ export class BotStateMachine {
             `💳 *Paso 9/9 (Activación y Pago):*\n` +
             `Elegí tu país y plan para activar tu Bio-Pass y generar tu QR de rescate:\n\n` +
             menu +
-            `_Respondé 1, 2, 3, 4, 5 o 6 para recibir el link de pago y el código PIX / Alias._`,
+            `_Respondé 1, 2, 3 o 4 y te paso los datos para pagar._`,
           `✅ *Clave de recuperación oñeñemoneĩ.*\n\n` +
             `💳 *Paso 9/9 (Activación ha Pago):*\n` +
             `Eiporavo nde tetã ha plan:\n\n` +
             menu +
-            `_Embohovái 1, 2, 3, 4, 5 térã 6._`,
+            `_Embohovái 1, 2, 3 térã 4._`,
           `✅ *Chave de recuperação confirmada.*\n\n` +
             `💳 *Passo 9/9 (Ativação e Pagamento):*\n` +
             `Escolha seu país e plano para ativar seu Bio-Pass e gerar seu QR:\n\n` +
             menu +
-            `_Responda 1, 2, 3, 4, 5 ou 6 para receber o link de pagamento e o código PIX / Alias._`,
+            `_Responda 1, 2, 3 ou 4 para receber os dados de pagamento._`,
           `✅ *Recovery key confirmed.*\n\n` +
             `💳 *Step 9/9 (Activation & Payment):*\n` +
             `Choose your country and plan to activate your Bio-Pass and generate your rescue QR:\n\n` +
             menu +
-            `_Reply 1, 2, 3, 4, 5 or 6 to get the payment link and PIX / Alias / PayPal code._`
+            `_Reply 1, 2, 3 or 4 to get the payment details._`
         ),
       };
     }
 
     // STEP 8: PAYMENT PLAN SELECTION & ORDER GENERATION
     if (state === 'STEP8_PAYMENT') {
-      let country: 'PARAGUAY' | 'BRASIL' | 'USA' = 'PARAGUAY';
-      let plan: 'MONTHLY' | 'ANNUAL' = 'ANNUAL';
-
-      if (cleanText === '1') {
-        country = 'PARAGUAY';
-        plan = 'MONTHLY';
-      } else if (cleanText === '2') {
-        country = 'PARAGUAY';
-        plan = 'ANNUAL';
-      } else if (cleanText === '3') {
-        country = 'BRASIL';
-        plan = 'MONTHLY';
-      } else if (cleanText === '4') {
-        country = 'BRASIL';
-        plan = 'ANNUAL';
-      } else if (cleanText === '5') {
-        country = 'USA';
-        plan = 'MONTHLY';
-      } else if (cleanText === '6') {
-        country = 'USA';
-        plan = 'ANNUAL';
+      // Comprobante mandado antes de elegir plan: no hay orden todavía.
+      const pick = cleanText.replace(/[^0-9]/g, '');
+      if (!/^[1-6]$/.test(pick) || cleanText.length > 3) {
+        return {
+          replyText: tr(
+            `💳 *Elegí tu país y plan para activar tu Bio-Pass:*\n\n` + (await planMenu()) + `_Respondé 1, 2, 3 o 4._`,
+            `💳 *Eiporavo nde tetã ha plan:*\n\n` + (await planMenu()) + `_Embohovái 1, 2, 3 térã 4._`,
+            `💳 *Escolha seu país e plano para ativar seu Bio-Pass:*\n\n` + (await planMenu()) + `_Responda 1, 2, 3 ou 4._`,
+            `💳 *Choose your country and plan to activate your Bio-Pass:*\n\n` + (await planMenu()) + `_Reply 1, 2, 3 or 4._`
+          ),
+        };
       }
+      // [1][2] Paraguay · [3][4] internacional en dólares ([5][6] = numeración vieja de EE.UU.).
+      const intl: 'BRASIL' | 'USA' = lang === 'pt' ? 'BRASIL' : 'USA';
+      const country: 'PARAGUAY' | 'BRASIL' | 'USA' = pick === '1' || pick === '2' ? 'PARAGUAY' : intl;
+      const plan: 'MONTHLY' | 'ANNUAL' = pick === '1' || pick === '3' || pick === '5' ? 'MONTHLY' : 'ANNUAL';
 
       const order = await PaymentService.createPaymentOrder({
         userId: user.id,
@@ -1766,45 +1912,23 @@ export class BotStateMachine {
 
       await updateState('AWAITING_PAYMENT_CONFIRMATION', { orderId: order.orderId });
 
-      if (country === 'PARAGUAY') {
-        // El process_id de Bancard NO tiene página propia compartible
-        // (`/checkout/new/<id>` da 404) y vence a los minutos → nada de QR ni de
-        // link directo a vpos. El único punto de entrada válido es nuestra página
-        // /checkout, que abre una sesión FRESCA de Bancard (tarjeta + QR real de
-        // Bancard adentro) y además muestra la transferencia SIPAP.
-        return {
-          replyText: `💳 *ORDEN DE PAGO GENERADA (PARAGUAY)*\n\n` +
-            `💰 *Monto:* ${order.formattedAmount} (${plan === 'ANNUAL' ? 'Plan Anual' : 'Plan Mensual'})\n` +
-            `🔢 *Referencia:* \`${order.referenceCode}\`\n\n` +
-            `🌐 *Pagar con Tarjeta / Bancard / QR:*\n${order.paymentLink}\n` +
-            `_Abrí ese enlace: podés pagar con tarjeta o escanear ahí el QR de Bancard con la app de tu banco._\n\n` +
-            `🏦 *Alternativa — Transferencia SIPAP / Tigo Money:*\n` +
-            `${order.aliasInfo}\n\n` +
-            `_Apenas se acredite el pago, tu QR y Kit de Stickers (3x3 cm) se envían acá automáticamente._`,
-        };
-      } else if (country === 'USA') {
-        // Sin gateway de tarjeta USD integrado: instrucciones manuales (PayPal / Zelle,
-        // editables en /admin → Contenido), confirmación manual como la SIPAP de Paraguay.
-        return {
-          replyText: `💳 *PAYMENT ORDER GENERATED (USA)*\n\n` +
-            `💰 *Amount:* ${order.formattedAmount} (${plan === 'ANNUAL' ? 'Annual Plan' : 'Monthly Plan'})\n` +
-            `🔢 *Reference:* \`${order.referenceCode}\`\n\n` +
-            `🌐 *Pay online (card):*\n${order.paymentLink}\n\n` +
-            `💵 *Or pay via PayPal / Zelle:*\n${order.aliasInfo}\n\n` +
-            `_As soon as we confirm your payment, your rescue QR and Sticker Kit (3x3 cm, shipped) will be released here._`,
-        };
-      } else {
-        return {
-          mediaFirst: true,
-          replyText: `💳 *ORDEM DE PAGAMENTO PIX (BRASIL)*\n\n` +
-            `💰 *Valor:* ${order.formattedAmount}\n` +
-            `🔑 *Chave PIX:* \`${order.pixKey}\`\n\n` +
-            `📷 *Escaneie o QR acima* ou copie o código:\n\`${order.pixPayload}\`\n\n` +
-            `🌐 *Ou pague via Cartão / Link:*\n${order.paymentLink}\n\n` +
-            `_Assim que o pagamento for confirmado, seu QR e Kit Físico serão liberados aqui._`,
-          mediaAttachment: qrAttachment(order.pixQrImage, `Bio-Pass — ${order.formattedAmount}`),
-        };
-      }
+      const planName =
+        plan === 'ANNUAL'
+          ? tr('Plan Anual (12 meses)', 'Plan Anual', 'Plano Anual (12 meses)', 'Annual Plan (12 months)')
+          : tr('Plan Mensual', 'Plan Mensual', 'Plano Mensal', 'Monthly Plan');
+      return {
+        replyText:
+          `💳 *${tr('ORDEN DE PAGO GENERADA', 'ORDEN DE PAGO', 'ORDEM DE PAGAMENTO GERADA', 'PAYMENT ORDER CREATED')}*\n` +
+          `📦 ${planName}\n🔢 ${tr('Referencia', 'Referencia', 'Referência', 'Reference')}: \`${order.referenceCode}\`\n\n` +
+          PaymentService.payBlock(order, lang) +
+          `\n\n` +
+          tr(
+            `_Apenas se acredite el pago, tu QR y tu Kit de Stickers (3x3 cm) te llegan acá._`,
+            `_Ojehepyme'ẽ rire, nde QR oguahẽta ko'ápe._`,
+            `_Assim que o pagamento for confirmado, seu QR e Kit de Stickers chegam aqui._`,
+            `_As soon as the payment is confirmed, your QR and Sticker Kit arrive here._`
+          ),
+      };
     }
 
     // AWAITING PAYMENT CONFIRMATION STATE
@@ -1814,6 +1938,12 @@ export class BotStateMachine {
       if (user.status === 'ACTIVE') {
         await updateState('ACTIVE_MEMBER', {});
         return BotStateMachine.handleMessage(msg);
+      }
+      if (msg.mediaBuffer) return receiveProof(msg.mediaBuffer, msg.mediaFilename, msg.mediaMimeType);
+      // "cambiar plan" / "otro plan" → vuelve a elegir.
+      if (/\b(cambiar|otro|elegir|cambio)\b.{0,12}\bplan\b/.test(norm(cleanText))) {
+        await updateState('STEP8_PAYMENT', {});
+        return BotStateMachine.handleMessage({ ...msg, body: 'planes', routed: true });
       }
       if (cleanText.toUpperCase().includes('PAGAR') || cleanText.toUpperCase().includes('CONFIRMAR')) {
         const lastOrder = await prisma.paymentOrder.findFirst({
@@ -1848,22 +1978,54 @@ export class BotStateMachine {
             replyText:
               `⏳ *Todavía no veo tu pago acreditado.*\n\n` +
               `Si pagaste con *tarjeta/Bancard*, puede tardar 1–2 minutos: se activa solo.\n` +
-              `Si pagaste por *transferencia / PIX / alias*, lo confirmamos manualmente apenas impacta.\n\n` +
-              `_Escribí *PAGAR* de nuevo en un rato para reintentar._`,
+              (lastOrder.proofAt
+                ? `🧾 Ya recibimos tu comprobante: lo estamos verificando y te avisamos por acá.`
+                : `Si pagaste por *alias / transferencia*, mandame acá la *foto del comprobante* y lo acreditamos.`) +
+              `\n\n` +
+              PaymentService.payBlock(
+                {
+                  country: lastOrder.currency === 'PYG' ? 'PARAGUAY' : 'USA',
+                  formattedAmount: lastOrder.currency === 'PYG' ? fmtGs(lastOrder.amount) : fmtUsd(lastOrder.amount),
+                  referenceCode: lastOrder.referenceCode,
+                  paymentLink: `${config.frontendUrl}/checkout?ref=${lastOrder.referenceCode}`,
+                  aliasInfo: lastOrder.aliasInfo,
+                },
+                lang
+              ),
           };
         }
       }
 
       return {
-        replyText: `⏳ *Tu orden de pago está pendiente de confirmación.*\n\n` +
-          `Si ya realizaste la transferencia o pago PIX, el sistema la activará automáticamente en segundos.\n\n` +
-          `_Para consultar tus opciones de pago nuevamente, escribe 'PAGAR'._`,
+        replyText: tr(
+          `⏳ *Tu registro está completo: solo falta el pago para activar tu Bio-Pass.*\n\n` +
+            `• Escribí *PAGAR* y te vuelvo a pasar los datos (Bancard o Alias).\n` +
+            `• Si ya pagaste por alias, mandame la *foto del comprobante*.\n` +
+            `• Para elegir otro plan, escribí *CAMBIAR PLAN*.`,
+          `⏳ *Oguahẽ pago añoite.* Ehai *PAGAR* térã emondo comprobante ra'anga.`,
+          `⏳ *Seu cadastro está completo: falta só o pagamento.*\n\n• Escreva *PAGAR* para receber os dados de novo.\n• Se já pagou por transferência, envie a *foto do comprovante*.`,
+          `⏳ *Your sign-up is complete: only the payment is missing.*\n\n• Type *PAGAR* to get the payment details again.\n• If you paid by transfer, send the *receipt photo*.`
+        ),
       };
     }
 
     // ==========================================
     // REGISTERED ACTIVE MEMBER MENU & NLP ENGINE
     // ==========================================
+    // Cuenta EN ESPERA (20 días sin pagar): datos intactos, QR apagado, sin multa.
+    // Lo único que se atiende es la reactivación (o el comprobante del pago).
+    if (user.status === 'CANCELLED') {
+      if (msg.mediaBuffer) return receiveProof(msg.mediaBuffer, msg.mediaFilename, msg.mediaMimeType);
+      return renewalInfo(
+        tr(
+          `⏸️ *Tu Bio-Pass está en espera por falta de pago.*\n\nTus datos, estudios y recetas siguen guardados — *no se borró nada* y no hay multa. Tu QR de emergencia está desactivado hasta que se regularice.\n\n*Para reactivarlo ahora:*`,
+          `⏸️ *Ne Bio-Pass oha'arõ pago.* Nde datos oĩ gueteri.`,
+          `⏸️ *Seu Bio-Pass está em espera por falta de pagamento.*\n\nSeus dados, exames e receitas continuam guardados — *nada foi apagado* e não há multa. Seu QR de emergência está desativado até regularizar.\n\n*Para reativar agora:*`,
+          `⏸️ *Your Bio-Pass is on hold due to non-payment.*\n\nYour data, studies and prescriptions are still stored — *nothing was deleted* and there is no penalty. Your emergency QR is off until payment.\n\n*To reactivate now:*`
+        )
+      );
+    }
+
     if (user.status === 'ACTIVE' || state === 'ACTIVE_MEMBER' || state.startsWith('ACTIVE_')) {
       // ---- Carga categorizada de medicamentos / recetas / estudios ----
       // El estado del miembro activo tiene "sub-modos" que se guardan en
@@ -1901,6 +2063,16 @@ export class BotStateMachine {
         return 'jpg';
       };
 
+      // Pregunta "¿qué mandaste?" — vale para uno o para toda una tanda de archivos.
+      const askCategoryText = (n: number): string =>
+        tr(
+          (n > 1 ? `📎 Recibí *${n} archivos*. ¿Qué son?` : '📎 Recibí tu archivo. ¿Qué es?') +
+            `\n\n*[1]* 💊 ${n > 1 ? 'Medicamentos' : 'Un medicamento'}\n*[2]* 📄 ${n > 1 ? 'Recetas' : 'Una receta'}\n*[3]* 🧪 ${n > 1 ? 'Estudios / análisis' : 'Un estudio / análisis'}\n*[4]* 🧾 Un comprobante de pago\n\n` +
+            `_Podés seguir mandando archivos y elegir al final. Si fue sin querer, escribí "fue un error"._`,
+          (n > 1 ? `📎 Ahupytýma *${n} archivo*. Mba'épa?` : "📎 Ahupytýma ne archivo. Mba'épa?") +
+            `\n\n*[1]* 💊 Pohã\n*[2]* 📄 Receta\n*[3]* 🧪 Estudio\n*[4]* 🧾 Comprobante de pago`
+        );
+
       const activeMenu = (): string =>
         tr(
           `👋 *Hola, ${user!.fullName || 'Titular Bio-Pass'}*\n\n` +
@@ -1915,6 +2087,8 @@ export class BotStateMachine {
             `*[8]* ✏️ Modificar datos de mi perfil (contacto, dirección, etc.)\n` +
             `*[9]* 📥 *Descargar* (medicamentos, recetas, estudios, recordatorios, citas, stickers)\n` +
             `*[10]* 💬 Hablar con soporte\n\n` +
+            `🎁 _Escribí *PROMO*: traé un cliente y ganá 1 mes gratis._\n` +
+            `💳 _Escribí *RENOVAR* para ver tu vencimiento y cómo pagar._\n` +
             `🔔 _Escribí *NOTIFICACIONES* para activar alertas push en tu celular._\n` +
             `_Respondé con el número, mandá una foto/PDF, o un audio._`,
           `👋 *Mba'éichapa, ${user!.fullName || 'Titular Bio-Pass'}*\n\n` +
@@ -2113,7 +2287,7 @@ export class BotStateMachine {
       const saveReceta = async (buffer: Buffer, filename: string) => {
         const saved = await StorageService.saveFile(
           'medical_studies',
-          `rx_${user!.id}_${Date.now()}.${extFrom(filename, msg.mediaMimeType)}`,
+          `rx_${user!.id}_${Date.now()}${Math.random().toString(36).slice(2, 6)}.${extFrom(filename, msg.mediaMimeType)}`,
           buffer
         );
         const rx = await OcrAiService.processPrescription(buffer, filename);
@@ -2162,7 +2336,7 @@ export class BotStateMachine {
       // tal cual (foto o PDF) en la bóveda. El titular clasifica, el sistema archiva.
       const saveEstudio = async (buffer: Buffer, filename: string): Promise<BotResponse> => {
         const ext = extFrom(filename, msg.mediaMimeType);
-        const saved = await StorageService.saveFile('medical_studies', `study_${user!.id}_${Date.now()}.${ext}`, buffer);
+        const saved = await StorageService.saveFile('medical_studies', `study_${user!.id}_${Date.now()}${Math.random().toString(36).slice(2, 6)}.${ext}`, buffer);
         const baseName = (filename || '')
           .replace(/\.[a-z0-9]+$/i, '')
           .replace(/[_-]+/g, ' ')
@@ -2840,6 +3014,119 @@ export class BotStateMachine {
       // Lo que ejecuta es código determinístico con datos reales de la base. Si la
       // IA no responde, sigue el motor de reglas de siempre.
       // =====================================================================
+      // ---- Borrar documentos (estudios / recetas) y quitar medicamentos ----
+      const startDeleteDocs = async (): Promise<BotResponse> => {
+        const rows = await prisma.medicalStudy.findMany({ where: { userId: user!.id }, orderBy: { createdAt: 'asc' } });
+        if (!rows.length) {
+          await updateState('ACTIVE_MEMBER', { delDocs: null, delPick: null });
+          return { replyText: tr('📂 No tenés estudios ni recetas guardados para borrar.\n\n_Escribí *MENU* para ver las opciones._', '📂 Ndaipóri documento.') };
+        }
+        const shown = rows.slice(0, 60);
+        await updateState('ACTIVE_EDIT_DELDOC', { delDocs: shown.map((r) => r.id), delPick: null, rdraft: null });
+        const fecha = (r: (typeof rows)[number]) => (r.studyDate || r.createdAt).toLocaleDateString('es-PY', { timeZone: config.timezone });
+        return {
+          replyText:
+            tr(`🗑️ *Borrar un estudio o una receta*\n\nEstos son tus documentos guardados:\n\n`, `🗑️ *Emboguete documento*\n\n`) +
+            shown.map((r, i) => `*${i + 1}.* ${r.studyType === 'PRESCRIPTION' ? '📄' : '🧪'} ${r.title} — ${fecha(r)}`).join('\n') +
+            (rows.length > shown.length ? `\n… y ${rows.length - shown.length} más` : '') +
+            tr(
+              `\n\n👉 Respondé con el *número* del que querés borrar (o varios: _1, 3, 5_). *TODOS* borra todos.\n_Antes de borrar te pido confirmación. Escribí *SALIR* para cancelar._`,
+              `\n\n👉 Embohovái papapy reheve. *SALIR* rehejávo.`
+            ),
+        };
+      };
+      const startDeleteMeds = async (): Promise<BotResponse> => {
+        if (!meds.length) {
+          await updateState('ACTIVE_MEMBER', {});
+          return { replyText: tr('💊 No tenés medicamentos cargados en tu lista.\n\n_Escribí *MENU* para ver las opciones._', '💊 Ndaipóri pohã.') };
+        }
+        await updateState('ACTIVE_EDIT_DELMED', { rdraft: null });
+        return {
+          replyText:
+            tr(`💊 *Quitar un medicamento de tu lista*\n\n`, `💊 *Eipe'a pohã*\n\n`) +
+            meds.map((m, i) => `*${i + 1}.* ${m.name}${m.dose ? ` — ${m.dose}` : ''}${m.frequency ? ` · ${m.frequency}` : ''}`).join('\n') +
+            tr(`\n\n👉 Respondé con el *número* (o varios: _1, 3_) o el nombre del que ya no tomás.\n_Escribí *SALIR* para cancelar._`, `\n\n👉 Embohovái papapy reheve.`),
+        };
+      };
+      /** Números elegidos de una lista ("2", "1, 3 y 5", "todos"). */
+      const pickNumbers = (text: string, max: number): number[] => {
+        const t = norm(text);
+        if (/^(todos?|todas?|todo|all)$/.test(t) || /\b(borr\w*|elimin\w*|quit\w*|sac\w*) todos?\b/.test(t)) return Array.from({ length: max }, (_, i) => i);
+        const out: number[] = [];
+        for (const m of t.match(/\d+/g) || []) {
+          const n = Number(m);
+          if (n >= 1 && n <= max && !out.includes(n - 1)) out.push(n - 1);
+        }
+        return out;
+      };
+      const DEL_VERB = /\b(borr\w*|elimin\w*|quit\w*|sac\w*|descart\w*)\b/;
+      const lcn = norm(cleanText);
+      if (!msg.mediaBuffer && !msg.routed && !subMode.startsWith('ACTIVE_REMIND_') && subMode !== 'ACTIVE_CONFIRM_DELETE' && DEL_VERB.test(lcn) && lcn.split(/\s+/).length <= 12) {
+        if (/\b(estudios?|recetas?|documentos?|archivos?|analisis|radiograf\w*|ecograf\w*|tomograf\w*|fotos?)\b/.test(lcn) && !/\b(recordatorios?|alarmas?|turnos?|citas?)\b/.test(lcn)) {
+          return startDeleteDocs();
+        }
+        if (/\bcontacto\b/.test(lcn)) {
+          await updateState('ACTIVE_EDIT_CONTACT', {});
+          return {
+            replyText: tr(
+              `👥 El contacto de emergencia no se puede dejar vacío: es a quien se avisa si escanean tu QR.\n\n👉 Mandame el *nombre y teléfono* del nuevo contacto y reemplazo el actual.\n_Ejemplo: "María López 0981123456"_\n\n_Escribí *SALIR* para cancelar._`,
+              `👥 Emondo téra ha teléfono pyahu.`
+            ),
+          };
+        }
+        if (/\b(un|algun|mis?|los?|el) (medicament\w*|remedios?|pastillas?)\b/.test(lcn) && !meds.some((m) => lcn.includes(norm(m.name)))) {
+          return startDeleteMeds();
+        }
+      }
+
+      // ---- Pagos, renovación y promo: pedidos directos, valen en cualquier sub-modo ----
+      // Foto/PDF con un texto que dice que es el comprobante del pago.
+      if (msg.mediaBuffer && /\b(comprobante|pago|pague|transferencia|transferi|alias|recibo|deposito|renovacion)\b/.test(norm(cleanText))) {
+        return receiveProof(msg.mediaBuffer, msg.mediaFilename, msg.mediaMimeType);
+      }
+      if (!msg.mediaBuffer && !msg.routed && isPromoRequest(cleanText)) {
+        const code = await ReferralService.codeFor(user.id);
+        const st = await ReferralService.stats(user.id);
+        return {
+          replyText: tr(
+            `🎁 *Traé un cliente y ganá 1 mes gratis*\n\n` +
+              `Por cada persona que se suma a Bio-Pass con tu código y activa su cuenta, te regalamos *1 mes* de servicio. No hay tope: más invitados, más meses.\n\n` +
+              `🔑 *Tu código:* ${code}\n` +
+              `🔗 *Tu link para compartir:*\n${ReferralService.inviteLink(code)}\n\n` +
+              `_Reenviá ese link: abre el chat de Bio-Pass con tu código ya escrito._\n\n` +
+              `📊 Invitados: *${st.invited}* · Meses ganados: *${st.rewarded}*`,
+            `🎁 *Eru peteĩ cliente ha egana 1 mes gratis*\n\n🔑 *Nde código:* ${code}\n🔗 ${ReferralService.inviteLink(code)}\n\n📊 ${st.invited} · ${st.rewarded}`,
+            `🎁 *Traga um cliente e ganhe 1 mês grátis*\n\n` +
+              `Para cada pessoa que entrar no Bio-Pass com seu código e ativar a conta, você ganha *1 mês* de serviço.\n\n` +
+              `🔑 *Seu código:* ${code}\n🔗 *Seu link:*\n${ReferralService.inviteLink(code)}\n\n` +
+              `📊 Convidados: *${st.invited}* · Meses ganhos: *${st.rewarded}*`,
+            `🎁 *Bring a customer, get 1 month free*\n\n` +
+              `For every person who joins Bio-Pass with your code and activates their account, you get *1 free month*.\n\n` +
+              `🔑 *Your code:* ${code}\n🔗 *Your link:*\n${ReferralService.inviteLink(code)}\n\n` +
+              `📊 Invited: *${st.invited}* · Months earned: *${st.rewarded}*`
+          ),
+        };
+      }
+      if (!msg.mediaBuffer && !msg.routed && isRenewRequest(cleanText)) {
+        const sub = await PaymentService.currentSubscription(user.id);
+        const hasta = sub ? sub.expiryDate.toLocaleDateString('es-PY', { timeZone: config.timezone }) : '';
+        const vencido = !!sub && sub.expiryDate < new Date();
+        return renewalInfo(
+          tr(
+            (sub
+              ? vencido
+                ? `⚠️ *Tu Bio-Pass venció el ${hasta}.*`
+                : `📅 *Tu Bio-Pass está vigente hasta el ${hasta}.*`
+              : `💳 *Renovación de tu Bio-Pass*`) + `\nPodés renovar cuando quieras: el nuevo período se suma al que ya tenés, no perdés días.`,
+            `📅 *Ne Bio-Pass: ${hasta}.*`,
+            (sub ? (vencido ? `⚠️ *Seu Bio-Pass venceu em ${hasta}.*` : `📅 *Seu Bio-Pass é válido até ${hasta}.*`) : `💳 *Renovação do seu Bio-Pass*`) +
+              `\nVocê pode renovar quando quiser: o novo período é somado ao atual.`,
+            (sub ? (vencido ? `⚠️ *Your Bio-Pass expired on ${hasta}.*` : `📅 *Your Bio-Pass is valid until ${hasta}.*`) : `💳 *Renew your Bio-Pass*`) +
+              `\nYou can renew any time: the new period is added to your current one.`
+          )
+        );
+      }
+
       const lowerFirst = (s: string) => s.charAt(0).toLowerCase() + s.slice(1);
       // Sub-modos sin datos a medio cargar: si la persona pide otra cosa, se sale solo.
       const SOFT_MODES = new Set(['ACTIVE_MEMBER', 'ACTIVE_REMINDER', 'ACTIVE_APPOINTMENTS', 'ACTIVE_UPLOAD_MED', 'ACTIVE_UPLOAD_RX', 'ACTIVE_UPLOAD_STUDY', 'ACTIVE_EDIT_MENU', 'ACTIVE_FREE_UPDATE', 'ACTIVE_DOWNLOAD_MENU', 'ACTIVE_DOWNLOAD_RANGE']);
@@ -2919,6 +3206,8 @@ export class BotStateMachine {
       // paso, no un pedido nuevo: mandarlo al intérprete hacía que una fecha se
       // leyera como el día de un turno y la descarga nunca llegara.
       const downloadStepAnswer =
+        subMode === 'ACTIVE_EDIT_DELDOC' ||
+        subMode === 'ACTIVE_EDIT_DELMED' ||
         (subMode === 'ACTIVE_DOWNLOAD_MENU' && /^[1-7]$/.test(cleanText.trim())) ||
         (subMode === 'ACTIVE_DOWNLOAD_RANGE' && !!parseDateRange(cleanText)) ||
         // Misma razón en la vigencia de un recordatorio ("del 01/10 al 31/10" son
@@ -2951,7 +3240,7 @@ export class BotStateMachine {
             case 'ACTIVE_RX_CONFIRM':
               return 'Pregunta pendiente: ¿agrega los medicamentos leídos de la receta a su medicación actual? [1] Sí / [2] No.';
             case 'ACTIVE_ASK_CATEGORY':
-              return 'Mandó un archivo. Pregunta pendiente: ¿es [1] un medicamento, [2] una receta o [3] un estudio? (o que fue un error)';
+              return 'Mandó uno o más archivos. Pregunta pendiente: ¿son [1] medicamentos, [2] recetas, [3] estudios o [4] un comprobante de pago? (o que fue un error). Decir qué son es ANSWER_CURRENT_STEP.';
             case 'ACTIVE_LINK_PHONE':
               return 'Pregunta pendiente: que escriba su número de teléfono completo con código de país.';
             case 'ACTIVE_EDIT_MENU':
@@ -3706,8 +3995,19 @@ export class BotStateMachine {
 
       // Sub-modo: llegó un archivo sin haber elegido categoría
       if (subMode === 'ACTIVE_ASK_CATEGORY') {
-        const pend = getTempData().pendingUpload as { name: string } | undefined;
-        if (!pend?.name) {
+        const pend = getTempData().pendingUpload as { name: string; names?: string[] } | undefined;
+        const names: string[] = pend?.names?.length ? pend.names : pend?.name ? [pend.name] : [];
+        // Otro archivo mientras todavía no dijo qué son: se SUMA a la tanda. Antes
+        // solo se guardaba el primero y el resto se perdía (de 20 fotos mandadas
+        // seguidas desde el menú quedaba 1).
+        if (msg.mediaBuffer) {
+          const name = `pending_${user.id}_${Date.now()}${Math.random().toString(36).slice(2, 6)}.${extFrom(msg.mediaFilename, msg.mediaMimeType)}`;
+          await StorageService.saveFile('medical_studies', name, msg.mediaBuffer);
+          names.push(name);
+          await updateState('ACTIVE_ASK_CATEGORY', { pendingUpload: { name: names[0], names } });
+          return { replyText: askCategoryText(names.length) };
+        }
+        if (!names.length) {
           await updateState('ACTIVE_MEMBER', {});
           return { replyText: activeMenu() };
         }
@@ -3729,37 +4029,71 @@ export class BotStateMachine {
             ),
           };
         }
-        if (!/^[123]$/.test(cleanText)) {
-          return {
-            replyText: tr(
-              '¿Qué es lo que mandaste?\n*[1]* 💊 Un medicamento\n*[2]* 📄 Una receta\n*[3]* 🧪 Un estudio / análisis\n\n_O escribí "fue un error" si lo mandaste sin querer._',
-              'Mba\'épa emondo va\'ekue?\n*[1]* 💊 Pohã\n*[2]* 📄 Receta\n*[3]* 🧪 Estudio'
-            ),
-          };
+        const catWords = norm(cleanText);
+        const choice = /^[1234]$/.test(cleanText)
+          ? cleanText
+          : /\b(comprobante|pago|transferencia)\b/.test(catWords)
+            ? '4'
+            : /\b(estudios?|analisis|laboratorio|radiograf\w*|ecograf\w*|resultados?)\b/.test(catWords)
+              ? '3'
+              : /\brecetas?\b/.test(catWords)
+                ? '2'
+                : /\b(medicament\w*|remedios?|pastillas?)\b/.test(catWords)
+                  ? '1'
+                  : '';
+        if (!choice) return { replyText: askCategoryText(names.length) };
+
+        const files: { name: string; buf: Buffer }[] = [];
+        for (const n of names) {
+          const b = await StorageService.getFile('medical_studies', n);
+          if (b && b.length) files.push({ name: n, buf: b });
         }
-        const buf = await StorageService.getFile('medical_studies', pend.name);
-        if (!buf) {
-          await updateState('ACTIVE_MEMBER', {});
+        if (!files.length) {
+          await updateState('ACTIVE_MEMBER', { pendingUpload: null });
           return { replyText: tr('No encontré el archivo, reenvialo por favor.', 'Ndajuhúi pe archivo, emondo jey.') };
         }
-        if (cleanText === '1') {
-          const r = await ingestMedFromInput({ buffer: buf, filename: pend.name, source: 'photo' });
+        const many = files.length > 1;
+        if (choice === '4') {
+          await updateState('ACTIVE_MEMBER', { pendingUpload: null });
+          const last = files[files.length - 1];
+          return receiveProof(last.buf, last.name, undefined);
+        }
+        if (choice === '1') {
+          let lastOk: Awaited<ReturnType<typeof ingestMedFromInput>> = null;
+          for (const f of files) {
+            const r = await ingestMedFromInput({ buffer: f.buf, filename: f.name, source: 'photo' });
+            if (r) lastOk = r;
+          }
           await updateState('ACTIVE_UPLOAD_MED', { pendingUpload: null });
           return {
             replyText:
-              (r
-                ? medUpdateMsg(r)
+              (lastOk
+                ? medUpdateMsg(lastOk)
                 : tr('😕 No pude leer el medicamento en la foto. Escribí *nombre + dosis + frecuencia*.', '😕 Ndaikatúi. Ehai iréra + dosis + mboýpa.')) +
               tr('\n\n_Mandá otro o escribí *LISTO*._', '\n\n_Emondo ambue térã ehai *LISTO*._'),
           };
         }
-        if (cleanText === '2') {
+        if (choice === '2') {
           await updateState('ACTIVE_UPLOAD_RX', { pendingUpload: null });
-          const rx = await saveReceta(buf, pend.name);
-          return recetaReply(rx);
+          let rx = await saveReceta(files[0].buf, files[0].name);
+          for (const f of files.slice(1)) {
+            const more = await saveReceta(f.buf, f.name);
+            rx = { ...more, medications: [...rx.medications, ...more.medications] };
+          }
+          const r = await recetaReply(rx);
+          return many ? { ...r, replyText: tr(`📄 *${files.length} recetas guardadas.*\n\n`, `📄 *${files.length} receta.*\n\n`) + r.replyText } : r;
         }
         await updateState('ACTIVE_UPLOAD_STUDY', { pendingUpload: null });
-        return saveEstudio(buf, pend.name);
+        let lastReply: BotResponse = { replyText: '' };
+        for (const f of files) lastReply = await saveEstudio(f.buf, f.name);
+        return many
+          ? {
+              replyText: tr(
+                `✅ *${files.length} archivos guardados en tu bóveda cifrada.*\n_Solo vos y tu médico pueden verlos con tu PIN._\n\n_Mandá otro archivo o escribí *LISTO*._`,
+                `✅ *${files.length} archivo oñeguarda nde bóvedape.*\n\n_Emondo ambue térã ehai *LISTO*._`
+              ),
+            }
+          : lastReply;
       }
 
       // Sub-modos: [5] recordatorios de medicación (ACTIVE_REMINDER) · [6] citas y turnos (ACTIVE_APPOINTMENTS)
@@ -4288,8 +4622,10 @@ export class BotStateMachine {
           `*[5]* 🩺 *Condiciones Médicas*\n` +
           `*[6]* 👤 *Nombre Completo o Cédula*\n` +
           `*[7]* 🩸 *Grupo Sanguíneo*\n` +
-          `*[8]* ✍️ *Otro cambio libre*\n\n` +
-          `👉 *Elegí una opción (1 al 8)* o decime directamente qué querés cambiar (también podés mandar un audio).\n` +
+          `*[8]* ✍️ *Otro cambio libre*\n` +
+          `*[9]* 🗑️ *Borrar un estudio o una receta*\n` +
+          `*[10]* 💊 *Quitar un medicamento de mi lista*\n\n` +
+          `👉 *Elegí una opción (1 al 10)* o decime directamente qué querés cambiar o borrar (también podés mandar un audio).\n` +
           `_Escribí *SALIR* para volver al menú principal._`
         );
       };
@@ -4305,7 +4641,8 @@ export class BotStateMachine {
 
         // 1. Quitar medicación: "ya no tomo X", "dejé de tomar X", "sacar X"
         const stopMatch = raw.match(/^\s*(?:ya no (?:tomo|uso)|dej[eé] de (?:tomar|usar)|sacar|quitar|eliminar|borrar)\s+(.{2,})/i);
-        if (stopMatch) {
+        const stopIsNotMed = !!stopMatch && /\b(contacto|estudios?|recetas?|documentos?|archivos?|alergias?|turnos?|citas?|recordatorios?|cuenta|datos|perfil|direccion|correo|email)\b/.test(norm(stopMatch[1]));
+        if (stopMatch && !stopIsNotMed) {
           const { list, removed } = removeMedication(meds, stopMatch[1].trim());
           if (removed.length) {
             await persistMeds(list);
@@ -4586,7 +4923,83 @@ export class BotStateMachine {
       };
 
       // Sub-modo: Menú de selección de qué dato modificar
+      // Sub-modo: borrar estudios / recetas (elige de la lista → confirma → se borra)
+      if (subMode === 'ACTIVE_EDIT_DELDOC') {
+        const tmp = getTempData();
+        const ids: string[] = Array.isArray(tmp.delDocs) ? tmp.delDocs : [];
+        const pick: string[] | null = Array.isArray(tmp.delPick) && tmp.delPick.length ? tmp.delPick : null;
+        if (pick) {
+          if (/^(1|s[ií]|sip?|dale|ok|okey|confirmo|confirmar|borrar|borralo|borralos|eliminar|yes)$/.test(norm(cleanText))) {
+            const rows = await prisma.medicalStudy.findMany({ where: { userId: user.id, id: { in: pick } } });
+            await prisma.medicalStudy.deleteMany({ where: { userId: user.id, id: { in: pick } } });
+            for (const r of rows) {
+              const name = (r.fileUrl || '').split('?')[0].split('/').pop();
+              if (name) await StorageService.deleteFile(path.join(config.storage.uploadDir, 'medical_studies', name));
+            }
+            await updateState('ACTIVE_MEMBER', { delDocs: null, delPick: null });
+            const left = await prisma.medicalStudy.count({ where: { userId: user.id } });
+            return {
+              replyText: tr(
+                `🗑️ *Listo, borré ${rows.length === 1 ? `"${rows[0].title}"` : `${rows.length} documentos`}.*\nTe quedan ${left} guardado(s).\n\n_Escribí *MENU* para ver las opciones._`,
+                `🗑️ *Oĩma.* Opyta ${left}.\n\n_Ehai *MENU*._`
+              ),
+            };
+          }
+          await updateState('ACTIVE_MEMBER', { delDocs: null, delPick: null });
+          return { replyText: tr('👍 No borré nada.\n\n_Escribí *MENU* para ver las opciones._', "👍 Nda'ipe'ái mba'eve.") };
+        }
+        const idx = pickNumbers(cleanText, ids.length);
+        if (!idx.length) {
+          return {
+            replyText: tr(
+              `No entendí cuál. Respondé con el *número* de la lista (o varios: _1, 3, 5_), *TODOS*, o *SALIR* para cancelar.`,
+              `Embohovái papapy reheve térã *SALIR*.`
+            ),
+          };
+        }
+        const chosen = idx.map((i) => ids[i]);
+        const rows = await prisma.medicalStudy.findMany({ where: { userId: user.id, id: { in: chosen } }, orderBy: { createdAt: 'asc' } });
+        if (!rows.length) return startDeleteDocs();
+        await updateState('ACTIVE_EDIT_DELDOC', { delPick: rows.map((r) => r.id) });
+        return {
+          replyText:
+            tr(`⚠️ *¿Borro definitivamente ${rows.length === 1 ? 'este documento' : `estos ${rows.length} documentos`}?*\n\n`, `⚠️ *Aipe'ápa?*\n\n`) +
+            rows.slice(0, 30).map((r) => `• ${r.studyType === 'PRESCRIPTION' ? '📄' : '🧪'} ${r.title}`).join('\n') +
+            (rows.length > 30 ? `\n… y ${rows.length - 30} más` : '') +
+            tr(`\n\n_No se puede deshacer._\n*[1]* Sí, borrar   *[2]* No`, `\n\n*[1]* Heẽ   *[2]* Nahániri`),
+        };
+      }
+
+      // Sub-modo: quitar medicamentos de la lista
+      if (subMode === 'ACTIVE_EDIT_DELMED') {
+        const idx = pickNumbers(cleanText, meds.length);
+        let list = meds;
+        const removed: string[] = [];
+        if (idx.length) {
+          removed.push(...idx.map((i) => meds[i].name));
+          list = meds.filter((_, i) => !idx.includes(i));
+        } else if (cleanText) {
+          const r = removeMedication(meds, cleanText.replace(/^\s*(?:ya no (?:tomo|uso)|dej[eé] de (?:tomar|usar)|sacar|quitar|eliminar|borrar)\s+/i, '').trim());
+          list = r.list;
+          removed.push(...r.removed);
+        }
+        if (!removed.length) {
+          return { replyText: tr(`No encontré ese medicamento. Respondé con el *número* de la lista, o *SALIR* para cancelar.`, `Ndajuhúi. Embohovái papapy reheve térã *SALIR*.`) };
+        }
+        await persistMeds(list);
+        await updateState('ACTIVE_MEMBER', {});
+        return {
+          replyText: tr(
+            `✅ Saqué de tu medicación: *${removed.join(', ')}*\n` +
+              `_Si tenía un recordatorio de horario, lo podés borrar en la opción *5*._\n\n_Escribí *MENU* para ver las opciones._`,
+            `✅ Aipe'a: *${removed.join(', ')}*\n\n_Ehai *MENU*._`
+          ),
+        };
+      }
+
       if (subMode === 'ACTIVE_EDIT_MENU') {
+        if (cleanText === '9') return startDeleteDocs();
+        if (cleanText === '10') return startDeleteMeds();
         if (cleanText === '1' || /\b(contacto|familiar|tel[eé]fono|avisar)\b/i.test(lc)) {
           await updateState('ACTIVE_EDIT_CONTACT', {});
           const contact = await prisma.emergencyContact.findFirst({
@@ -4973,10 +5386,12 @@ export class BotStateMachine {
 
       // Sub-modo: Modificar Grupo Sanguíneo
       if (subMode === 'ACTIVE_EDIT_BLOOD') {
-        const btMatch = cleanText.match(/\b(o|a|b|ab)\s*([+-]|positivo|negativo)\b/i);
+        // "A+", "o positivo", "AB -", "0+" (cero por la letra O). Antes el patrón
+        // terminaba en \b y un "A+" a secas nunca coincidía: no se podía cambiar.
+        const btMatch = cleanText.match(/(?:^|[^a-záéíóúñ])(ab|a|b|o|0)\s*(\+|-|–|positivo|negativo|pos\b|neg\b)/i);
         if (btMatch) {
           const sign = /pos/i.test(btMatch[2]) || btMatch[2] === '+' ? '+' : '-';
-          const bloodType = `${btMatch[1].toUpperCase()}${sign}`;
+          const bloodType = `${btMatch[1].toUpperCase().replace('0', 'O')}${sign}`;
           await prisma.user.update({
             where: { id: user.id },
             data: { bloodType },
@@ -5049,13 +5464,8 @@ export class BotStateMachine {
       if (msg.mediaBuffer) {
         const name = `pending_${user.id}_${Date.now()}.${extFrom(msg.mediaFilename, msg.mediaMimeType)}`;
         await StorageService.saveFile('medical_studies', name, msg.mediaBuffer);
-        await updateState('ACTIVE_ASK_CATEGORY', { pendingUpload: { name } });
-        return {
-          replyText: tr(
-            '📎 Recibí tu archivo. ¿Qué es?\n\n*[1]* 💊 Un medicamento\n*[2]* 📄 Una receta\n*[3]* 🧪 Un estudio / análisis',
-            '📎 Ahupytýma ne archivo. Mba\'épa?\n\n*[1]* 💊 Pohã\n*[2]* 📄 Receta\n*[3]* 🧪 Estudio'
-          ),
-        };
+        await updateState('ACTIVE_ASK_CATEGORY', { pendingUpload: { name, names: [name] } });
+        return { replyText: askCategoryText(1) };
       }
 
       // ---------- Router de intención en lenguaje natural (texto o AUDIO) ----------
@@ -5305,28 +5715,10 @@ export class BotStateMachine {
       };
     }
 
-    // Expired or cancelled member
-    if (user.status === 'EXPIRED' || user.status === 'CANCELLED') {
-      const isFine = user.status === 'CANCELLED';
-      const order = await PaymentService.createPaymentOrder({
-        userId: user.id,
-        plan: 'ANNUAL',
-        country: 'PARAGUAY',
-        isFine,
-      });
-
-      return {
-        replyText: `⚠️ *TU SERVICIO BIO-PASS SE ENCUENTRA ${user.status}*\n\n` +
-          (isFine
-            ? `Para reactivar tu cuenta y evitar el purgado permanente de tus estudios médicos (GDPR), aboná la cuota con multa:\n\n`
-            : `Renová tu suscripción para reactivar tu QR:\n\n`) +
-          `💰 *Monto a pagar:* ${order.formattedAmount}\n` +
-          `🔢 *Referencia:* \`${order.referenceCode}\`\n\n` +
-          `🌐 *Pagar con Tarjeta / Bancard / QR:*\n${order.paymentLink}\n` +
-          `_Abrí ese enlace: podés pagar con tarjeta o escanear ahí el QR de Bancard._\n\n` +
-          `🏦 *Alternativa — Transferencia SIPAP / Tigo Money:*\n${order.aliasInfo}\n\n` +
-          `_Escribí 'PAGAR' cuando hayas abonado para confirmar tu reactivación._`,
-      };
+    // Vencido (todavía dentro de los 20 días de gracia) sin estado de miembro.
+    if (user.status === 'EXPIRED') {
+      if (msg.mediaBuffer) return receiveProof(msg.mediaBuffer, msg.mediaFilename, msg.mediaMimeType);
+      return renewalInfo(tr(`⚠️ *Tu Bio-Pass está vencido.* Renovalo para mantener tu QR activo:`, `⚠️ *Ne Bio-Pass opáma.*`, `⚠️ *Seu Bio-Pass está vencido.* Renove para manter seu QR ativo:`, `⚠️ *Your Bio-Pass has expired.* Renew to keep your QR active:`));
     }
 
     {

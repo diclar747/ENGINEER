@@ -96,6 +96,7 @@ router.post('/admin/bot/send-test', requireAdmin, BotController.sendTest);
 router.post('/bot/reconnect', requireAdmin, BotController.reconnect);
 router.post('/bot/simulate-message', requireAdmin, upload.single('media'), BotController.simulateMessage);
 router.post('/bot/run-cron', requireAdmin, BotController.triggerCronCheck);
+router.post('/bot/test-billing-notice', requireAdmin, BotController.testBillingNotice);
 router.post('/bot/run-reminders', requireAdmin, BotController.triggerReminders);
 
 // ---- Admin panel ----
@@ -115,6 +116,7 @@ router.get('/admin/subscriptions/export', requireAdmin, AdminController.exportSu
 router.get('/admin/subscriptions', requireAdmin, AdminController.listSubscriptions);
 router.get('/admin/payments/export', requireAdmin, AdminController.exportPayments);
 router.get('/admin/payments', requireAdmin, AdminController.listPayments);
+router.get('/admin/payments/:ref/proof', requireAdmin, AdminController.paymentProof);
 router.post('/admin/payments/:ref/mark-paid', requireAdmin, AdminController.markPaid);
 router.get('/admin/conditions', requireAdmin, AdminController.listConditions);
 router.post('/admin/conditions', requireAdmin, AdminController.createCondition);

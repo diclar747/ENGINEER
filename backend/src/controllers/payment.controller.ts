@@ -1,7 +1,7 @@
 import crypto from 'crypto';
 import { Request, Response } from 'express';
 import { AuthenticatedRequest } from '../security/jwt';
-import { PaymentService } from '../services/payment.service';
+import { PaymentService, fmtGs, fmtUsd } from '../services/payment.service';
 import { BancardService } from '../services/bancard.service';
 import { PixService } from '../services/pix.service';
 import { prisma } from '../database/prisma';
@@ -70,9 +70,9 @@ export class PaymentController {
 
   public static async getPaymentMethods(_req: Request, res: Response): Promise<void> {
     const p = await PaymentService.getPlanPrices();
-    const gs = (n: number) => `Gs. ${n.toLocaleString('es-PY')}`;
-    const rs = (n: number) => `R$ ${n.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}`;
-    const us = (n: number) => `U$ ${n.toFixed(2)}`;
+    const methods = await PaymentService.getPaymentMethods();
+    const gs = fmtGs;
+    const us = fmtUsd;
     res.json({
       paraguay: {
         currency: 'PYG',
@@ -82,17 +82,17 @@ export class PaymentController {
           annual: { name: 'Plan Anual', amount: p.PY.ANNUAL, formatted: gs(p.PY.ANNUAL) },
           fine: { name: 'Multa de Reactivación', amount: p.PY.FINE, formatted: gs(p.PY.FINE) },
         },
-        methods: ['Bancard / Tarjetas / QR', 'SIPAP / Alias Bancario', 'Tigo Money'],
+        methods: ['Bancard · Tarjeta de crédito / débito / QR', `Transferencia al Alias ${methods.py.alias}`],
       },
       brasil: {
-        currency: 'BRL',
-        gateway: config.pix.psp === 'mercadopago' && config.pix.mercadopagoToken ? 'MERCADOPAGO' : 'PIX',
+        currency: 'USD',
+        gateway: 'BANK_TRANSFER',
         plans: {
-          monthly: { name: 'Plano Mensal', amount: p.BR.MONTHLY, formatted: rs(p.BR.MONTHLY) },
-          annual: { name: 'Plano Anual', amount: p.BR.ANNUAL, formatted: rs(p.BR.ANNUAL) },
-          fine: { name: 'Multa de Reativação', amount: p.BR.FINE, formatted: rs(p.BR.FINE) },
+          monthly: { name: 'Plano Mensal', amount: p.BR.MONTHLY, formatted: us(p.BR.MONTHLY) },
+          annual: { name: 'Plano Anual', amount: p.BR.ANNUAL, formatted: us(p.BR.ANNUAL) },
+          fine: { name: 'Multa de Reativação', amount: p.BR.FINE, formatted: us(p.BR.FINE) },
         },
-        methods: ['PIX Instantâneo', 'Cartão de Crédito / Débito'],
+        methods: ['PayPal', 'Zelle'],
       },
       usa: {
         currency: 'USD',

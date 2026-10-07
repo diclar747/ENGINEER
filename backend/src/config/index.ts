@@ -147,27 +147,29 @@ export const config = {
   },
   
   payments: {
-    paraguayAlias: process.env.PARAGUAY_BANK_ALIAS || 'BIOPASS.PY',
-    paraguayBank: process.env.PARAGUAY_BANK_NAME || 'Banco Continental',
-    paraguayTigoWallet: process.env.PARAGUAY_TIGO_MONEY_WALLET || '0981123456',
+    paraguayAlias: process.env.PARAGUAY_BANK_ALIAS || '363220',
+    paraguayBank: process.env.PARAGUAY_BANK_NAME || '',
+    paraguayTigoWallet: process.env.PARAGUAY_TIGO_MONEY_WALLET || '',
     brasilPixKey: process.env.BRASIL_PIX_KEY || 'financeiro@bio-pass.com',
     usaPaypal: process.env.USA_PAYPAL || 'pay@bio-pass.cnid.com.py',
     usaZelle: process.env.USA_ZELLE || '',
+    // Paraguay en guaraníes. Brasil, resto de Sudamérica y EE.UU. en dólares.
+    // El plan anual cobra 10 meses (12 por el precio de 10).
     planPrices: {
       PY: {
-        MONTHLY: 35000, // Gs. 35.000 / mes
-        ANNUAL: 300000,  // Gs. 300.000 / año
-        FINE: 50000,     // Gs. 50.000
+        MONTHLY: 15000, // Gs. 15.000 / mes
+        ANNUAL: 150000, // Gs. 150.000 / 12 meses
+        FINE: 0,
       },
       BR: {
-        MONTHLY: 25,     // R$ 25 / mes
-        ANNUAL: 220,     // R$ 220 / año
-        FINE: 44,        // R$ 44
+        MONTHLY: 2.6,   // U$ 2,60 / mes
+        ANNUAL: 26,     // U$ 26 / 12 meses
+        FINE: 0,
       },
       USA: {
-        MONTHLY: 2,      // U$ 2 / mes
-        ANNUAL: 20,      // U$ 20 / año
-        FINE: 5,         // U$ 5
+        MONTHLY: 2.6,   // U$ 2,60 / mes
+        ANNUAL: 26,     // U$ 26 / 12 meses
+        FINE: 0,
       },
     },
   },

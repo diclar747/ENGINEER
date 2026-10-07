@@ -71,6 +71,7 @@ enum NotificationStage {
   D_0
   D_PLUS_3
   D_PLUS_4_CANCELLED
+  D_PLUS_20_STANDBY // 20 días sin pagar: la cuenta queda en espera (datos intactos, QR apagado, sin multa)
   PURGED
 }
 
@@ -119,6 +120,11 @@ model User {
   lastInteractionAt     DateTime?           // Último mensaje entrante procesado — usado para detectar abandono a mitad de un paso
 
   status                UserStatus          @default(PENDING_PAYMENT)
+  // Promo "traé un cliente y ganá un mes gratis"
+  referralCode          String?             @unique // código propio para invitar (BP-XXXXX)
+  referredById          String?             // titular que lo invitó
+  referralRewardedAt    DateTime?           // cuándo se le acreditó el mes gratis a quien lo invitó (una sola vez)
+
   retentionOfferUsedAt  DateTime?           // cuándo se usó el "respiro de 15 días" de la baja voluntaria — solo se ofrece una vez por cuenta
 
   failedPinAttempts     Int                 @default(0)
@@ -265,6 +271,8 @@ model PaymentOrder {
   status          PaymentStatus  @default(PENDING)
   expiresAt       DateTime?
   paidAt          DateTime?
+  proofFile       String?        // comprobante de transferencia/alias que mandó el titular (archivo en uploads/payment_proofs)
+  proofAt         DateTime?
   createdAt       DateTime       @default(now())
   updatedAt       DateTime       @updatedAt
 }

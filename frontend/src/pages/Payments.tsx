@@ -32,7 +32,6 @@ export const Payments: React.FC = () => {
         userId: user?.id,
         plan,
         country,
-        isFine: user?.status === 'CANCELLED',
       });
       navigate(`/checkout?ref=${encodeURIComponent(data.referenceCode)}`);
     } catch (err: any) {
@@ -56,14 +55,12 @@ export const Payments: React.FC = () => {
   const isPY = country === 'PARAGUAY';
   const isUSA = country === 'USA';
   const fb = isPY
-    ? { annual: 'Gs. 300.000', monthly: 'Gs. 35.000', methods: ['Bancard · Tarjetas de Crédito / Débito', 'Transferencia SIPAP (Alias: BIOPASS.PY)', 'Billetera Tigo Money'] }
-    : isUSA
-      ? { annual: 'U$ 20.00', monthly: 'U$ 2.00', methods: ['PayPal', 'Zelle'] }
-      : { annual: 'R$ 220,00', monthly: 'R$ 25,00', methods: ['PIX Instantâneo (Copia e Cola + QR)', 'Cartão de Crédito e Débito'] };
+    ? { annual: 'Gs. 150.000', monthly: 'Gs. 15.000', methods: ['Bancard · Tarjeta de crédito / débito / QR', 'Transferencia al Alias 363220'] }
+    : { annual: 'U$ 26.00', monthly: 'U$ 2.60', methods: ['PayPal', 'Zelle'] };
   const plans = {
     flag: isPY ? '🇵🇾' : isUSA ? '🇺🇸' : '🇧🇷',
     annual: `${cc?.plans?.annual?.formatted || fb.annual} / ${isPY ? 'año' : isUSA ? 'year' : 'ano'}`,
-    annualSave: isPY ? 'Ahorras 2 meses' : isUSA ? 'Save 4 months' : 'Economize 2 meses',
+    annualSave: isPY ? 'Pagás 10 meses, usás 12' : isUSA ? 'Pay 10 months, get 12' : 'Pague 10 meses, use 12',
     monthly: `${cc?.plans?.monthly?.formatted || fb.monthly} / ${isPY ? 'mes' : isUSA ? 'month' : 'mês'}`,
     methods: (cc?.methods && cc.methods.length ? cc.methods : fb.methods) as string[],
   };
@@ -76,7 +73,7 @@ export const Payments: React.FC = () => {
           <span>Suscripción y Pagos Bio-Pass</span>
         </h1>
         <p className="text-xs sm:text-sm text-fg-muted mt-1">
-          Cobertura en Paraguay (Bancard / SIPAP / Tigo Money) y Brasil (PIX / Cartão).
+          Paraguay: Bancard o transferencia por Alias. Brasil, resto de Sudamérica y EE.UU.: en dólares.
         </p>
       </div>
 

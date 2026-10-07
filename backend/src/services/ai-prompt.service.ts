@@ -1,4 +1,5 @@
 import { prisma } from '../database/prisma';
+import { fmtGs, fmtUsd } from './payment.service';
 import { PaymentService } from './payment.service';
 
 export type PromptScope = 'GENERAL' | 'PRE_REGISTRO' | 'MIEMBRO_ACTIVO';
@@ -84,13 +85,19 @@ export class AiPromptService {
       .map((r) => r.content.trim())
       .filter(Boolean);
     const base = picked.length ? picked.join('\n\n') : `${DEFAULT_BASE}\n\n${DEFAULT_BY_SCOPE[scope]}`;
-    if (scope !== 'PRE_REGISTRO') return base;
+    // Los precios van en TODOS los scopes: un titular ya activo también pregunta
+    // cuánto sale renovar, y sin el dato la IA contestaba que no lo sabía.
     try {
       const p = await PaymentService.getPlanPrices();
+      const m = await PaymentService.getPaymentMethods();
       const priceLine =
-        `Precios actuales: Paraguay — Gs. ${p.PY.MONTHLY.toLocaleString('es-PY')}/mes ` +
-        `o Gs. ${p.PY.ANNUAL.toLocaleString('es-PY')}/año. Brasil — R$ ${p.BR.MONTHLY.toFixed(2)}/mês ` +
-        `ou R$ ${p.BR.ANNUAL.toFixed(2)}/ano.`;
+        `PRECIOS ACTUALES Y EXACTOS (son los únicos válidos; ignorá cualquier otro precio que aparezca más arriba): ` +
+        `Paraguay — ${fmtGs(p.PY.MONTHLY)} por mes, o ${fmtGs(p.PY.ANNUAL)} por 12 meses (plan anual: se pagan 10 meses). ` +
+        `Brasil, resto de Sudamérica y EE.UU. — ${fmtUsd(p.USA.MONTHLY)} por mes, o ${fmtUsd(p.USA.ANNUAL)} por 12 meses. ` +
+        `Formas de pago en Paraguay: Bancard (tarjeta o QR, con el link que manda el bot) o transferencia al Alias ${m.py.alias}; ` +
+        `quien paga por alias manda la foto del comprobante por este chat. ` +
+        `No hay multas por atraso: si pasan 20 días del vencimiento sin pagar, la cuenta queda en espera (QR apagado, datos guardados) hasta que se pague. ` +
+        `PROMO vigente: "traé un cliente y ganá 1 mes gratis" — el titular escribe PROMO y recibe su link de invitación.`;
       return `${base}\n\n${priceLine}`;
     } catch {
       return base;

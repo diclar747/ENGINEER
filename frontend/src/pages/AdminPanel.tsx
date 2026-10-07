@@ -603,6 +603,12 @@ const Pagos: React.FC = () => {
 
   const setFilter = (k: string, v: string) => { setPage(1); setF({ ...f, [k]: v }); };
 
+  const openProof = async (ref: string) => {
+    try {
+      const r = await adminApi.get(`/admin/payments/${encodeURIComponent(ref)}/proof`, { responseType: 'blob' });
+      window.open(URL.createObjectURL(r.data), '_blank');
+    } catch { toast.error('No se pudo abrir el comprobante.'); }
+  };
   const markPaid = async (ref: string) => {
     const ok = await confirm({ title: 'Confirmar pago', confirmText: 'Marcar pagada', message: '¿Marcar esta orden como pagada y activar el Bio-Pass del cliente?' });
     if (!ok) return;
@@ -686,7 +692,10 @@ const Pagos: React.FC = () => {
                 <td className="px-3 py-2.5 whitespace-nowrap font-semibold text-fg">{money(p.amount)} {p.currency}</td>
                 <td className="px-3 py-2.5"><span className={`px-2 py-0.5 rounded-full font-bold ${STATUS[p.status] || 'bg-muted'}`}>{p.status}</span></td>
                 <td className="px-3 py-2.5 font-mono text-[10px] text-fg-muted whitespace-nowrap">{p.referenceCode}</td>
-                <td className="px-3 py-2.5 whitespace-nowrap">{p.status === 'PENDING' && (<button onClick={() => markPaid(p.referenceCode)} className="px-2.5 py-1 rounded-lg bg-emerald-600/80 hover:bg-emerald-600 text-white font-bold">Marcar pagado</button>)}</td>
+                <td className="px-3 py-2.5 whitespace-nowrap space-x-1.5">
+                  {p.proofFile && (<button onClick={() => openProof(p.referenceCode)} className="px-2.5 py-1 rounded-lg bg-amber-500/90 hover:bg-amber-500 text-white font-bold" title={p.proofAt ? `Recibido ${fdatetime(p.proofAt)}` : ''}>Ver comprobante</button>)}
+                  {p.status === 'PENDING' && (<button onClick={() => markPaid(p.referenceCode)} className="px-2.5 py-1 rounded-lg bg-emerald-600/80 hover:bg-emerald-600 text-white font-bold">Marcar pagado</button>)}
+                </td>
               </tr>
             ))}
           </tbody>
@@ -707,6 +716,8 @@ const Contenido: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [nw, setNw] = useState({ code: '', labelEs: '', labelGn: '', sortOrder: 0 });
   const [savingS, setSavingS] = useState(false);
+  const [testPhone, setTestPhone] = useState('');
+  const [testing, setTesting] = useState('');
   const load = useCallback(() => {
     setLoading(true);
     Promise.all([adminApi.get('/admin/conditions'), adminApi.get('/admin/settings')])
@@ -722,17 +733,30 @@ const Contenido: React.FC = () => {
   const addCond = async () => { if (!nw.code || !nw.labelEs) return; await adminApi.post('/admin/conditions', nw); setNw({ code: '', labelEs: '', labelGn: '', sortOrder: 0 }); load(); };
   const saveSettings = async () => {
     setSavingS(true);
-    try { await adminApi.put('/admin/settings', settings); toast.success('Precios guardados. Se aplican a las nuevas órdenes al instante.'); }
+    try { await adminApi.put('/admin/settings', settings); toast.success('Precios y datos de cobro guardados. Se aplican al instante.'); }
     catch { toast.error('No se pudieron guardar los precios.'); }
     finally { setSavingS(false); }
   };
   if (loading) return <Loading />;
   const priceKeys: [string, string][] = [
-    ['price.py.monthly', 'PY · Mensual (Gs.)'], ['price.py.annual', 'PY · Anual (Gs.)'], ['price.py.fine', 'PY · Multa (Gs.)'],
-    ['price.br.monthly', 'BR · Mensual (R$)'], ['price.br.annual', 'BR · Anual (R$)'], ['price.br.fine', 'BR · Multa (R$)'],
-    ['price.usa.monthly', 'USA · Monthly (U$)'], ['price.usa.annual', 'USA · Annual (U$)'], ['price.usa.fine', 'USA · Fine (U$)'],
+    ['price.py.monthly', 'Paraguay · Mensual (Gs.)'], ['price.py.annual', 'Paraguay · 12 meses (Gs.)'],
+    ['price.br.monthly', 'Brasil · Mensual (U$)'], ['price.br.annual', 'Brasil · 12 meses (U$)'],
+    ['price.usa.monthly', 'Sudamérica y EE.UU. · Mensual (U$)'], ['price.usa.annual', 'Sudamérica y EE.UU. · 12 meses (U$)'],
+  ];
+  const sendTestNotice = async (stage: string) => {
+    if (!testPhone.trim()) { toast.error('Escribí el número del titular.'); return; }
+    setTesting(stage);
+    try { await adminApi.post('/bot/test-billing-notice', { phone: testPhone, stage }); toast.success('Aviso de prueba enviado por WhatsApp. La cuenta no cambió.'); }
+    catch (e: any) { toast.error(e?.response?.data?.error || 'No se pudo enviar el aviso de prueba.'); }
+    finally { setTesting(''); }
+  };
+  const stages: [string, string][] = [
+    ['D_MINUS_5', '5 días antes'], ['D_0', 'El día del vencimiento'], ['D_PLUS_3', '3 días después'], ['D_PLUS_20_STANDBY', '20 días después (en espera)'],
   ];
   const payUsaKeys: [string, string, string][] = [
+    ['pay.py.alias', 'Paraguay · Alias para transferencias', '363220'],
+    ['pay.admin.whatsapp', 'WhatsApp de cobranzas (recibe los comprobantes)', '5959XXXXXXXX'],
+    ['pay.py.bank', 'Paraguay · Banco (opcional)', ''],
     ['pay.usa.paypal', 'PayPal (email)', 'pay@bio-pass.cnid.com.py'],
     ['pay.usa.zelle', 'Zelle (email / teléfono)', ''],
     ['pay.usa.extra', 'Otra línea (opcional)', ''],
@@ -761,6 +785,20 @@ const Contenido: React.FC = () => {
         <button onClick={saveSettings} disabled={savingS} className="mt-3 px-4 py-2 rounded-xl bg-teal-500 text-white font-bold text-sm inline-flex items-center gap-2 disabled:opacity-50">
           {savingS ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />} Guardar precios
         </button>
+      </Section>
+      <Section title="Probar avisos de cobranza" icon={<DollarSign className="w-4 h-4" />}>
+        <p className="text-xs text-fg-muted mb-3">
+          Manda por WhatsApp, al número que indiques, el aviso tal cual sale en cada etapa. Es solo una prueba: no cambia el estado de la cuenta ni la fecha de vencimiento.
+        </p>
+        <div className="flex flex-wrap items-center gap-2">
+          <input value={testPhone} onChange={(e) => setTestPhone(e.target.value)} inputMode="numeric" placeholder="Número del titular (5959…)" className={`${inputCls} w-56`} />
+          {stages.map(([id, label]) => (
+            <button key={id} onClick={() => sendTestNotice(id)} disabled={!!testing}
+              className="px-3 py-2 rounded-xl bg-muted hover:bg-teal-500 hover:text-white text-fg-soft text-xs font-bold inline-flex items-center gap-1.5 disabled:opacity-50">
+              {testing === id && <Loader2 className="w-3.5 h-3.5 animate-spin" />}{label}
+            </button>
+          ))}
+        </div>
       </Section>
       <Section title="Condiciones médicas (opciones del bot)" icon={<ListChecks className="w-4 h-4" />} bodyClassName="-mx-1">
         <div className="border border-line rounded-xl divide-y divide-line overflow-hidden">

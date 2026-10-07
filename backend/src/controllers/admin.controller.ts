@@ -592,6 +592,18 @@ export class AdminController {
     res.send(csv);
   }
 
+  /** GET /admin/payments/:ref/proof — comprobante de transferencia que mandó el titular por WhatsApp. */
+  static async paymentProof(req: AdminRequest, res: Response): Promise<void> {
+    const order = await prisma.paymentOrder.findUnique({ where: { referenceCode: req.params.ref }, select: { proofFile: true } });
+    const { StorageService } = await import('../storage/storage.service');
+    const buf = order?.proofFile ? await StorageService.getFile('payment_proofs', order.proofFile) : null;
+    if (!buf) { res.status(404).json({ error: 'Esta orden no tiene comprobante.' }); return; }
+    const ext = (order!.proofFile!.split('.').pop() || 'jpg').toLowerCase();
+    res.setHeader('Content-Type', ext === 'pdf' ? 'application/pdf' : ext === 'png' ? 'image/png' : ext === 'webp' ? 'image/webp' : 'image/jpeg');
+    res.setHeader('Cache-Control', 'private, no-store');
+    res.send(buf);
+  }
+
   static async markPaid(req: AdminRequest, res: Response): Promise<void> {
     const { PaymentService } = await import('../services/payment.service');
     const ok = await PaymentService.handlePaymentSuccess(req.params.ref);

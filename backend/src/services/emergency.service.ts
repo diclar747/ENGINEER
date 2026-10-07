@@ -57,7 +57,9 @@ export class EmergencyService {
     // PAUSED = baja voluntaria "congelada": el titular pidió pausar en vez de
     // borrar su cuenta — el historial queda intacto, pero el QR de emergencia
     // se desactiva mientras esté en pausa (se reactiva solo al volver por WhatsApp).
-    if (!user || user.status === 'PAUSED') {
+    // CANCELLED = cuenta "en espera" por 20 días sin pagar: mismos efectos (datos
+    // intactos, QR apagado) hasta que se regularice el pago.
+    if (!user || user.status === 'PAUSED' || user.status === 'CANCELLED') {
       return null;
     }
 

@@ -25,7 +25,7 @@ export class StorageService {
   }
 
   public static async saveFile(
-    folder: 'ci_documents' | 'medical_studies' | 'qr_stickers' | 'exports' | 'logos' | 'recovery_selfies',
+    folder: 'ci_documents' | 'medical_studies' | 'qr_stickers' | 'exports' | 'logos' | 'recovery_selfies' | 'payment_proofs',
     filename: string,
     buffer: Buffer
   ): Promise<{ fileUrl: string; localPath: string }> {

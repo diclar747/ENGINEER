@@ -47,10 +47,10 @@ export class NlpHandler {
 
     // 2. Change blood type: "mi grupo sanguineo es O+", "cambiar tipo de sangre a A positivo"
     if (/\b(sangre|grupo\s+sangu[ií]neo|tipo\s+de\s+sangre)\b/i.test(clean)) {
-      const btMatch = clean.match(/\b(o|a|b|ab)\s*([+-]|positivo|negativo)\b/i);
+      const btMatch = clean.match(/(?:^|[^a-záéíóúñ])(ab|a|b|o|0)\s*(\+|-|–|positivo|negativo|pos\b|neg\b)/i);
       if (btMatch) {
         const sign = /pos/i.test(btMatch[2]) || btMatch[2] === '+' ? '+' : '-';
-        const type = `${btMatch[1].toUpperCase()}${sign}`;
+        const type = `${btMatch[1].toUpperCase().replace('0', 'O')}${sign}`;
         return { intent: 'CHANGE_BLOOD_TYPE', value: type, isIntentOnly: false };
       }
       return { intent: 'CHANGE_BLOOD_TYPE', isIntentOnly: true };

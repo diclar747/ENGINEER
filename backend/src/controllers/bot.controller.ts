@@ -122,6 +122,21 @@ export class BotController {
   /**
    * Trigger manual execution of subscription CRON job for testing
    */
+  /** POST /bot/test-billing-notice { phone, stage } — manda un aviso de cobranza de prueba (no cambia nada). */
+  public static async testBillingNotice(req: Request, res: Response): Promise<void> {
+    const stage = String(req.body?.stage || '');
+    if (!['D_MINUS_5', 'D_0', 'D_PLUS_3', 'D_PLUS_20_STANDBY'].includes(stage)) {
+      res.status(400).json({ error: 'Etapa inválida' });
+      return;
+    }
+    try {
+      const r = await CronService.sendTestNotice(String(req.body?.phone || ''), stage as any);
+      res.status(r.ok ? 200 : 400).json(r);
+    } catch (err: any) {
+      res.status(500).json({ error: 'No se pudo enviar el aviso de prueba', details: err.message });
+    }
+  }
+
   public static async triggerCronCheck(req: Request, res: Response): Promise<void> {
     try {
       const result = await CronService.runSubscriptionCheck();
