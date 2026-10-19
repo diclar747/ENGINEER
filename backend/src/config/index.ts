@@ -59,6 +59,10 @@ export const config = {
     geminiModel: process.env.GEMINI_VISION_MODEL || 'gemini-1.5-flash',
     // Niro is our own multimodal gateway (chat + vision). Same key as NiroService.
     niroApiKey: process.env.NIRO_API_KEY || '',
+    // Agente de voz (OpenAI Realtime). Reusa OPENAI_API_KEY como secreto del servidor;
+    // el navegador recibe solo un token efímero. Modelo/voz configurables por env.
+    realtimeModel: process.env.OPENAI_REALTIME_MODEL || 'gpt-realtime-2.1',
+    realtimeVoice: process.env.OPENAI_REALTIME_VOICE || 'marin',
     get provider(): 'openai' | 'gemini' | 'niro' | 'none' {
       if (
         this.visionProvider === 'openai' ||

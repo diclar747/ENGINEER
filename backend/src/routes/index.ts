@@ -11,6 +11,7 @@ import { AdminController } from '../controllers/admin.controller';
 import { requireAdmin } from '../security/admin';
 import { PushController } from '../controllers/push.controller';
 import { VaultController } from '../controllers/vault.controller';
+import { VoiceController } from '../controllers/voice.controller';
 import { authMiddleware, optionalAuthMiddleware } from '../security/jwt';
 import { authLimiter, otpRequestLimiter, emergencyLimiter, registerLimiter } from '../security/rate-limit';
 import { TERMS_HTML } from '../legal/terms';
@@ -74,6 +75,10 @@ router.get('/export/download/:filename', ExportController.downloadExportFile);
 router.get('/stickers/:token/pdf', StickerController.downloadStickerPdf);
 router.get('/stickers/:token/png', StickerController.getQrPng);
 router.post('/stickers/co-branding', authMiddleware, upload.single('logo'), StickerController.updateCoBranding);
+
+// Agente de voz (OpenAI Realtime): token efímero + ejecución de tools
+router.post('/voice/session', registerLimiter, optionalAuthMiddleware, VoiceController.session);
+router.post('/voice/tool', optionalAuthMiddleware, VoiceController.tool);
 
 // Web Push notifications (VAPID)
 router.get('/push/vapid-public-key', PushController.getVapidPublicKey);

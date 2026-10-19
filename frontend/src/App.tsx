@@ -8,6 +8,7 @@ import { ThemeToggle } from './components/ThemeToggle';
 import { AppShell } from './components/ui/Layout';
 import { Login } from './pages/Login';
 import { Register } from './pages/Register';
+import { VoiceAgent } from './components/VoiceAgent';
 import { Dashboard } from './pages/Dashboard';
 import { Settings } from './pages/Settings';
 import { QrStickerStudio } from './pages/QrStickerStudio';
@@ -105,6 +106,7 @@ const UserShell: React.FC = () => {
     >
       <Outlet />
       <PwaInstallPrompt />
+      <VoiceAgent />
     </AppShell>
   );
 };
