@@ -153,6 +153,19 @@ export const Register: React.FC = () => {
     await post('hola');
   };
 
+  // Si ya iniciaste sesión (tenemos tu número), el asistente te reconoce y arranca
+  // solo — sin la pantalla de "Empecemos/registrate" ni pedirte el número de nuevo.
+  const autoStartedRef = useRef(false);
+  useEffect(() => {
+    if (autoStartedRef.current || started) return;
+    if (isLoggedIn && knownPhone().replace(/[^0-9]/g, '').length >= 7) {
+      autoStartedRef.current = true;
+      setStarted(true);
+      post('hola');
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isLoggedIn]);
+
   const send = async () => {
     const text = input.trim();
     const file = staged?.file;
@@ -308,16 +321,18 @@ export const Register: React.FC = () => {
           </div>
           <div className="min-w-0 flex-1">
             <h1 className="text-[15px] font-bold leading-tight truncate">
-              {returningMember ? 'Asistente Bio-Pass' : 'Crear mi Bio-Pass'}
+              {returningMember || isLoggedIn ? 'Asistente Bio-Pass' : 'Crear mi Bio-Pass'}
             </h1>
             <p className="text-[11px] text-fg-muted leading-tight">
               {done
                   ? '¡Registro completo!'
                   : returningMember
                     ? 'Ya sos socio activo — preguntame lo que necesites'
-                    : started
-                      ? `Paso ${Math.min(idx + 1, STEPS.length)}/${STEPS.length} · ${STEPS[Math.min(idx, STEPS.length - 1)].label}`
-                      : 'Registro guiado · < 3 min'}
+                    : isLoggedIn && !started
+                      ? 'Un momento, abriendo tu asistente…'
+                      : started && !isLoggedIn
+                        ? `Paso ${Math.min(idx + 1, STEPS.length)}/${STEPS.length} · ${STEPS[Math.min(idx, STEPS.length - 1)].label}`
+                        : 'Tu asistente de salud — te ayudo a registrarte o con lo que necesites'}
             </p>
           </div>
         </div>
