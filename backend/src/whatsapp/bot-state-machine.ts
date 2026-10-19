@@ -106,9 +106,9 @@ async function askNiro(
   // (hacían que la IA respondiera "Bio-Pass no gestiona citas médicas").
   const caps =
     opts.scope === 'MIEMBRO_ACTIVO'
-      ? ' DATO IMPORTANTE (no lo contradigas): Bio-Pass SÍ permite, por WhatsApp (opción 5 del menú: medicación; opción 6: citas y turnos), ' +
-        'programar *recordatorios de toma de medicación* ("cada X horas" o a horas fijas) y *recordatorios de turnos / citas médicas*. ' +
-        'NO reserva la cita con el consultorio: solo le avisa al titular antes. ' +
+      ? ' DATO IMPORTANTE (no lo contradigas): Bio-Pass SÍ permite, por WhatsApp. Opción 5 del menú: *recordatorios de toma de medicación* ("cada X horas" o a horas fijas). ' +
+        'Opción 6 (o escribiendo *DOCTOR*): *RESERVAR UNA CITA con un doctor del catálogo* — la persona elige la especialidad, ve los *horarios libres* reales y saca el turno; el doctor queda avisado por WhatsApp y le llega recordatorio a ambos. Si no hay doctores del catálogo para esa especialidad, igual puede cargar un *recordatorio de turno* propio. ' +
+        'Si preguntan "¿qué especialidades/doctores hay?", "¿tienen cardiólogo?", "quiero reservar/sacar un turno", decile que escriba *DOCTOR* o la especialidad y lo guías. ' +
         `Correo de soporte de Bio-Pass (el único válido, no inventes otro): ${config.supportEmail}. ` +
         'Por este chat NO atiende ninguna persona ni agente humano: nunca digas que lo conectás con soporte o que alguien le va a responder acá; indicale que escriba a ese correo. ' +
         'El titular puede preguntar "¿qué cita tengo?", "¿cuál es mi próxima toma?", "¿qué estoy tomando?" y el sistema le responde con sus datos reales. ' +
@@ -2085,7 +2085,7 @@ export class BotStateMachine {
             `*[3]* 🧪 Cargar *estudio* / evaluación médica\n` +
             `*[4]* 📁 Ver mi *perfil médico*\n` +
             `*[5]* ⏰ *Recordatorios de medicación* (horarios de tus remedios)\n` +
-            `*[6]* 🩺 *Citas y turnos médicos*\n` +
+            `*[6]* 🩺 *Reservar con un doctor* · citas y turnos (especialidad, horario libre, turno)\n` +
             `*[7]* 🏷️ Descargar Kit de Stickers (3x3 cm) y QR\n` +
             `*[8]* ✏️ Modificar datos de mi perfil (contacto, dirección, etc.)\n` +
             `*[9]* 📥 *Descargar* (medicamentos, recetas, estudios, recordatorios, citas, stickers)\n` +
@@ -2101,7 +2101,7 @@ export class BotStateMachine {
             `*[3]* 🧪 Emombe'u *estudio* médico\n` +
             `*[4]* 📁 Ahecha che *perfil médico*\n` +
             `*[5]* ⏰ *Momandu'a* pohã reheve\n` +
-            `*[6]* 🩺 *Turno* médico\n` +
+            `*[6]* 🩺 *Reservar* doctor rehe · turno médico\n` +
             `*[7]* 🏷️ Kit Stickers (3x3 cm) ha QR\n` +
             `*[8]* ✏️ Emoambue datos de perfil (contacto, óga renda, etc.)\n` +
             `*[9]* 📥 Emboguejy (pohã, receta, estudio, momandu'a, turno, sticker)\n` +
@@ -2574,11 +2574,12 @@ export class BotStateMachine {
       const apptsMenuText = (rows: Awaited<ReturnType<typeof listAppointments>>): string =>
         tr(
           `🩺 *Citas y turnos médicos*\n\n` +
+            `*[1]* 🩺 *Reservar con un doctor* — elegí la especialidad, mirá los *horarios libres* y sacá tu turno.\n` +
+            `      _También podés escribir *DOCTOR* o la especialidad (ej: "necesito un cardiólogo")._\n\n` +
             (rows.length
               ? `*Tus citas pendientes:*\n${MedicationReminderService.format(rows)}\n\n`
-              : `_No tenés citas pendientes._\n\n`) +
-            `🩺 *¿Querés reservar con uno de nuestros doctores?* Escribí *DOCTOR* (o "necesito un cardiólogo") y te muestro los disponibles con su horario y costo.\n\n` +
-            `➕ *O agendá un turno tuyo* (recordatorio): escribime o mandame un audio con *con quién o de qué es, el día y la hora*:\n` +
+              : `_No tenés citas reservadas todavía._\n\n`) +
+            `➕ *O agendá un turno tuyo* (solo recordatorio, sin reservar con nuestros doctores): escribime *con quién o de qué es, el día y la hora*:\n` +
             `• _"Cardiólogo el 20/10 a las 10:00"_\n` +
             `• _"Turno con la Dra. López mañana a las 3 de la tarde"_\n` +
             `• _"Dentista el jueves a las 9, avisame 2 horas antes"_\n\n` +
@@ -3330,6 +3331,11 @@ export class BotStateMachine {
       // especialidad reconocida), no se toca: lo maneja el flujo de turno libre de siempre.
       if (!hardPending && !msg.mediaBuffer && cleanText) {
         const lo = norm(cleanText);
+        // Desde el submenú [6] Citas y turnos, "1" = reservar con un doctor del catálogo.
+        if (subMode === 'ACTIVE_APPOINTMENTS' && cleanText.trim() === '1') {
+          const docs0 = await DoctorService.findBySpecialty(null);
+          if (docs0.length) { await leaveSoftMode(); return startBooking(null); }
+        }
         const bareKeyword = /^(doctor|doctores|reservar|reserva)$/i.test(cleanText.trim());
         const wantsBooking =
           bareKeyword ||
