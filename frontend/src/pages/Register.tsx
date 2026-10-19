@@ -8,6 +8,7 @@ import {
   Paperclip,
   Camera,
   Mic,
+  Phone,
   X,
   CheckCircle2,
   ArrowRight,
@@ -15,7 +16,7 @@ import {
 } from 'lucide-react';
 import { API_BASE_URL } from '../utils/api';
 import { renderFormattedText } from '../utils/textFormat';
-import { VoiceAgent } from '../components/VoiceAgent';
+import { VoiceAgent, openVoiceAgent } from '../components/VoiceAgent';
 
 interface Msg {
   id: string;
@@ -299,7 +300,7 @@ export const Register: React.FC = () => {
     // En pantallas anchas, el chat queda como una columna centrada tipo "WhatsApp
     // Web" (no estirado de punta a punta) — en el teléfono sigue de borde a borde.
     <div className="fixed inset-0 flex justify-center bg-app sm:bg-muted/40">
-    <VoiceAgent />
+    <VoiceAgent floating={false} />
     <div className="w-full sm:max-w-2xl h-full flex flex-col bg-app text-fg sm:border-x sm:border-line sm:shadow-xl">
       {/* Header */}
       <header
@@ -509,6 +510,17 @@ export const Register: React.FC = () => {
                   aria-label="Cámara"
                 >
                   <Camera className="w-5 h-5" />
+                </button>
+                <button
+                  type="button"
+                  onClick={openVoiceAgent}
+                  disabled={recording}
+                  className="w-10 h-10 rounded-full grid place-items-center shrink-0 text-white shadow-sm hover:scale-105 transition disabled:opacity-40"
+                  style={{ background: 'radial-gradient(circle at 32% 26%, #35e0c6 0%, #1aa6d8 60%, #0f6fb8 100%)' }}
+                  aria-label="Hablar por voz con el asistente"
+                  title="Hablar por voz"
+                >
+                  <Phone className="w-4 h-4" />
                 </button>
                 <textarea
                   value={input}
