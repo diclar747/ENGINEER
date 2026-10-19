@@ -53,6 +53,16 @@ const T = {
     description: 'Precios actuales de los planes de Bio-Pass.',
     parameters: { type: 'object', properties: {} },
   },
+  check_registration: {
+    type: 'function',
+    name: 'check_registration',
+    description: 'Verifica si un número de WhatsApp ya está registrado en Bio-Pass y su estado (activo, pendiente de pago, etc.). Usala cuando la persona pregunta si ya tiene cuenta o te da su número.',
+    parameters: {
+      type: 'object',
+      properties: { phone: { type: 'string', description: 'Número con código de país, ej. 595981123456' } },
+      required: ['phone'],
+    },
+  },
   book_appointment: {
     type: 'function',
     name: 'book_appointment',
@@ -103,7 +113,7 @@ const T = {
 export class VoiceToolsService {
   /** Tools que puede usar el agente según quién habla. */
   static toolsFor(scope: VoiceScope): ToolDef[] {
-    const guest = [T.list_doctors, T.doctor_free_slots, T.plan_prices];
+    const guest = [T.list_doctors, T.doctor_free_slots, T.plan_prices, T.check_registration];
     if (scope === 'guest') return guest;
     if (scope === 'doctor') return [...guest, T.doctor_agenda, T.doctor_set_status, T.my_appointments, T.book_appointment, T.cancel_appointment];
     return [...guest, T.book_appointment, T.my_appointments, T.cancel_appointment];
@@ -135,6 +145,21 @@ export class VoiceToolsService {
         }
         case 'plan_prices':
           return { precios: await PaymentService.priceText('es') };
+        case 'check_registration': {
+          const digits = String(args?.phone || '').replace(/\D/g, '');
+          if (digits.length < 7) return { error: 'Decime el número completo con código de país (ej. 595981123456).' };
+          const u = await prisma.user.findFirst({
+            where: { OR: [{ phoneNumber: digits }, { whatsappJid: { startsWith: digits } }] },
+            select: { status: true, pinHash: true },
+          });
+          if (!u) return { registrado: false, mensaje: 'Ese número todavía no está registrado. Se puede registrar en menos de 3 minutos.' };
+          return {
+            registrado: true,
+            estado: u.status,
+            puede_iniciar_sesion: !!u.pinHash,
+            mensaje: u.status === 'ACTIVE' ? 'Ese número ya tiene una cuenta activa; puede iniciar sesión.' : 'Ese número ya está registrado.',
+          };
+        }
 
         case 'book_appointment': {
           if (!ctx.userId) return { error: 'Para reservar hay que iniciar sesión / estar registrado.' };

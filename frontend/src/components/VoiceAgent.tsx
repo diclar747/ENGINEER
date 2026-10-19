@@ -140,30 +140,30 @@ export const VoiceAgent: React.FC<{ label?: string; floating?: boolean }> = ({ l
       `}</style>
       <audio ref={audioRef} autoPlay />
 
-      {/* ───── Popup con el orbe girando ───── */}
+      {/* ───── Panel de llamada en la esquina (NO bloquea el chat: se puede seguir escribiendo) ───── */}
       {open && (
-        <div className="fixed inset-0 z-[60] grid place-items-center bg-black/60 backdrop-blur-sm px-6" style={{ animation: 'bp-rise .25s ease' }}>
-          <div className="flex flex-col items-center gap-7 text-center">
-            <div className="relative w-[190px] h-[190px] grid place-items-center">
-              <span className="absolute -inset-7 rounded-full blur-2xl transition-all" style={{ background: glow, opacity: active ? 1 : .8 }} />
+        <div className="fixed right-5 bottom-24 sm:right-6 sm:bottom-6 z-50 select-none" style={{ animation: 'bp-rise .25s ease' }}>
+          <div className="flex flex-col items-center gap-3 rounded-3xl border border-line bg-panel/95 dark:bg-black/60 px-5 py-4 shadow-2xl backdrop-blur-md w-[178px]">
+            <div className="relative w-[92px] h-[92px] grid place-items-center">
+              <span className="absolute -inset-4 rounded-full blur-xl transition-all" style={{ background: glow, opacity: active ? 1 : .7 }} />
               {active && (<>
                 <span className="absolute inset-0 rounded-full" style={{ background: glow, animation: 'bp-halo 1.9s ease-out infinite' }} />
                 <span className="absolute inset-0 rounded-full" style={{ background: glow, animation: 'bp-halo 1.9s ease-out .95s infinite' }} />
               </>)}
-              <span className="relative w-full h-full rounded-full overflow-hidden shadow-2xl" style={orbSurface}>
+              <span className="relative w-full h-full rounded-full overflow-hidden shadow-xl" style={orbSurface}>
                 {/* "mundo girando": barrido cónico de luz girando */}
                 <span className="absolute inset-0 rounded-full" style={{ background: 'conic-gradient(from 0deg, rgba(255,255,255,0), rgba(255,255,255,.20), rgba(255,255,255,0) 55%)', animation: 'bp-spin 7s linear infinite' }} />
                 <span className="absolute inset-0 rounded-full" style={{ background: 'radial-gradient(circle at 34% 24%, rgba(255,255,255,.72) 0%, rgba(255,255,255,0) 42%)' }} />
-                <span className="absolute inset-[10px] rounded-full border border-white/25" />
+                <span className="absolute inset-[8px] rounded-full border border-white/25" />
               </span>
             </div>
-            <div className="text-white">
-              <div className="text-xl font-black">{connecting ? 'Conectando…' : speaking ? 'Bio-Pass está hablando…' : listening ? 'Te escucho…' : 'En línea'}</div>
-              <div className="text-white/65 text-sm mt-1">Hablá normal, como una llamada. Tocá el botón rojo para cortar.</div>
+            <div className="text-center">
+              <div className="text-[13px] font-black text-fg leading-tight">{connecting ? 'Conectando…' : speaking ? 'Bio-Pass habla…' : listening ? 'Te escucho…' : 'En línea'}</div>
+              <div className="text-[10px] text-fg-muted mt-0.5 leading-snug">Podés seguir escribiendo mientras hablás</div>
             </div>
-            {errMsg && <div className="text-rose-100 text-sm bg-rose-500/25 rounded-xl px-3 py-1.5">{errMsg}</div>}
-            <button onClick={hangup} aria-label="Cortar" className="w-16 h-16 rounded-full bg-gradient-to-br from-rose-500 to-rose-600 text-white grid place-items-center shadow-xl hover:scale-105 transition">
-              <PhoneOff className="w-7 h-7" />
+            {errMsg && <div className="text-[11px] text-rose-500 text-center">{errMsg}</div>}
+            <button onClick={hangup} aria-label="Cortar" className="w-12 h-12 rounded-full bg-gradient-to-br from-rose-500 to-rose-600 text-white grid place-items-center shadow-lg hover:scale-105 transition">
+              <PhoneOff className="w-5 h-5" />
             </button>
           </div>
         </div>
