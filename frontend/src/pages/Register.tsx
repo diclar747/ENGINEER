@@ -511,17 +511,6 @@ export const Register: React.FC = () => {
                 >
                   <Camera className="w-5 h-5" />
                 </button>
-                <button
-                  type="button"
-                  onClick={openVoiceAgent}
-                  disabled={recording}
-                  className="w-10 h-10 rounded-full grid place-items-center shrink-0 text-white shadow-sm hover:scale-105 transition disabled:opacity-40"
-                  style={{ background: 'radial-gradient(circle at 32% 26%, #35e0c6 0%, #1aa6d8 60%, #0f6fb8 100%)' }}
-                  aria-label="Hablar por voz con el asistente"
-                  title="Hablar por voz"
-                >
-                  <Phone className="w-4 h-4" />
-                </button>
                 <textarea
                   value={input}
                   onChange={(e) => setInput(e.target.value)}
@@ -536,6 +525,18 @@ export const Register: React.FC = () => {
                   placeholder={recording ? '' : 'Escribí tu respuesta…'}
                   className="flex-1 min-w-0 resize-none bg-panel border border-line rounded-3xl px-4 py-2.5 text-base text-fg placeholder-fg-muted outline-none focus:border-teal-500 max-h-28 disabled:opacity-60"
                 />
+                {/* Hablar por voz con el asistente (abre el popup del orbe). */}
+                <button
+                  type="button"
+                  onClick={openVoiceAgent}
+                  disabled={recording}
+                  className="w-10 h-10 rounded-full grid place-items-center shrink-0 text-white shadow-sm hover:scale-105 transition disabled:opacity-40"
+                  style={{ background: 'radial-gradient(circle at 32% 26%, #35e0c6 0%, #1aa6d8 60%, #0f6fb8 100%)' }}
+                  aria-label="Hablar por voz con el asistente"
+                  title="Hablar por voz"
+                >
+                  <Phone className="w-4 h-4" />
+                </button>
                 {/* Como en WhatsApp: este botón es Enviar si hay texto/archivo listo, o
                     Mic (mantener presionado para grabar, soltar para mandar) si no. */}
                 {input.trim() || staged ? (
