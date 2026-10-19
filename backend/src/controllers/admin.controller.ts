@@ -741,4 +741,132 @@ export class AdminController {
     }
     res.status(400).json({ error: 'Enviá "ids" (array) o "all": true con los filtros a borrar.' });
   }
+
+  // ---- Doctores (catálogo que usa el bot para reservar) ----
+  static async listDoctors(_req: AdminRequest, res: Response): Promise<void> {
+    const rows = await prisma.doctor.findMany({
+      orderBy: { fullName: 'asc' },
+      include: { _count: { select: { appointments: true } } },
+    });
+    res.json({ rows });
+  }
+
+  /** Normaliza el body de alta/edición de un doctor (comparte validación). */
+  private static doctorData(body: any): { data: any } | { error: string } {
+    const data: any = {};
+    if (body.fullName !== undefined) {
+      const n = qs(body.fullName);
+      if (!n) return { error: 'El nombre es obligatorio.' };
+      data.fullName = n.slice(0, 120);
+    }
+    if (body.specialties !== undefined) {
+      const arr = Array.isArray(body.specialties)
+        ? body.specialties
+        : String(body.specialties).split(',');
+      data.specialties = JSON.stringify(arr.map((s: any) => String(s).trim()).filter(Boolean).slice(0, 20));
+    }
+    if (body.whatsappNumber !== undefined) {
+      const w = String(body.whatsappNumber).replace(/[^\d]/g, '');
+      if (!w) return { error: 'El WhatsApp del doctor es obligatorio.' };
+      data.whatsappNumber = w;
+    }
+    if (body.consultationCost !== undefined) {
+      const c = Number(body.consultationCost);
+      data.consultationCost = Number.isFinite(c) && c > 0 ? c : null;
+    }
+    if (body.currency !== undefined) data.currency = ['PYG', 'BRL', 'USD'].includes(body.currency) ? body.currency : 'PYG';
+    if (body.schedule !== undefined) {
+      const blocks = Array.isArray(body.schedule) ? body.schedule : [];
+      const clean = blocks
+        .map((b: any) => ({ day: Number(b.day), start: String(b.start || ''), end: String(b.end || '') }))
+        .filter((b: any) => b.day >= 0 && b.day <= 6 && /^\d{2}:\d{2}$/.test(b.start) && /^\d{2}:\d{2}$/.test(b.end) && b.start < b.end);
+      data.schedule = JSON.stringify(clean);
+    }
+    if (body.slotMinutes !== undefined) data.slotMinutes = Math.max(5, Math.min(240, Math.round(Number(body.slotMinutes) || 30)));
+    if (body.doctorLeadMinutes !== undefined) data.doctorLeadMinutes = Math.max(1, Math.min(10080, Math.round(Number(body.doctorLeadMinutes) || 120)));
+    if (body.active !== undefined) data.active = !!body.active;
+    if (body.notes !== undefined) data.notes = qs(body.notes).slice(0, 500) || null;
+    return { data };
+  }
+
+  static async createDoctor(req: AdminRequest, res: Response): Promise<void> {
+    const parsed = AdminController.doctorData(req.body || {});
+    if ('error' in parsed) { res.status(400).json({ error: parsed.error }); return; }
+    if (!parsed.data.fullName || !parsed.data.whatsappNumber) {
+      res.status(400).json({ error: 'El nombre y el WhatsApp del doctor son obligatorios.' });
+      return;
+    }
+    const row = await prisma.doctor.create({ data: parsed.data });
+    res.json({ row });
+  }
+
+  static async updateDoctor(req: AdminRequest, res: Response): Promise<void> {
+    const parsed = AdminController.doctorData(req.body || {});
+    if ('error' in parsed) { res.status(400).json({ error: parsed.error }); return; }
+    const row = await prisma.doctor.update({ where: { id: req.params.id }, data: parsed.data });
+    res.json({ row });
+  }
+
+  static async deleteDoctor(req: AdminRequest, res: Response): Promise<void> {
+    // No borramos si tiene citas vivas: mejor desactivar para no perder el historial.
+    const live = await prisma.appointment.count({ where: { doctorId: req.params.id, status: { in: ['BOOKED', 'PENDING_PAYMENT'] } } });
+    if (live > 0) {
+      await prisma.doctor.update({ where: { id: req.params.id }, data: { active: false } });
+      res.json({ ok: true, deactivated: true, message: `Tiene ${live} cita(s) activa(s): se desactivó en vez de borrarlo.` });
+      return;
+    }
+    await prisma.doctor.delete({ where: { id: req.params.id } });
+    res.json({ ok: true });
+  }
+
+  // ---- Reservas / agenda ----
+  static async listAppointments(req: AdminRequest, res: Response): Promise<void> {
+    const q = req.query as Record<string, unknown>;
+    const where: any = {};
+    const doctorId = qs(q.doctorId);
+    const status = qs(q.status);
+    const from = qs(q.from);
+    const to = qs(q.to);
+    if (doctorId) where.doctorId = doctorId;
+    if (status) where.status = status;
+    if (from || to) {
+      where.whenAt = {};
+      if (from) where.whenAt.gte = new Date(`${from}T00:00:00`);
+      if (to) where.whenAt.lte = new Date(`${to}T23:59:59.999`);
+    }
+    const page = Math.max(1, Number(qs(q.page)) || 1);
+    const [rows, total] = await Promise.all([
+      prisma.appointment.findMany({
+        where,
+        orderBy: { whenAt: 'desc' },
+        skip: (page - 1) * PAGE,
+        take: PAGE,
+        include: { doctor: { select: { fullName: true, whatsappNumber: true } } },
+      }),
+      prisma.appointment.count({ where }),
+    ]);
+    res.json({ rows, total, page, pages: Math.ceil(total / PAGE) });
+  }
+
+  static async updateAppointment(req: AdminRequest, res: Response): Promise<void> {
+    const { AppointmentService } = await import('../services/appointment.service');
+    const { status, whenAt } = req.body || {};
+    if (whenAt) {
+      const d = new Date(whenAt);
+      if (isNaN(d.getTime())) { res.status(400).json({ error: 'Fecha inválida.' }); return; }
+      await AppointmentService.reschedule(req.params.id, d);
+    }
+    if (status && ['BOOKED', 'CANCELLED', 'DONE', 'NO_SHOW', 'PENDING_PAYMENT'].includes(status)) {
+      if (status === 'CANCELLED') await AppointmentService.cancel(req.params.id);
+      else await prisma.appointment.update({ where: { id: req.params.id }, data: { status } });
+    }
+    const row = await prisma.appointment.findUnique({ where: { id: req.params.id }, include: { doctor: { select: { fullName: true } } } });
+    res.json({ row });
+  }
+
+  static async deleteAppointment(req: AdminRequest, res: Response): Promise<void> {
+    const { AppointmentService } = await import('../services/appointment.service');
+    await AppointmentService.cancel(req.params.id);
+    res.json({ ok: true });
+  }
 }

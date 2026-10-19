@@ -501,6 +501,72 @@ export class PaymentService {
   }
 
   /**
+   * Orden de pago de una CONSULTA médica (reserva con un doctor del catálogo). A
+   * diferencia de createPaymentOrder NO crea ni toca una suscripción: la orden cuelga
+   * de la reserva (appointmentId). Reutiliza Bancard / alias / payBlock. Devuelve el
+   * texto "cómo pagar" listo para mandarle al paciente por WhatsApp.
+   */
+  public static async createAppointmentOrder(
+    appt: { id: string; userId: string | null; patientPhone: string },
+    doctor: { fullName: string; consultationCost: number | null; currency: string }
+  ): Promise<string> {
+    const cost = doctor.consultationCost || 0;
+    if (!appt.userId || cost <= 0) throw new Error('Consulta sin costo o sin titular.');
+    const currency = doctor.currency || 'PYG';
+    const country: CreateOrderParams['country'] = currency === 'PYG' ? 'PARAGUAY' : currency === 'BRL' ? 'BRASIL' : 'USA';
+
+    const shopProcessId = Date.now().toString();
+    const referenceCode = `BIO-APPT-${shopProcessId}-${Math.floor(1000 + Math.random() * 9000)}`;
+    const checkoutLink = `${config.frontendUrl}/checkout?ref=${referenceCode}`;
+    const aliasInfo = await PaymentService.manualInstructions(country, referenceCode);
+
+    let gateway: 'BANCARD' | 'BANK_TRANSFER' = 'BANK_TRANSFER';
+    let paymentMethod = country === 'PARAGUAY' ? 'ALIAS / TRANSFERENCIA' : 'PAYPAL / ZELLE';
+    let gatewayRef: string | undefined;
+    let externalRedirect: string | undefined;
+
+    if (country === 'PARAGUAY' && BancardService.enabled) {
+      const checkout = await BancardService.createCheckout({
+        shopProcessId,
+        amount: cost,
+        currency: 'PYG',
+        description: `Consulta ${doctor.fullName}`.slice(0, 50),
+        returnUrl: `${config.baseUrl}/api/payments/bancard/return?ref=${referenceCode}`,
+        cancelUrl: `${checkoutLink}&status=cancel`,
+      });
+      gateway = 'BANCARD';
+      paymentMethod = 'Tarjeta / QR (Bancard)';
+      gatewayRef = shopProcessId;
+      externalRedirect = checkout.redirectUrl;
+    }
+
+    await prisma.paymentOrder.create({
+      data: {
+        userId: appt.userId,
+        appointmentId: appt.id,
+        gateway,
+        paymentMethod,
+        referenceCode,
+        amount: cost,
+        currency: currency === 'BRL' ? 'BRL' : currency === 'USD' ? 'USD' : 'PYG',
+        status: 'PENDING',
+        aliasInfo,
+        gatewayRef,
+        bancardProcessIds: gateway === 'BANCARD' ? JSON.stringify([shopProcessId]) : null,
+        paymentLink: externalRedirect || checkoutLink,
+      },
+    });
+
+    return PaymentService.payBlock({
+      country,
+      formattedAmount: fmtMoney(currency === 'PYG' ? 'PYG' : 'USD', cost),
+      referenceCode,
+      paymentLink: checkoutLink,
+      aliasInfo,
+    });
+  }
+
+  /**
    * Webhook / confirmation handler — activates the account, generates QR + sticker PDF,
    * emails the invoice and pushes the confirmation over WhatsApp + Web Push.
    */
@@ -515,6 +581,15 @@ export class PaymentService {
       where: { id: order.id },
       data: { status: 'PAID', paidAt: new Date() },
     });
+
+    // Pago de una CONSULTA médica: confirma la reserva y avisa al doctor; no toca suscripciones.
+    if (order.appointmentId) {
+      const { AppointmentService } = await import('./appointment.service');
+      await AppointmentService.onPaymentConfirmed(order.appointmentId).catch((e) =>
+        console.error('[payment] confirmación de cita falló:', e?.message || e)
+      );
+      return true;
+    }
 
     // Vigencia: se cuenta desde el día en que entra el pago. Si es una renovación
     // hecha antes de vencer, el período nuevo se suma al que ya tenía (no pierde días).

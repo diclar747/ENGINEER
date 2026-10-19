@@ -129,6 +129,14 @@ router.get('/admin/ai-prompts', requireAdmin, AdminController.listAiPrompts);
 router.post('/admin/ai-prompts', requireAdmin, AdminController.createAiPrompt);
 router.patch('/admin/ai-prompts/:id', requireAdmin, AdminController.updateAiPrompt);
 router.delete('/admin/ai-prompts/:id', requireAdmin, AdminController.deleteAiPrompt);
+// Doctores (catálogo) + reservas / agenda
+router.get('/admin/doctors', requireAdmin, AdminController.listDoctors);
+router.post('/admin/doctors', requireAdmin, AdminController.createDoctor);
+router.patch('/admin/doctors/:id', requireAdmin, AdminController.updateDoctor);
+router.delete('/admin/doctors/:id', requireAdmin, AdminController.deleteDoctor);
+router.get('/admin/appointments', requireAdmin, AdminController.listAppointments);
+router.patch('/admin/appointments/:id', requireAdmin, AdminController.updateAppointment);
+router.delete('/admin/appointments/:id', requireAdmin, AdminController.deleteAppointment);
 
 
 export default router;

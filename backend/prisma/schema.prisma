@@ -65,6 +65,14 @@ enum ScanMode {
   CONSULTATION_PIN
 }
 
+enum AppointmentStatus {
+  PENDING_PAYMENT // reserva creada, esperando el pago de la consulta (solo si el doctor cobra)
+  BOOKED          // confirmada
+  CANCELLED       // cancelada por el paciente, el doctor o el admin
+  DONE            // atendida
+  NO_SHOW         // el paciente no se presentó
+}
+
 enum NotificationStage {
   NONE
   D_MINUS_5
@@ -140,6 +148,7 @@ model User {
   paymentOrders         PaymentOrder[]
   auditLogs             ScanAuditLog[]
   pushSubscriptions     PushSubscription[]
+  appointments          Appointment[]
 
   createdAt             DateTime            @default(now())
   updatedAt             DateTime            @updatedAt
@@ -257,6 +266,9 @@ model PaymentOrder {
   user            User           @relation(fields: [userId], references: [id], onDelete: Cascade)
   subscriptionId  String?
   subscription    Subscription?  @relation(fields: [subscriptionId], references: [id])
+  // Cobro de una consulta médica (reserva con un doctor del catálogo). Excluyente con subscriptionId.
+  appointmentId   String?        @unique
+  appointment     Appointment?   @relation(fields: [appointmentId], references: [id])
   gateway         PaymentGateway @default(MERCADOPAGO)
   paymentMethod   String         // ALIAS, PIX, LINK, QR, CARD
   referenceCode   String         @unique
@@ -382,6 +394,58 @@ model BotMessage {
   textEs    String   @db.Text
   textGn    String   @db.Text
   updatedAt DateTime @updatedAt
+}
+
+/// Doctor del catálogo, cargado desde /admin → Doctores. El bot ofrece reservar con
+/// él según su `schedule` (horario de atención) y, si hay `consultationCost`, cobra la
+/// consulta por las pasarelas. `whatsappNumber` es el número al que el bot le avisa de
+/// las reservas y recordatorios (el doctor NO interactúa con el bot, solo recibe avisos).
+model Doctor {
+  id                String        @id @default(uuid())
+  fullName          String
+  specialties       String        @default("[]") // JSON array de strings: ["Cardiología", "Clínica médica"]
+  consultationCost  Float?        // costo de la consulta; null/0 = sin cobro
+  currency          String        @default("PYG") // PYG, BRL, USD
+  whatsappNumber    String        // número del doctor para avisos (dígitos, sin +)
+  schedule          String        @default("[]") // JSON: [{ day:0-6 (0=domingo), start:"HH:MM", end:"HH:MM" }] en hora local PY
+  slotMinutes       Int           @default(30)   // duración de cada turno
+  doctorLeadMinutes Int           @default(120)  // anticipación del recordatorio al doctor (min)
+  active            Boolean       @default(true)
+  notes             String?
+  appointments      Appointment[]
+  createdAt         DateTime      @default(now())
+  updatedAt         DateTime      @updatedAt
+}
+
+/// Reserva/turno con un Doctor del catálogo (distinto de un MedicationReminder kind=APPOINTMENT,
+/// que es el turno "libre" que el paciente se auto-agenda sin doctor). Al reservar se crea
+/// además un MedicationReminder espejo (patientReminderId) que le da al paciente los avisos
+/// previos reutilizando el motor existente; los avisos al doctor los maneja AppointmentService.
+model Appointment {
+  id                String            @id @default(uuid())
+  doctorId          String
+  doctor            Doctor            @relation(fields: [doctorId], references: [id], onDelete: Cascade)
+  userId            String?
+  user              User?             @relation(fields: [userId], references: [id], onDelete: SetNull)
+  patientName       String
+  patientPhone      String
+  whenAt            DateTime
+  durationMinutes   Int               @default(30)
+  status            AppointmentStatus @default(BOOKED)
+  cost              Float?            // costo congelado al reservar (copia de Doctor.consultationCost)
+  currency          String            @default("PYG")
+  source            String            @default("BOT") // BOT | ADMIN | WEB
+  patientReminderId String?           // MedicationReminder espejo que avisa al paciente
+  doctorNotifiedAt  DateTime?         // cuándo se le avisó al doctor de la reserva
+  doctorLastSlot    String?           // dedupe del recordatorio al doctor ("LEAD")
+  paymentOrders     PaymentOrder[]
+  createdAt         DateTime          @default(now())
+  updatedAt         DateTime          @updatedAt
+
+  @@index([doctorId])
+  @@index([userId])
+  @@index([whenAt])
+  @@index([status])
 }
 
 /** Historial persistente de mensajes del bot de WhatsApp (panel admin: lista, filtros, paginación, borrado). */

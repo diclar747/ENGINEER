@@ -5,6 +5,7 @@ import { whatsappBot } from '../whatsapp/baileys.client';
 import { PaymentService } from './payment.service';
 import { OtpService } from './otp.service';
 import { MedicationReminderService } from './medication-reminder.service';
+import { AppointmentService } from './appointment.service';
 import { AiPromptService } from './ai-prompt.service';
 import { PushService } from './push.service';
 
@@ -89,6 +90,11 @@ export class CronService {
         return 0;
       });
       if (sent) console.log(`⏰ [CRON] recordatorios enviados: ${sent}`);
+      // Recordatorio a los DOCTORES de su próxima cita (los del paciente los manda el tick de arriba).
+      await AppointmentService.tickDoctorReminders().catch((e) => {
+        console.warn('[CRON] doctor reminder tick error:', e?.message);
+        return 0;
+      });
     });
 
     // Seed default AI prompts once (editable afterwards in /admin → IA).

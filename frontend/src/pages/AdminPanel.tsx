@@ -10,6 +10,7 @@ import {
   Loader2, Search, Check, X, RefreshCw, Plus, Trash2, Save, Smartphone, Download, Printer,
   KeyRound, Unlock, CalendarPlus, Pencil, ExternalLink, TrendingUp, DollarSign, UserPlus, Activity,
   Sparkles, Wifi, WifiOff, Send, AlertTriangle, ArrowDownLeft, ArrowUpRight, QrCode, MessagesSquare,
+  Stethoscope, Clock, Power,
 } from 'lucide-react';
 
 const STATUS_COLOR: Record<string, string> = {
@@ -22,7 +23,7 @@ const rangePreset = (days: number) => {
   return { from: from.toISOString().slice(0, 10), to: to.toISOString().slice(0, 10) };
 };
 
-type Tab = 'resumen' | 'clientes' | 'suscripciones' | 'pagos' | 'contenido' | 'ia' | 'whatsapp' | 'historial';
+type Tab = 'resumen' | 'clientes' | 'suscripciones' | 'pagos' | 'doctores' | 'reservas' | 'contenido' | 'ia' | 'whatsapp' | 'historial';
 const money = (n: number) => new Intl.NumberFormat('es-PY').format(Number(n) || 0);
 const fdate = (s?: string) => (s ? new Date(s).toLocaleDateString('es-PY') : '—');
 const parseMedsSafe = (raw: any): any[] => {
@@ -66,6 +67,8 @@ export const AdminPanel: React.FC = () => {
     { id: 'clientes', label: 'Clientes', icon: <Users className="w-4 h-4" /> },
     { id: 'suscripciones', label: 'Suscripciones', icon: <CalendarClock className="w-4 h-4" /> },
     { id: 'pagos', label: 'Pagos', icon: <CreditCard className="w-4 h-4" /> },
+    { id: 'doctores', label: 'Doctores', icon: <Stethoscope className="w-4 h-4" /> },
+    { id: 'reservas', label: 'Reservas', icon: <CalendarClock className="w-4 h-4" /> },
     { id: 'contenido', label: 'Contenido', icon: <ListChecks className="w-4 h-4" /> },
     { id: 'ia', label: 'IA', icon: <Sparkles className="w-4 h-4" /> },
     { id: 'whatsapp', label: 'WhatsApp', icon: <Smartphone className="w-4 h-4" /> },
@@ -96,6 +99,8 @@ export const AdminPanel: React.FC = () => {
       {tab === 'clientes' && <Clientes />}
       {tab === 'suscripciones' && <Suscripciones />}
       {tab === 'pagos' && <Pagos />}
+      {tab === 'doctores' && <Doctores />}
+      {tab === 'reservas' && <Reservas />}
       {tab === 'contenido' && <Contenido />}
       {tab === 'ia' && <IA />}
       {tab === 'whatsapp' && <BotPanel />}
@@ -822,6 +827,283 @@ const Contenido: React.FC = () => {
         </div>
       </Section>
     </div>
+  );
+};
+
+/* ──────────────────────────────  DOCTORES  ───────────────────────────── */
+
+const DAYS = ['Dom', 'Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb'];
+const CURRENCIES = ['PYG', 'BRL', 'USD'];
+type SchedBlock = { day: number; start: string; end: string };
+
+const fmtDoctorMoney = (cost: number | null, currency: string): string => {
+  if (!cost || cost <= 0) return 'Sin costo';
+  if (currency === 'PYG') return `Gs. ${Math.round(cost).toLocaleString('es-PY')}`;
+  if (currency === 'BRL') return `R$ ${cost.toFixed(2)}`;
+  return `US$ ${cost.toFixed(2)}`;
+};
+const fmtSchedule = (raw: string): string => {
+  let blocks: SchedBlock[] = [];
+  try { blocks = JSON.parse(raw || '[]'); } catch { /* ignore */ }
+  if (!Array.isArray(blocks) || !blocks.length) return 'Sin horario';
+  return blocks.map((b) => `${DAYS[b.day]} ${b.start}–${b.end}`).join(' · ');
+};
+
+const DoctorEditor: React.FC<{ initial: any | null; onClose: () => void; onSaved: () => void }> = ({ initial, onClose, onSaved }) => {
+  const toast = useToast();
+  const [busy, setBusy] = useState(false);
+  const parseArr = (v: any): string[] => { try { const a = JSON.parse(v || '[]'); return Array.isArray(a) ? a : []; } catch { return String(v || '').split(',').map((x) => x.trim()).filter(Boolean); } };
+  const parseSched = (v: any): SchedBlock[] => { try { const a = JSON.parse(v || '[]'); return Array.isArray(a) ? a : []; } catch { return []; } };
+  const [fullName, setFullName] = useState(initial?.fullName || '');
+  const [specialties, setSpecialties] = useState((initial ? parseArr(initial.specialties) : []).join(', '));
+  const [whatsappNumber, setWhatsappNumber] = useState(initial?.whatsappNumber || '');
+  const [consultationCost, setConsultationCost] = useState(initial?.consultationCost ? String(initial.consultationCost) : '');
+  const [currency, setCurrency] = useState(initial?.currency || 'PYG');
+  const [slotMinutes, setSlotMinutes] = useState(String(initial?.slotMinutes ?? 30));
+  const [doctorLeadMinutes, setDoctorLeadMinutes] = useState(String(initial?.doctorLeadMinutes ?? 120));
+  const [active, setActive] = useState(initial?.active ?? true);
+  const [notes, setNotes] = useState(initial?.notes || '');
+  const [sched, setSched] = useState<SchedBlock[]>(initial ? parseSched(initial.schedule) : []);
+
+  const addRange = (day: number) => setSched((s) => [...s, { day, start: '08:00', end: '12:00' }]);
+  const setRange = (idx: number, k: 'start' | 'end', v: string) => setSched((s) => s.map((b, i) => (i === idx ? { ...b, [k]: v } : b)));
+  const rmRange = (idx: number) => setSched((s) => s.filter((_, i) => i !== idx));
+
+  const save = async () => {
+    if (!fullName.trim()) { toast.error('El nombre es obligatorio.'); return; }
+    if (!whatsappNumber.replace(/\D/g, '')) { toast.error('El WhatsApp del doctor es obligatorio.'); return; }
+    setBusy(true);
+    const payload = {
+      fullName, whatsappNumber,
+      specialties: specialties.split(',').map((x) => x.trim()).filter(Boolean),
+      consultationCost: consultationCost ? Number(consultationCost.replace(/[^\d.]/g, '')) : null,
+      currency, slotMinutes: Number(slotMinutes) || 30, doctorLeadMinutes: Number(doctorLeadMinutes) || 120,
+      active, notes, schedule: sched,
+    };
+    try {
+      if (initial?.id) await adminApi.patch(`/admin/doctors/${initial.id}`, payload);
+      else await adminApi.post('/admin/doctors', payload);
+      toast.success('Doctor guardado.');
+      onSaved(); onClose();
+    } catch (e: any) { toast.error(e?.response?.data?.error || 'No se pudo guardar.'); }
+    finally { setBusy(false); }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/50 p-0 sm:p-4" onClick={onClose}>
+      <div className="bg-panel w-full sm:max-w-2xl sm:rounded-2xl rounded-t-2xl max-h-[92vh] overflow-y-auto border border-line" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center justify-between p-4 border-b border-line sticky top-0 bg-panel">
+          <h3 className="font-black text-fg inline-flex items-center gap-2"><Stethoscope className="w-4 h-4 text-teal-500" />{initial ? 'Editar doctor' : 'Nuevo doctor'}</h3>
+          <button onClick={onClose} className="p-1.5 rounded-lg bg-muted text-fg-soft"><X className="w-4 h-4" /></button>
+        </div>
+        <div className="p-4 space-y-3">
+          <div className="grid sm:grid-cols-2 gap-3">
+            <div>
+              <label className="text-[11px] font-semibold text-fg-muted">Nombre completo *</label>
+              <input value={fullName} onChange={(e) => setFullName(e.target.value)} className={`${inputCls} w-full mt-1`} placeholder="Dra. María López" />
+            </div>
+            <div>
+              <label className="text-[11px] font-semibold text-fg-muted">WhatsApp del doctor *</label>
+              <input value={whatsappNumber} onChange={(e) => setWhatsappNumber(e.target.value)} inputMode="numeric" className={`${inputCls} w-full mt-1`} placeholder="595981XXXXXX" />
+            </div>
+          </div>
+          <div>
+            <label className="text-[11px] font-semibold text-fg-muted">Especialidades (separadas por coma)</label>
+            <input value={specialties} onChange={(e) => setSpecialties(e.target.value)} className={`${inputCls} w-full mt-1`} placeholder="Cardiología, Clínica médica" />
+          </div>
+          <div className="grid sm:grid-cols-4 gap-3">
+            <div>
+              <label className="text-[11px] font-semibold text-fg-muted">Costo consulta</label>
+              <input value={consultationCost} onChange={(e) => setConsultationCost(e.target.value)} inputMode="numeric" className={`${inputCls} w-full mt-1`} placeholder="150.000" />
+            </div>
+            <div>
+              <label className="text-[11px] font-semibold text-fg-muted">Moneda</label>
+              <select value={currency} onChange={(e) => setCurrency(e.target.value)} className={`${inputCls} w-full mt-1`}>{CURRENCIES.map((c) => <option key={c} value={c}>{c}</option>)}</select>
+            </div>
+            <div>
+              <label className="text-[11px] font-semibold text-fg-muted">Duración turno (min)</label>
+              <input value={slotMinutes} onChange={(e) => setSlotMinutes(e.target.value)} inputMode="numeric" className={`${inputCls} w-full mt-1`} />
+            </div>
+            <div>
+              <label className="text-[11px] font-semibold text-fg-muted">Aviso al doctor (min antes)</label>
+              <input value={doctorLeadMinutes} onChange={(e) => setDoctorLeadMinutes(e.target.value)} inputMode="numeric" className={`${inputCls} w-full mt-1`} />
+            </div>
+          </div>
+          <div>
+            <label className="text-[11px] font-semibold text-fg-muted inline-flex items-center gap-1.5"><Clock className="w-3.5 h-3.5" />Horario de atención</label>
+            <div className="mt-1 border border-line rounded-xl divide-y divide-line overflow-hidden">
+              {DAYS.map((d, day) => (
+                <div key={day} className="p-2 flex flex-wrap items-center gap-2">
+                  <span className="w-9 text-xs font-bold text-fg-muted">{d}</span>
+                  {sched.map((b, i) => b.day === day && (
+                    <span key={i} className="inline-flex items-center gap-1 bg-muted rounded-lg px-1.5 py-1">
+                      <input type="time" value={b.start} onChange={(e) => setRange(i, 'start', e.target.value)} className="bg-panel border border-line rounded px-1 py-0.5 text-xs text-fg" />
+                      <span className="text-fg-muted text-xs">–</span>
+                      <input type="time" value={b.end} onChange={(e) => setRange(i, 'end', e.target.value)} className="bg-panel border border-line rounded px-1 py-0.5 text-xs text-fg" />
+                      <button onClick={() => rmRange(i)} className="p-0.5 rounded bg-rose-600/20 text-rose-500"><X className="w-3 h-3" /></button>
+                    </span>
+                  ))}
+                  <button onClick={() => addRange(day)} className="px-2 py-1 rounded-lg bg-teal-500/15 text-teal-600 dark:text-teal-300 text-[11px] font-bold inline-flex items-center gap-1"><Plus className="w-3 h-3" />rango</button>
+                </div>
+              ))}
+            </div>
+          </div>
+          <div>
+            <label className="text-[11px] font-semibold text-fg-muted">Notas (opcional)</label>
+            <input value={notes} onChange={(e) => setNotes(e.target.value)} className={`${inputCls} w-full mt-1`} placeholder="Consultorio, piso, observaciones…" />
+          </div>
+          <label className="flex items-center gap-2 text-sm text-fg-soft"><input type="checkbox" checked={active} onChange={(e) => setActive(e.target.checked)} />Activo (el bot lo ofrece)</label>
+          <button onClick={save} disabled={busy} className="w-full px-4 py-2.5 rounded-xl bg-teal-500 text-white font-black text-sm inline-flex items-center justify-center gap-2 disabled:opacity-50">
+            {busy ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}Guardar doctor
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+const Doctores: React.FC = () => {
+  const confirm = useConfirm();
+  const toast = useToast();
+  const [rows, setRows] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [editing, setEditing] = useState<any | null | 'new'>(null);
+  const load = useCallback(() => { setLoading(true); adminApi.get('/admin/doctors').then((r) => setRows(r.data.rows)).finally(() => setLoading(false)); }, []);
+  useEffect(() => { load(); }, [load]);
+  const del = async (d: any) => {
+    if (!(await confirm({ title: 'Eliminar doctor', danger: true, confirmText: 'Eliminar', message: `¿Eliminar a ${d.fullName}? Si tiene citas activas, se desactiva en vez de borrarse.` }))) return;
+    try { const r = await adminApi.delete(`/admin/doctors/${d.id}`); toast.success(r.data.message || 'Doctor eliminado.'); load(); }
+    catch (e: any) { toast.error(e?.response?.data?.error || 'No se pudo eliminar.'); }
+  };
+  const parseArr = (v: any): string[] => { try { const a = JSON.parse(v || '[]'); return Array.isArray(a) ? a : []; } catch { return []; } };
+  if (loading) return <Loading />;
+  return (
+    <div className="space-y-4">
+      <Section title="Doctores" icon={<Stethoscope className="w-4 h-4" />}
+        right={<button onClick={() => setEditing('new')} className="px-3 py-1.5 rounded-lg bg-teal-500 text-white font-bold text-xs inline-flex items-center gap-1"><Plus className="w-3.5 h-3.5" />Agregar doctor</button>}>
+        {!rows.length ? <EmptyState title="Todavía no cargaste doctores" hint="Agregá uno para que el bot pueda ofrecer reservas." /> : (
+          <div className="grid gap-3 sm:grid-cols-2">
+            {rows.map((d) => (
+              <div key={d.id} className={`border border-line rounded-xl p-3 ${d.active ? '' : 'opacity-60'}`}>
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <div className="font-black text-fg truncate">{d.fullName}</div>
+                    <div className="text-[11px] text-fg-muted">{parseArr(d.specialties).join(' · ') || 'Sin especialidad'}</div>
+                  </div>
+                  <div className="flex gap-1 shrink-0">
+                    <button onClick={() => setEditing(d)} className="p-1.5 rounded-lg bg-muted text-fg-soft"><Pencil className="w-3.5 h-3.5" /></button>
+                    <button onClick={() => del(d)} className="p-1.5 rounded-lg bg-rose-600/20 text-rose-600 dark:text-rose-400"><Trash2 className="w-3.5 h-3.5" /></button>
+                  </div>
+                </div>
+                <div className="mt-2 text-xs text-fg-soft space-y-1">
+                  <div className="inline-flex items-center gap-1.5"><Clock className="w-3.5 h-3.5 text-fg-muted" />{fmtSchedule(d.schedule)}</div>
+                  <div className="flex flex-wrap gap-x-3">
+                    <span className="inline-flex items-center gap-1"><DollarSign className="w-3.5 h-3.5 text-fg-muted" />{fmtDoctorMoney(d.consultationCost, d.currency)}</span>
+                    <span className="inline-flex items-center gap-1"><Smartphone className="w-3.5 h-3.5 text-fg-muted" />{d.whatsappNumber}</span>
+                    <span className="inline-flex items-center gap-1"><CalendarClock className="w-3.5 h-3.5 text-fg-muted" />{d._count?.appointments ?? 0} citas</span>
+                  </div>
+                </div>
+                {!d.active && <div className="mt-2 inline-flex items-center gap-1 text-[11px] font-bold text-amber-600 dark:text-amber-400"><Power className="w-3 h-3" />Inactivo</div>}
+              </div>
+            ))}
+          </div>
+        )}
+      </Section>
+      {editing && <DoctorEditor initial={editing === 'new' ? null : editing} onClose={() => setEditing(null)} onSaved={load} />}
+    </div>
+  );
+};
+
+/* ──────────────────────────────  RESERVAS  ───────────────────────────── */
+
+const APPT_BADGE: Record<string, { cls: string; label: string }> = {
+  BOOKED: { cls: 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-300', label: 'Confirmada' },
+  PENDING_PAYMENT: { cls: 'bg-amber-500/15 text-amber-600 dark:text-amber-300', label: 'Esperando pago' },
+  CANCELLED: { cls: 'bg-rose-500/15 text-rose-600 dark:text-rose-300', label: 'Cancelada' },
+  DONE: { cls: 'bg-sky-500/15 text-sky-600 dark:text-sky-300', label: 'Atendida' },
+  NO_SHOW: { cls: 'bg-slate-500/15 text-slate-500', label: 'No vino' },
+};
+const fmtApptWhen = (iso: string): string =>
+  new Date(iso).toLocaleString('es-PY', { timeZone: 'America/Asuncion', weekday: 'short', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
+
+const Reservas: React.FC = () => {
+  const confirm = useConfirm();
+  const toast = useToast();
+  const [rows, setRows] = useState<any[]>([]);
+  const [doctors, setDoctors] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [page, setPage] = useState(1);
+  const [total, setTotal] = useState(0);
+  const [f, setF] = useState({ doctorId: '', status: '', from: '', to: '' });
+  const load = useCallback(() => {
+    setLoading(true);
+    const params = { ...f, page };
+    adminApi.get('/admin/appointments', { params }).then((r) => { setRows(r.data.rows); setTotal(r.data.total || 0); }).finally(() => setLoading(false));
+  }, [f, page]);
+  useEffect(() => { load(); }, [load]);
+  useEffect(() => { adminApi.get('/admin/doctors').then((r) => setDoctors(r.data.rows)).catch(() => {}); }, []);
+  const setStatus = async (id: string, status: string) => {
+    try { await adminApi.patch(`/admin/appointments/${id}`, { status }); toast.success('Cita actualizada.'); load(); }
+    catch { toast.error('No se pudo actualizar.'); }
+  };
+  const cancel = async (a: any) => {
+    if (!(await confirm({ title: 'Cancelar cita', danger: true, confirmText: 'Cancelar cita', message: `¿Cancelar la cita de ${a.patientName}? Se avisa al doctor y se apaga el recordatorio del paciente.` }))) return;
+    try { await adminApi.delete(`/admin/appointments/${a.id}`); toast.success('Cita cancelada.'); load(); }
+    catch { toast.error('No se pudo cancelar.'); }
+  };
+  const reschedule = async (a: any, local: string) => {
+    if (!local) return;
+    try { await adminApi.patch(`/admin/appointments/${a.id}`, { whenAt: new Date(local).toISOString() }); toast.success('Cita reprogramada. Se avisó al doctor.'); load(); }
+    catch { toast.error('No se pudo reprogramar.'); }
+  };
+  return (
+    <Section title="Reservas / agenda" icon={<CalendarClock className="w-4 h-4" />}
+      right={<button onClick={load} className="px-3 py-2 bg-muted rounded-xl text-fg-soft"><RefreshCw className="w-4 h-4" /></button>}>
+      <div className="flex flex-wrap gap-2 mb-3">
+        <select value={f.doctorId} onChange={(e) => { setPage(1); setF({ ...f, doctorId: e.target.value }); }} className={`${inputCls} w-44`}>
+          <option value="">Todos los doctores</option>
+          {doctors.map((d) => <option key={d.id} value={d.id}>{d.fullName}</option>)}
+        </select>
+        <select value={f.status} onChange={(e) => { setPage(1); setF({ ...f, status: e.target.value }); }} className={`${inputCls} w-40`}>
+          <option value="">Todos los estados</option>
+          {Object.entries(APPT_BADGE).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
+        </select>
+        <input type="date" value={f.from} onChange={(e) => { setPage(1); setF({ ...f, from: e.target.value }); }} className={`${inputCls} w-40`} />
+        <input type="date" value={f.to} onChange={(e) => { setPage(1); setF({ ...f, to: e.target.value }); }} className={`${inputCls} w-40`} />
+      </div>
+      {loading ? <Loading /> : !rows.length ? <EmptyState title="No hay reservas con esos filtros" /> : (
+        <TableWrap>
+          <table className="w-full text-xs min-w-[720px]">
+            <thead><tr className="text-left text-fg-muted border-b border-line">
+              <th className="py-2 px-2">Paciente</th><th className="px-2">Doctor</th><th className="px-2">Cuándo</th><th className="px-2">Estado</th><th className="px-2">Costo</th><th className="px-2">Acciones</th>
+            </tr></thead>
+            <tbody>
+              {rows.map((a) => {
+                const b = APPT_BADGE[a.status] || APPT_BADGE.BOOKED;
+                return (
+                  <tr key={a.id} className="border-b border-line/60">
+                    <td className="py-2 px-2"><div className="font-bold text-fg">{a.patientName}</div><div className="text-fg-muted">{a.patientPhone}</div></td>
+                    <td className="px-2 text-fg-soft">{a.doctor?.fullName || '—'}</td>
+                    <td className="px-2 text-fg-soft whitespace-nowrap">{fmtApptWhen(a.whenAt)}</td>
+                    <td className="px-2"><span className={`px-2 py-0.5 rounded-lg text-[11px] font-bold ${b.cls}`}>{b.label}</span></td>
+                    <td className="px-2 text-fg-soft whitespace-nowrap">{fmtDoctorMoney(a.cost, a.currency)}</td>
+                    <td className="px-2">
+                      <div className="flex flex-wrap items-center gap-1">
+                        {a.status !== 'DONE' && a.status !== 'CANCELLED' && <button onClick={() => setStatus(a.id, 'DONE')} className="px-2 py-1 rounded-lg bg-sky-500/15 text-sky-600 dark:text-sky-300 font-bold">Atendida</button>}
+                        {a.status !== 'CANCELLED' && <button onClick={() => setStatus(a.id, 'NO_SHOW')} className="px-2 py-1 rounded-lg bg-muted text-fg-soft font-bold">No vino</button>}
+                        {a.status !== 'CANCELLED' && <button onClick={() => cancel(a)} className="px-2 py-1 rounded-lg bg-rose-600/20 text-rose-600 dark:text-rose-400 font-bold">Cancelar</button>}
+                        {a.status !== 'CANCELLED' && <input type="datetime-local" title="Reprogramar" onChange={(e) => reschedule(a, e.target.value)} className="bg-panel border border-line rounded-lg px-1 py-0.5 text-[11px] text-fg" />}
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </TableWrap>
+      )}
+      <Pager page={page} total={total} onPage={setPage} />
+    </Section>
   );
 };
 

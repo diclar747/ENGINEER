@@ -19,6 +19,8 @@ import {
 } from '../services/medication.util';
 import { AiPromptService, PromptScope } from '../services/ai-prompt.service';
 import { MedicationReminderService, ReminderDraft, parseTreatmentEnd, toNum } from '../services/medication-reminder.service';
+import { DoctorService } from '../services/doctor.service';
+import { AppointmentService } from '../services/appointment.service';
 import { EmailService } from '../services/email.service';
 import {
   ALL_DATES,
@@ -2045,6 +2047,7 @@ export class BotStateMachine {
         state === 'ACTIVE_LINK_PHONE' ||
         state.startsWith('ACTIVE_REMIND_') ||
         state.startsWith('ACTIVE_EDIT_') ||
+        state.startsWith('ACTIVE_DOC_') ||
         state.startsWith('ACTIVE_CHURN_')
           ? state
           : 'ACTIVE_MEMBER';
@@ -2574,7 +2577,8 @@ export class BotStateMachine {
             (rows.length
               ? `*Tus citas pendientes:*\n${MedicationReminderService.format(rows)}\n\n`
               : `_No tenés citas pendientes._\n\n`) +
-            `➕ *Para agendar una*, escribime o mandame un audio con *con quién o de qué es, el día y la hora*:\n` +
+            `🩺 *¿Querés reservar con uno de nuestros doctores?* Escribí *DOCTOR* (o "necesito un cardiólogo") y te muestro los disponibles con su horario y costo.\n\n` +
+            `➕ *O agendá un turno tuyo* (recordatorio): escribime o mandame un audio con *con quién o de qué es, el día y la hora*:\n` +
             `• _"Cardiólogo el 20/10 a las 10:00"_\n` +
             `• _"Turno con la Dra. López mañana a las 3 de la tarde"_\n` +
             `• _"Dentista el jueves a las 9, avisame 2 horas antes"_\n\n` +
@@ -3129,7 +3133,7 @@ export class BotStateMachine {
 
       const lowerFirst = (s: string) => s.charAt(0).toLowerCase() + s.slice(1);
       // Sub-modos sin datos a medio cargar: si la persona pide otra cosa, se sale solo.
-      const SOFT_MODES = new Set(['ACTIVE_MEMBER', 'ACTIVE_REMINDER', 'ACTIVE_APPOINTMENTS', 'ACTIVE_UPLOAD_MED', 'ACTIVE_UPLOAD_RX', 'ACTIVE_UPLOAD_STUDY', 'ACTIVE_EDIT_MENU', 'ACTIVE_FREE_UPDATE', 'ACTIVE_DOWNLOAD_MENU', 'ACTIVE_DOWNLOAD_RANGE']);
+      const SOFT_MODES = new Set(['ACTIVE_MEMBER', 'ACTIVE_REMINDER', 'ACTIVE_APPOINTMENTS', 'ACTIVE_UPLOAD_MED', 'ACTIVE_UPLOAD_RX', 'ACTIVE_UPLOAD_STUDY', 'ACTIVE_EDIT_MENU', 'ACTIVE_FREE_UPDATE', 'ACTIVE_DOWNLOAD_MENU', 'ACTIVE_DOWNLOAD_RANGE', 'ACTIVE_DOC_SPECIALTY', 'ACTIVE_DOC_PICK', 'ACTIVE_DOC_DAY', 'ACTIVE_DOC_SLOT', 'ACTIVE_DOC_CONFIRM']);
       const hardPending = !SOFT_MODES.has(subMode);
       const pendingNote = (): string =>
         hardPending
@@ -3175,6 +3179,110 @@ export class BotStateMachine {
         return BotStateMachine.handleMessage({ ...msg, routed: false });
       }
 
+      // ====== Reserva de turno con un DOCTOR del catálogo (ACTIVE_DOC_*) ======
+      // Flujo determinístico (sin IA): especialidad → doctor → día → hora → confirmar.
+      // Los horarios se calculan del `schedule` del doctor (slots libres). Al confirmar
+      // se crea la reserva (AppointmentService.book): si el doctor cobra, queda esperando
+      // el pago; si no, confirma al instante y le avisa al doctor por WhatsApp.
+      const DOC_TZ = 'America/Asuncion';
+      const docDraft = (): any => getTempData().docdraft || {};
+      const dayKeyLabel = (key: string): string =>
+        new Date(`${key}T12:00:00-03:00`).toLocaleDateString('es-PY', { timeZone: DOC_TZ, weekday: 'long', day: '2-digit', month: '2-digit' });
+      const nextDaysWithSlots = async (doctor: any, count = 8): Promise<string[]> => {
+        const out: string[] = [];
+        const base = new Date();
+        for (let i = 0; i < 28 && out.length < count; i++) {
+          const key = new Date(base.getTime() + i * 86400_000).toLocaleDateString('en-CA', { timeZone: DOC_TZ });
+          const slots = await DoctorService.freeSlots(doctor, key, base);
+          if (slots.length) out.push(key);
+        }
+        return out;
+      };
+      const showSlots = async (doctorId: string, dateKey: string): Promise<BotResponse> => {
+        const doctor: any = await prisma.doctor.findUnique({ where: { id: doctorId } });
+        if (!doctor) { await leaveSoftMode(); return { replyText: tr('Ese doctor ya no está disponible. Escribí *MENU*.', 'Ndaipóri. Ehai *MENU*.') }; }
+        const slots = await DoctorService.freeSlots(doctor, dateKey);
+        if (!slots.length) return showDays(doctorId);
+        await updateState('ACTIVE_DOC_SLOT', { docdraft: { ...docDraft(), doctorId, dateKey, slots } });
+        return { replyText: `📅 *${dayKeyLabel(dateKey)}*\n\n🕒 *Elegí la hora:*\n\n${slots.map((s, i) => `*${i + 1}.* 🕒 ${s}`).join('   ')}\n\n_Respondé con el número, o *CANCELAR*._` };
+      };
+      const showDays = async (doctorId: string, fresh = false): Promise<BotResponse> => {
+        const doctor: any = await prisma.doctor.findUnique({ where: { id: doctorId } });
+        if (!doctor || !doctor.active) { await leaveSoftMode(); return { replyText: tr('Ese doctor ya no está disponible. Escribí *MENU*.', 'Ndaipóri. Ehai *MENU*.') }; }
+        const days = await nextDaysWithSlots(doctor);
+        if (!days.length) { await leaveSoftMode(); return { replyText: tr(`🩺 *${doctor.fullName}* no tiene horarios libres en los próximos días. Escribí *MENU*.`, '🩺 Ndaipóri hóra. Ehai *MENU*.') }; }
+        await updateState('ACTIVE_DOC_DAY', { docdraft: { ...(fresh ? {} : docDraft()), doctorId, dayKeys: days } });
+        const head = `🩺 *${doctor.fullName}*\n💵 ${DoctorService.formatMoney(doctor.consultationCost, doctor.currency)}\n\n`;
+        return { replyText: `${head}📅 *¿Qué día querés el turno?*\n\n${days.map((k, i) => `*${i + 1}.* 📅 ${dayKeyLabel(k)}`).join('\n')}\n\n_Respondé con el número, o *CANCELAR*._` };
+      };
+      const startBooking = async (root: string | null): Promise<BotResponse> => {
+        const docs = await DoctorService.findBySpecialty(root);
+        if (!docs.length) {
+          await leaveSoftMode();
+          return { replyText: tr(root ? '🩺 Por ahora no tengo doctores de esa especialidad. Escribí *MENU* para ver otras opciones.' : '🩺 Todavía no hay doctores disponibles para reservar. Escribí *MENU*.', '🩺 Ndaipóri doctor. Ehai *MENU*.') };
+        }
+        if (docs.length === 1) return showDays(docs[0].id, true);
+        await updateState('ACTIVE_DOC_PICK', { docdraft: { root, doctorIds: docs.map((d) => d.id) } });
+        const lines = docs
+          .map((d, i) => `*${i + 1}.* 🩺 *${d.fullName}*\n      ${DoctorService.parseSpecialties(d.specialties).join(', ') || '—'}\n      💵 ${DoctorService.formatMoney(d.consultationCost, d.currency)} · 🕒 ${DoctorService.formatSchedule(d.schedule)}`)
+          .join('\n\n');
+        return { replyText: `🩺 *Elegí un profesional:*\n\n${lines}\n\n_Respondé con el número, o *CANCELAR*._` };
+      };
+
+      if (subMode === 'ACTIVE_DOC_PICK' || subMode === 'ACTIVE_DOC_DAY' || subMode === 'ACTIVE_DOC_SLOT' || subMode === 'ACTIVE_DOC_CONFIRM') {
+        const dd = docDraft();
+        const clean = cleanText.trim();
+        if (/^(cancelar|salir|menu|men[uú]|0|volver|listo)$/i.test(norm(clean))) {
+          await updateState('ACTIVE_MEMBER', { docdraft: null });
+          return { replyText: tr('👍 Listo, cancelé la reserva.', '👍 Oĩma.') };
+        }
+        const n = parseInt(clean, 10);
+        if (subMode === 'ACTIVE_DOC_PICK') {
+          const ids: string[] = dd.doctorIds || [];
+          if (!(n >= 1 && n <= ids.length)) return { replyText: tr('Respondé con el *número* del doctor de la lista (o *CANCELAR*).', 'Ehai papapy.') };
+          return showDays(ids[n - 1]);
+        }
+        if (subMode === 'ACTIVE_DOC_DAY') {
+          const keys: string[] = dd.dayKeys || [];
+          if (!(n >= 1 && n <= keys.length)) return { replyText: tr('Respondé con el *número* del día (o *CANCELAR*).', 'Ehai papapy.') };
+          return showSlots(dd.doctorId, keys[n - 1]);
+        }
+        if (subMode === 'ACTIVE_DOC_SLOT') {
+          const slots: string[] = dd.slots || [];
+          if (!(n >= 1 && n <= slots.length)) return { replyText: tr('Respondé con el *número* del horario (o *CANCELAR*).', 'Ehai papapy.') };
+          const hhmm = slots[n - 1];
+          const whenAt = MedicationReminderService.localDateTime(dd.dateKey, hhmm);
+          const doctor: any = await prisma.doctor.findUnique({ where: { id: dd.doctorId } });
+          await updateState('ACTIVE_DOC_CONFIRM', { docdraft: { ...dd, hhmm, whenIso: whenAt?.toISOString() } });
+          const pays = doctor?.consultationCost && doctor.consultationCost > 0;
+          const payNote = pays
+            ? tr(`\n\n💵 La consulta cuesta *${DoctorService.formatMoney(doctor.consultationCost, doctor.currency)}*. Al confirmar te paso cómo pagar — la reserva queda firme cuando entra el pago.`, '')
+            : '';
+          return { replyText: `📋 *Confirmá tu reserva:*\n\n🩺 *${doctor?.fullName}*\n📅 ${dayKeyLabel(dd.dateKey)}\n🕒 ${hhmm}${payNote}\n\n*[1]* Sí, reservar   *[2]* No` };
+        }
+        // ACTIVE_DOC_CONFIRM
+        if (!/^(1|si|sí|dale|confirmar|ok|reservar)$/i.test(norm(clean))) {
+          await updateState('ACTIVE_MEMBER', { docdraft: null });
+          return { replyText: tr('👍 Listo, no reservé nada.', '👍 Oĩma.') };
+        }
+        const whenAt = dd.whenIso ? new Date(dd.whenIso) : MedicationReminderService.localDateTime(dd.dateKey, dd.hhmm);
+        if (!whenAt || isNaN(whenAt.getTime())) {
+          await updateState('ACTIVE_MEMBER', { docdraft: null });
+          return { replyText: tr('Hubo un problema con la fecha. Probá de nuevo desde *MENU*.', 'Oĩ problema. Ehai *MENU*.') };
+        }
+        const res = await AppointmentService.book({
+          doctorId: dd.doctorId, userId: user.id, patientName: user.fullName || 'Paciente', patientPhone: user.phoneNumber, whenAt, source: 'BOT',
+        });
+        await updateState('ACTIVE_MEMBER', { docdraft: null });
+        if ('error' in res) return { replyText: `⚠️ ${res.error}` };
+        const doctor: any = await prisma.doctor.findUnique({ where: { id: dd.doctorId } });
+        const whenLabel = `${dayKeyLabel(dd.dateKey)} a las ${dd.hhmm}`;
+        if (res.needsPayment && res.payText) {
+          return { replyText: `🩺 *Reserva creada* con *${doctor?.fullName}* para el ${whenLabel}.\n\n⚠️ *Queda confirmada cuando pagues la consulta:*\n\n${res.payText}` };
+        }
+        return { replyText: `✅ *Turno confirmado* con *${doctor?.fullName}*\n📅 ${whenLabel}\n\n🔔 Te voy a recordar antes de la cita. Ya avisé al doctor.` };
+      }
+
       // Saludo suelto ("hola", "buenas tardes"): sin IA. Con algo a medias, se lo
       // recuerda; si no, menú.
       if (!msg.mediaBuffer && isSmallTalk(cleanText) && !/graci|aguyj/.test(norm(cleanText)) && !['ACTIVE_REMIND_CONFIRM', 'ACTIVE_RX_CONFIRM'].includes(subMode)) {
@@ -3214,6 +3322,29 @@ export class BotStateMachine {
         // 4 palabras, así que no entraba en el atajo de respuesta corta).
         (subMode === 'ACTIVE_REMIND_RANGE' &&
           (!!parseDateRange(cleanText) || !!parseTreatmentEnd(cleanText) || /^(siempre|permanente|indefinido)/.test(norm(cleanText))));
+
+      // Arranque del flujo de reserva con doctor del catálogo. Se dispara solo si hay
+      // doctores cargados y el pedido nombra una especialidad conocida ("necesito un
+      // cardiólogo", "quiero reservar con un dentista") o es la palabra suelta
+      // DOCTOR / RESERVAR. Si nombran un médico que NO está en el catálogo (sin
+      // especialidad reconocida), no se toca: lo maneja el flujo de turno libre de siempre.
+      if (!hardPending && !msg.mediaBuffer && cleanText) {
+        const lo = norm(cleanText);
+        const bareKeyword = /^(doctor|doctores|reservar|reserva)$/i.test(cleanText.trim());
+        const wantsBooking =
+          bareKeyword ||
+          /\b(reservar|reservame|reservar\s+con|sacar\s+(un\s+)?turno|turno\s+con|cita\s+con|consulta\s+con|agendar\s+con|quiero\s+(un|una)\s+(turno|cita|consulta)|necesito\s+(un|una|ver)|busco\s+un|ver\s+a\s+un)\b/.test(lo);
+        if (wantsBooking) {
+          const root = DoctorService.matchSpecialty(cleanText);
+          if (root || bareKeyword) {
+            const docs = await DoctorService.findBySpecialty(root);
+            if (docs.length) {
+              await leaveSoftMode();
+              return startBooking(root);
+            }
+          }
+        }
+      }
 
       if (!msg.routed && !msg.mediaBuffer && cleanText && !shortStepAnswer && !downloadStepAnswer) {
         const ctxRows = await listForUser();
