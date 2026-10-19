@@ -135,7 +135,7 @@ export const VoiceAgent: React.FC<{ label?: string }> = ({ label = 'Hablá con B
   const glowColor = speaking ? 'rgba(56,189,248,0.55)' : listening ? 'rgba(52,211,153,0.55)' : 'rgba(45,212,191,0.4)';
 
   return (
-    <div className="fixed bottom-6 left-6 z-40 flex flex-col items-start gap-3 select-none">
+    <div className="fixed right-5 bottom-24 sm:right-6 sm:bottom-6 z-40 flex flex-col items-end gap-3 select-none">
       <style>{`
         @keyframes bp-float{0%,100%{transform:translateY(0)}50%{transform:translateY(-5px)}}
         @keyframes bp-spin{to{transform:rotate(360deg)}}
@@ -214,7 +214,7 @@ export const VoiceAgent: React.FC<{ label?: string }> = ({ label = 'Hablá con B
           </span>
         )}
       </button>
-      {status === 'idle' && <span className="text-[11px] font-bold text-fg-muted pl-1">{label}</span>}
+      {status === 'idle' && <span className="text-[11px] font-bold text-fg-muted pr-1">{label}</span>}
     </div>
   );
 };
