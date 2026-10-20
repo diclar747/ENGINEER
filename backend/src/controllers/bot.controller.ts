@@ -125,7 +125,7 @@ export class BotController {
   /** POST /bot/test-billing-notice { phone, stage } — manda un aviso de cobranza de prueba (no cambia nada). */
   public static async testBillingNotice(req: Request, res: Response): Promise<void> {
     const stage = String(req.body?.stage || '');
-    if (!['D_MINUS_5', 'D_0', 'D_PLUS_3', 'D_PLUS_20_STANDBY'].includes(stage)) {
+    if (!['D_MINUS_5', 'D_MINUS_3', 'D_MINUS_1', 'D_0', 'D_PLUS_3', 'D_PLUS_20_STANDBY'].includes(stage)) {
       res.status(400).json({ error: 'Etapa inválida' });
       return;
     }

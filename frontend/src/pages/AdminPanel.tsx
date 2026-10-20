@@ -756,7 +756,7 @@ const Contenido: React.FC = () => {
     finally { setTesting(''); }
   };
   const stages: [string, string][] = [
-    ['D_MINUS_5', '5 días antes'], ['D_0', 'El día del vencimiento'], ['D_PLUS_3', '3 días después'], ['D_PLUS_20_STANDBY', '20 días después (en espera)'],
+    ['D_MINUS_5', '5 días antes'], ['D_MINUS_3', '3 días antes'], ['D_MINUS_1', '1 día antes'], ['D_0', 'El día del vencimiento'], ['D_PLUS_3', '3 días después'], ['D_PLUS_20_STANDBY', '20 días después (en espera)'],
   ];
   const payUsaKeys: [string, string, string][] = [
     ['pay.py.alias', 'Paraguay · Alias para transferencias', '363220'],

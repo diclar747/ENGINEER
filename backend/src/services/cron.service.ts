@@ -13,23 +13,31 @@ import { PushService } from './push.service';
  * Etapas de cobranza, contadas en días calendario (hora de Paraguay) respecto del
  * vencimiento:
  *   D_MINUS_5         5 días antes  → aviso de renovación
+ *   D_MINUS_3         3 días antes  → recordatorio de vencimiento
+ *   D_MINUS_1         1 día antes   → "vence mañana"
  *   D_0               el día        → "hoy vence"
  *   D_PLUS_3          3 días después → aviso de atraso
  *   D_PLUS_20_STANDBY 20 días después → la cuenta queda EN ESPERA: datos intactos,
  *                     QR apagado, sin multa. Se reactiva sola al pagar.
  * Entre el vencimiento y el día 20 el servicio sigue funcionando (período de gracia).
- * No se borra ningún dato por falta de pago.
+ * No se borra ningún dato por falta de pago. Cada etapa se avisa una sola vez (el
+ * STAGE_ORDER evita repetir, pero deja pasar a la etapa siguiente).
  */
-export type BillingStage = 'D_MINUS_5' | 'D_0' | 'D_PLUS_3' | 'D_PLUS_20_STANDBY';
+export type BillingStage = 'D_MINUS_5' | 'D_MINUS_3' | 'D_MINUS_1' | 'D_0' | 'D_PLUS_3' | 'D_PLUS_20_STANDBY';
+
+/** Etapas previas al vencimiento (la cuenta sigue ACTIVE, aviso no intrusivo). */
+const PRE_STAGES: BillingStage[] = ['D_MINUS_5', 'D_MINUS_3', 'D_MINUS_1'];
 
 const STAGE_ORDER: Record<string, number> = {
   NONE: 0,
   D_MINUS_5: 1,
-  D_0: 2,
-  D_PLUS_3: 3,
-  D_PLUS_4_CANCELLED: 4, // etapa vieja (cancelación al día 4): equivale a "ya en espera"
-  D_PLUS_20_STANDBY: 4,
-  PURGED: 5,
+  D_MINUS_3: 2,
+  D_MINUS_1: 3,
+  D_0: 4,
+  D_PLUS_3: 5,
+  D_PLUS_4_CANCELLED: 6, // etapa vieja (cancelación al día 4): equivale a "ya en espera"
+  D_PLUS_20_STANDBY: 6,
+  PURGED: 7,
 };
 
 /** Día calendario en la zona horaria del negocio, como número de días desde epoch. */
@@ -49,7 +57,9 @@ export function stageFor(daysLeft: number): BillingStage | null {
   if (daysLeft <= -20) return 'D_PLUS_20_STANDBY';
   if (daysLeft <= -3) return 'D_PLUS_3';
   if (daysLeft <= 0) return 'D_0';
-  if (daysLeft <= 5) return 'D_MINUS_5';
+  if (daysLeft <= 1) return 'D_MINUS_1'; // 1 día antes
+  if (daysLeft <= 3) return 'D_MINUS_3'; // 3 (o 2) días antes
+  if (daysLeft <= 5) return 'D_MINUS_5'; // 5 (o 4) días antes
   return null;
 }
 
@@ -108,8 +118,10 @@ export class CronService {
     const pay = PaymentService.payBlock(order, opts.lang);
     const fecha = opts.expiry ? opts.expiry.toLocaleDateString('es-PY', { timeZone: config.timezone }) : '';
     switch (stage) {
-      case 'D_MINUS_5': {
-        const n = Math.max(1, opts.daysLeft ?? 5);
+      case 'D_MINUS_5':
+      case 'D_MINUS_3':
+      case 'D_MINUS_1': {
+        const n = Math.max(1, opts.daysLeft ?? (stage === 'D_MINUS_1' ? 1 : stage === 'D_MINUS_3' ? 3 : 5));
         const cuando = n === 1 ? 'mañana' : `en *${n} días*`;
         return {
           title: `⏳ Tu Bio-Pass vence ${n === 1 ? 'mañana' : `en ${n} días`}`,
@@ -194,10 +206,11 @@ export class CronService {
         const order = await PaymentService.getRenewalOrder(user.id);
         const notice = this.buildNotice(stage, order, { daysLeft, expiry: sub.expiryDate, lang: user.language });
 
-        PushService.notify(user.id, notice.title, notice.text, { tag: 'subscription', url: '/payments', requireInteraction: stage !== 'D_MINUS_5' });
+        const isPre = PRE_STAGES.includes(stage);
+        PushService.notify(user.id, notice.title, notice.text, { tag: 'subscription', url: '/payments', requireInteraction: !isPre });
         await whatsappBot.sendMessage(user.whatsappJid || user.phoneNumber, notice.text);
 
-        const newStatus = stage === 'D_MINUS_5' ? 'ACTIVE' : stage === 'D_PLUS_20_STANDBY' ? 'CANCELLED' : 'EXPIRED';
+        const newStatus = isPre ? 'ACTIVE' : stage === 'D_PLUS_20_STANDBY' ? 'CANCELLED' : 'EXPIRED';
         await prisma.subscription.update({
           where: { id: sub.id },
           data: { status: newStatus, lastNotification: stage, finePending: false, fineAmount: 0 },

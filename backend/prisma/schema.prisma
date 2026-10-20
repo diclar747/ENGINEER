@@ -76,6 +76,8 @@ enum AppointmentStatus {
 enum NotificationStage {
   NONE
   D_MINUS_5
+  D_MINUS_3
+  D_MINUS_1
   D_0
   D_PLUS_3
   D_PLUS_4_CANCELLED
