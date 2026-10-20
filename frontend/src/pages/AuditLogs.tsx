@@ -1,10 +1,23 @@
 import React, { useState, useEffect } from 'react';
 import { api } from '../utils/api';
-import { Lock, ShieldAlert, Globe, CheckCircle2, Clock, AlertTriangle, UserCheck, Smartphone, Eye } from 'lucide-react';
+import { Lock, Globe, CheckCircle2, Clock } from 'lucide-react';
+
+type AuditLog = {
+  id: string;
+  scannedAt: string;
+  ipAddress: string | null;
+  userAgent: string | null;
+  mode: 'EMERGENCY_NO_PIN' | 'CONSULTATION_PIN';
+  city: string | null;
+  country: string | null;
+  gpsFixed: boolean;
+  alertSentViaWhatsApp: boolean;
+};
 
 export const AuditLogs: React.FC = () => {
-  const [logs, setLogs] = useState<any[]>([]);
+  const [logs, setLogs] = useState<AuditLog[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
 
   useEffect(() => {
     fetchLogs();
@@ -12,42 +25,11 @@ export const AuditLogs: React.FC = () => {
 
   const fetchLogs = async () => {
     try {
-      const res = await api.get('/auth/profile');
-      // Mock forensic audit logs
-      setLogs([
-        {
-          id: 'log-1',
-          scannedAt: new Date(Date.now() - 15 * 60 * 1000).toISOString(),
-          ipAddress: '190.128.220.45',
-          city: 'Asunción',
-          country: 'Paraguay',
-          userAgent: 'Mobile Safari / iOS 17.4 (iPhone 15 Pro)',
-          mode: 'EMERGENCY_NO_PIN',
-          alertSentViaWhatsApp: true,
-        },
-        {
-          id: 'log-2',
-          scannedAt: new Date(Date.now() - 3 * 3600 * 1000).toISOString(),
-          ipAddress: '177.18.90.12',
-          city: 'Foz do Iguaçu',
-          country: 'Brasil',
-          userAgent: 'Chrome Mobile / Android 14',
-          mode: 'CONSULTATION_PIN',
-          alertSentViaWhatsApp: true,
-        },
-        {
-          id: 'log-3',
-          scannedAt: new Date(Date.now() - 24 * 3600 * 1000).toISOString(),
-          ipAddress: '181.124.50.99',
-          city: 'Ciudad del Este',
-          country: 'Paraguay',
-          userAgent: 'Firefox / Desktop Windows 11',
-          mode: 'EMERGENCY_NO_PIN',
-          alertSentViaWhatsApp: true,
-        },
-      ]);
+      const res = await api.get('/audit-logs');
+      setLogs(res.data.logs || []);
     } catch (err) {
       console.error(err);
+      setError('No se pudo cargar el historial de accesos.');
     } finally {
       setLoading(false);
     }
@@ -61,12 +43,16 @@ export const AuditLogs: React.FC = () => {
           <span>Registro Forense de Auditoría & Trazabilidad</span>
         </h1>
         <p className="text-xs sm:text-sm text-fg-muted mt-1">
-          Historial inmutable de cada escaneo del QR, geolocalización IP, alertas de WhatsApp y aperturas médicas.
+          Historial de escaneos del QR y aperturas médicas, con ubicación disponible y estado de la alerta por WhatsApp.
         </p>
       </div>
 
       {/* Audit Card: Mobile Cards + Desktop Table */}
       <div className="bg-card border border-line rounded-3xl p-4 sm:p-8 shadow-2xl overflow-hidden">
+        {loading && <p className="text-sm text-fg-muted py-8 text-center">Cargando accesos…</p>}
+        {error && <p role="alert" className="text-sm text-rose-600 py-8 text-center">{error}</p>}
+        {!loading && !error && logs.length === 0 && <p className="text-sm text-fg-muted py-8 text-center">Todavía no hay escaneos ni accesos médicos registrados.</p>}
+        {!loading && !error && logs.length > 0 && <>
         
         {/* Mobile View: Cards (< md) */}
         <div className="md:hidden space-y-3.5">
@@ -104,7 +90,7 @@ export const AuditLogs: React.FC = () => {
                 <span className="text-fg-muted">Alerta WhatsApp:</span>
                 {log.alertSentViaWhatsApp ? (
                   <span className="flex items-center gap-1 text-emerald-600 dark:text-emerald-400 font-semibold">
-                    <CheckCircle2 className="w-3.5 h-3.5" /> Enviada a Titular
+                    <CheckCircle2 className="w-3.5 h-3.5" /> Bot confirmó envío
                   </span>
                 ) : (
                   <span className="text-fg-muted">No enviada</span>
@@ -162,7 +148,7 @@ export const AuditLogs: React.FC = () => {
                     {log.alertSentViaWhatsApp ? (
                       <span className="flex items-center space-x-1 text-emerald-600 dark:text-emerald-400 font-semibold text-[11px]">
                         <CheckCircle2 className="w-3.5 h-3.5" />
-                        <span>Enviada a Titular</span>
+                        <span>Bot confirmó envío</span>
                       </span>
                     ) : (
                       <span className="text-fg-muted">No enviada</span>
@@ -173,6 +159,7 @@ export const AuditLogs: React.FC = () => {
             </tbody>
           </table>
         </div>
+        </>}
       </div>
     </div>
   );

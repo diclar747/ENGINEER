@@ -12,6 +12,7 @@ import { requireAdmin } from '../security/admin';
 import { PushController } from '../controllers/push.controller';
 import { VaultController } from '../controllers/vault.controller';
 import { VoiceController } from '../controllers/voice.controller';
+import { AuditController } from '../controllers/audit.controller';
 import { authMiddleware, optionalAuthMiddleware } from '../security/jwt';
 import { authLimiter, otpRequestLimiter, emergencyLimiter, registerLimiter } from '../security/rate-limit';
 import { TERMS_HTML } from '../legal/terms';
@@ -45,6 +46,7 @@ router.post('/emergency/:token/call-contact', emergencyLimiter, EmergencyControl
 // Zero-Knowledge vault (client-side re-encryption on first web login)
 router.get('/vault/status', authMiddleware, VaultController.status);
 router.post('/vault/reinitialize', authMiddleware, VaultController.reinitialize);
+router.get('/audit-logs', authMiddleware, AuditController.listMine);
 
 // Medical Vault & Studies
 router.get('/medical/studies', authMiddleware, MedicalController.getStudies);

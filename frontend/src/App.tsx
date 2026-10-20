@@ -6,24 +6,26 @@ import { SUPPORT_EMAIL, supportMailto } from './utils/support';
 import { PwaInstallPrompt } from './components/PwaInstallPrompt';
 import { ThemeToggle } from './components/ThemeToggle';
 import { AppShell } from './components/ui/Layout';
-import { Login } from './pages/Login';
-import { Register } from './pages/Register';
 import { VoiceAgent } from './components/VoiceAgent';
-import { Dashboard } from './pages/Dashboard';
-import { Settings } from './pages/Settings';
-import { QrStickerStudio } from './pages/QrStickerStudio';
-import { HistoryExport } from './pages/HistoryExport';
-import { Payments } from './pages/Payments';
-import { AuditLogs } from './pages/AuditLogs';
-import { BotSimulator } from './pages/BotSimulator';
-import { BotConnect } from './pages/BotConnect';
-import { Checkout } from './pages/Checkout';
-import { EmergencyView } from './pages/EmergencyView';
-import { PushInvite } from './pages/PushInvite';
-import { AdminLogin } from './pages/AdminLogin';
-import { AdminPanel } from './pages/AdminPanel';
+import { Landing } from './pages/Landing';
 import { FeedbackProvider } from './components/ui/Feedback';
 import { clearSessionPin } from './utils/pinSession';
+
+const Login = React.lazy(() => import('./pages/Login').then((m) => ({ default: m.Login })));
+const Register = React.lazy(() => import('./pages/Register').then((m) => ({ default: m.Register })));
+const Dashboard = React.lazy(() => import('./pages/Dashboard').then((m) => ({ default: m.Dashboard })));
+const Settings = React.lazy(() => import('./pages/Settings').then((m) => ({ default: m.Settings })));
+const QrStickerStudio = React.lazy(() => import('./pages/QrStickerStudio').then((m) => ({ default: m.QrStickerStudio })));
+const HistoryExport = React.lazy(() => import('./pages/HistoryExport').then((m) => ({ default: m.HistoryExport })));
+const Payments = React.lazy(() => import('./pages/Payments').then((m) => ({ default: m.Payments })));
+const AuditLogs = React.lazy(() => import('./pages/AuditLogs').then((m) => ({ default: m.AuditLogs })));
+const BotSimulator = React.lazy(() => import('./pages/BotSimulator').then((m) => ({ default: m.BotSimulator })));
+const BotConnect = React.lazy(() => import('./pages/BotConnect').then((m) => ({ default: m.BotConnect })));
+const Checkout = React.lazy(() => import('./pages/Checkout').then((m) => ({ default: m.Checkout })));
+const EmergencyView = React.lazy(() => import('./pages/EmergencyView').then((m) => ({ default: m.EmergencyView })));
+const PushInvite = React.lazy(() => import('./pages/PushInvite').then((m) => ({ default: m.PushInvite })));
+const AdminLogin = React.lazy(() => import('./pages/AdminLogin').then((m) => ({ default: m.AdminLogin })));
+const AdminPanel = React.lazy(() => import('./pages/AdminPanel').then((m) => ({ default: m.AdminPanel })));
 
 /** Redirects to /login when there is no session token. */
 const RequireAuth: React.FC = () => {
@@ -114,6 +116,7 @@ const UserShell: React.FC = () => {
 const App: React.FC = () => {
   return (
     <FeedbackProvider>
+      <React.Suspense fallback={<div className="min-h-screen bg-app flex items-center justify-center" role="status" aria-label="Cargando página"><HeartPulse className="w-8 h-8 text-teal-600 animate-pulse" /></div>}>
       <Routes>
         {/* Public emergency card — full screen, no chrome */}
         <Route path="/e/:token" element={<EmergencyView />} />
@@ -130,6 +133,7 @@ const App: React.FC = () => {
         {/* Full-screen, no chrome */}
         <Route path="/bot-simulator" element={<BotSimulator />} />
         <Route path="/registro" element={<Register />} />
+        <Route path="/" element={<Landing />} />
 
         {/* Páginas públicas con top-nav */}
         <Route element={<AppLayout />}>
@@ -149,9 +153,9 @@ const App: React.FC = () => {
           </Route>
         </Route>
 
-        <Route path="/" element={<Navigate to="/dashboard" replace />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
+      </React.Suspense>
     </FeedbackProvider>
   );
 };

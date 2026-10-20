@@ -9,10 +9,13 @@ import { ReferralService } from '../services/referral.service';
 import { isPriceQuestion, isPromoRequest, isRenewRequest } from '../whatsapp/bot-state-machine';
 
 describe('etapas de cobranza', () => {
-  it('avisa 5 días antes, el día, 3 días después y a los 20 pasa a espera', () => {
+  it('avisa 5, 3 y 1 días antes, el día, 3 días después y a los 20 pasa a espera', () => {
     expect(stageFor(6)).toBeNull();
     expect(stageFor(5)).toBe('D_MINUS_5');
-    expect(stageFor(1)).toBe('D_MINUS_5');
+    expect(stageFor(4)).toBe('D_MINUS_5');
+    expect(stageFor(3)).toBe('D_MINUS_3');
+    expect(stageFor(2)).toBe('D_MINUS_3');
+    expect(stageFor(1)).toBe('D_MINUS_1');
     expect(stageFor(0)).toBe('D_0');
     expect(stageFor(-2)).toBe('D_0');
     expect(stageFor(-3)).toBe('D_PLUS_3');
@@ -31,7 +34,7 @@ describe('etapas de cobranza', () => {
 
   it('todos los avisos llevan el alias y el link de Bancard', () => {
     const order = { country: 'PARAGUAY', formattedAmount: 'Gs. 15.000', referenceCode: 'BIO-1-2', paymentLink: 'https://x/checkout?ref=BIO-1-2', aliasInfo: 'ALIAS: 363220\nREF: BIO-1-2' };
-    for (const st of ['D_MINUS_5', 'D_0', 'D_PLUS_3', 'D_PLUS_20_STANDBY'] as const) {
+    for (const st of ['D_MINUS_5', 'D_MINUS_3', 'D_MINUS_1', 'D_0', 'D_PLUS_3', 'D_PLUS_20_STANDBY'] as const) {
       const n = CronService.buildNotice(st, order, { daysLeft: 5 });
       expect(n.text).toContain('363220');
       expect(n.text).toContain('Bancard');

@@ -894,7 +894,9 @@ export class BaileysClient {
     if (cached) return cached;
 
     const fallback = `${cleanPhone}@s.whatsapp.net`;
-    if (!this.sock) return fallback;
+    // A socket can still exist while pairing or reconnecting. Querying it then
+    // may hang the request that generated an OTP until WhatsApp times out.
+    if (!this.sock || !this.isConnected) return fallback;
     try {
       const res = await this.sock.onWhatsApp(cleanPhone);
       const hit: any = Array.isArray(res) ? res[0] : undefined;

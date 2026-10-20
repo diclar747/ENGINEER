@@ -104,7 +104,7 @@ export class EmergencyService {
         country,
         lat,
         lng,
-        alertSentViaWhatsApp: true,
+        alertSentViaWhatsApp: false,
       },
     });
 
@@ -133,9 +133,16 @@ export class EmergencyService {
       `_Si no fuiste tú o no te encuentras en una situación médica, contacta a nuestro soporte inmediatamente._`;
 
     // Fan out the scan alert on every available channel, in the background.
-    whatsappBot.sendMessage(user.whatsappJid || user.phoneNumber, alertMessage).catch((err) => {
-      console.error(`Failed to dispatch WhatsApp scan alert to ${user.phoneNumber}:`, err?.message || err);
-    });
+    whatsappBot.sendMessage(user.whatsappJid || user.phoneNumber, alertMessage)
+      .then(async (sent) => {
+        if (sent) await prisma.scanAuditLog.update({
+          where: { id: auditLog.id },
+          data: { alertSentViaWhatsApp: true },
+        });
+      })
+      .catch((err) => {
+        console.error(`Failed to dispatch WhatsApp scan alert to ${user.phoneNumber}:`, err?.message || err);
+      });
 
     PushService.sendEmergencyAlert(user.id, {
       city,
