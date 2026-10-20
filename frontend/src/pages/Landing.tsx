@@ -101,6 +101,7 @@ export function Landing() {
   const [menuOpen, setMenuOpen] = useState(false);
   const [region, setRegion] = useState<Region>('paraguay');
   const [prices, setPrices] = useState<Prices | null>(null);
+  const [waNumber, setWaNumber] = useState('595986338888'); // número del bot conectado (fallback)
   const hasSession = Boolean(localStorage.getItem('biopass_token'));
 
   useEffect(() => {
@@ -108,8 +109,14 @@ export function Landing() {
     api.get('/payments/methods')
       .then(({ data }) => { if (mounted) setPrices(data as Prices); })
       .catch(() => { /* Show plans without stale prices if the service is unavailable. */ });
+    // Número real del WhatsApp conectado del bot (para el botón flotante de contacto).
+    api.get('/bot/public-info')
+      .then(({ data }) => { if (mounted && data?.botNumber) setWaNumber(String(data.botNumber)); })
+      .catch(() => { /* usa el fallback */ });
     return () => { mounted = false; };
   }, []);
+
+  const waHref = `https://wa.me/${waNumber.replace(/\D/g, '')}?text=${encodeURIComponent('Hola, deseo más información de Bio-Pass')}`;
 
   const closeMenu = () => setMenuOpen(false);
   const selectedPrice = prices?.[region];
@@ -233,6 +240,28 @@ export function Landing() {
       </main>
 
       <footer className="landing-footer"><div className="landing-container"><div className="landing-footer-main"><div><a className="landing-brand" href="#inicio"><span className="landing-brand-icon"><HeartPulse size={21} /></span><span className="landing-brand-word">bio<span>pass</span><small>HEALTH PASSPORT</small></span></a><p>Tu pasaporte médico inteligente. Información esencial cuando importa, herramientas útiles todos los días.</p></div><div><strong>Explorá</strong><a href="#solucion">La solución</a><a href="#como-funciona">Cómo funciona</a><a href="#asistente">Asistente</a><a href="#planes">Planes</a></div><div><strong>Tu cuenta</strong><Link to="/registro">Crear Bio-Pass</Link><Link to="/login">Ingresar</Link><a href={`${API_BASE_URL}/legal/terminos`} target="_blank" rel="noreferrer">Términos y condiciones</a></div><div><strong>Contacto</strong><a href={supportMailto()}>{SUPPORT_EMAIL}</a><span>Paraguay · Brasil · EE. UU.</span></div></div><div className="landing-footer-bottom"><span>© {new Date().getFullYear()} Doorway Cortex Bio-Pass. Todos los derechos reservados.</span><span>Hecho para cuidar lo que importa. <HeartPulse size={14} /></span></div></div></footer>
+
+      {/* Botón flotante de WhatsApp → abre el chat con el número conectado del bot. */}
+      <a className="bp-wa-fab" href={waHref} target="_blank" rel="noopener noreferrer" aria-label="Escribinos por WhatsApp">
+        <span className="bp-wa-label">¿Dudas? Escribinos 💬</span>
+        <span className="bp-wa-btn">
+          <span className="bp-wa-pulse" aria-hidden="true" />
+          <svg viewBox="0 0 32 32" aria-hidden="true" fill="currentColor">
+            <path d="M16.04 4C9.9 4 4.92 8.98 4.92 15.12c0 2.14.6 4.14 1.64 5.85L4.5 28l7.2-1.9a11.07 11.07 0 0 0 4.34.87h.01c6.14 0 11.12-4.98 11.12-11.12C27.17 8.98 22.18 4 16.04 4zm0 20.3h-.01c-1.36 0-2.69-.37-3.85-1.06l-.28-.16-4.27 1.12 1.14-4.16-.18-.29a9.2 9.2 0 0 1-1.41-4.9c0-5.08 4.14-9.22 9.23-9.22 2.46 0 4.78.96 6.52 2.7a9.17 9.17 0 0 1 2.7 6.52c0 5.09-4.14 9.21-9.22 9.21zm5.06-6.9c-.28-.14-1.64-.81-1.9-.9-.25-.09-.44-.14-.62.14-.18.28-.71.9-.87 1.08-.16.18-.32.2-.6.07-.28-.14-1.17-.43-2.23-1.38-.82-.73-1.38-1.64-1.54-1.92-.16-.28-.02-.43.12-.57.13-.13.28-.32.42-.49.14-.16.18-.28.28-.46.09-.18.05-.35-.02-.49-.07-.14-.62-1.5-.85-2.05-.22-.53-.45-.46-.62-.47l-.53-.01c-.18 0-.46.07-.71.35-.25.28-.95.93-.95 2.27 0 1.34.97 2.63 1.1 2.81.14.18 1.92 2.93 4.65 4.11.65.28 1.16.45 1.56.58.65.21 1.25.18 1.72.11.52-.08 1.64-.67 1.87-1.32.23-.65.23-1.2.16-1.32-.07-.12-.25-.19-.53-.33z" />
+          </svg>
+        </span>
+      </a>
+      <style>{`
+        .bp-wa-fab{position:fixed;right:22px;bottom:22px;z-index:60;display:flex;align-items:center;gap:10px;text-decoration:none}
+        .bp-wa-btn{position:relative;width:62px;height:62px;border-radius:50%;display:grid;place-items:center;background:linear-gradient(145deg,#25D366,#128C7E);box-shadow:0 12px 28px rgba(18,140,126,.45);color:#fff;transition:transform .2s}
+        .bp-wa-fab:hover .bp-wa-btn{transform:scale(1.07)}
+        .bp-wa-btn svg{width:34px;height:34px;position:relative;z-index:1}
+        .bp-wa-pulse{position:absolute;inset:0;border-radius:50%;background:#25D366;opacity:.55;animation:bp-wa-ping 2s ease-out infinite}
+        .bp-wa-label{background:#fff;color:#0b4a3f;font-weight:800;font-size:13px;padding:9px 14px;border-radius:999px;box-shadow:0 10px 22px rgba(0,0,0,.14);white-space:nowrap;animation:bp-wa-rise .4s ease}
+        @keyframes bp-wa-ping{0%{transform:scale(1);opacity:.55}100%{transform:scale(1.95);opacity:0}}
+        @keyframes bp-wa-rise{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+        @media(max-width:640px){.bp-wa-label{display:none}.bp-wa-fab{right:16px;bottom:16px}}
+      `}</style>
     </div>
   );
 }
