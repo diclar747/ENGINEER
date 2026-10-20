@@ -98,10 +98,15 @@ function qrAttachment(dataUrl: string | undefined | null, caption: string): BotR
  */
 async function askNiro(
   userText: string,
-  opts: { name?: string; scope?: PromptScope } = {}
+  opts: { name?: string; scope?: PromptScope; lang?: 'es' | 'gn' | 'pt' | 'en' } = {}
 ): Promise<string | null> {
   if (!NiroService.enabled || !userText || userText.trim().length < 4) return null;
   const system = await AiPromptService.getSystemPrompt(opts.scope || 'GENERAL');
+  const langName = opts.lang === 'gn' ? 'guaraní' : opts.lang === 'pt' ? 'portugués (do Brasil)' : opts.lang === 'en' ? 'inglés' : 'español rioplatense';
+  const tone =
+    ` ESTILO OBLIGATORIO: respondé SIEMPRE en ${langName} (el idioma de la persona), con un tono *cálido, cercano y humano*, en frases cortas y claras. ` +
+    'NADA de tecnicismos ni jerga (no digas "Zero-Knowledge", "OCR", "encriptación", "4-digit PIN", etc.): hablá del *beneficio* para la persona, simple. ' +
+    'Usá algunos emojis con moderación para que se vea amable y ordenado. No más de 6-7 líneas.';
   // Nota de capacidades — los prompts guardados en /admin pueden estar desactualizados
   // (hacían que la IA respondiera "Bio-Pass no gestiona citas médicas").
   const caps =
@@ -119,11 +124,31 @@ async function askNiro(
         `Correo de soporte de Bio-Pass (el único válido, no inventes otro): ${config.supportEmail}. ` +
         'Por este chat NO atiende ninguna persona: para hablar con soporte, que escriba a ese correo.';
   const out = await NiroService.chat([
-    { role: 'system', content: system + caps + (opts.name ? ` El usuario se llama ${opts.name}.` : '') },
+    { role: 'system', content: system + caps + tone + (opts.name ? ` El usuario se llama ${opts.name}.` : '') },
     { role: 'user', content: userText.trim() },
   ]);
   // WhatsApp usa *negrita* (un asterisco); el "**texto**" de markdown se ve con asteriscos sueltos.
   return out ? out.replace(/\*\*(.+?)\*\*/g, '*$1*').replace(/^#{1,6}\s+/gm, '') : out;
+}
+
+/** Presentación cálida de Bio-Pass (cuando alguien pide "más información"): enfocada en
+ *  el beneficio, en español, sin tecnicismos. Cierra invitando a elegir idioma para empezar. */
+const BIOPASS_PRESENTACION =
+  `👋 *¡Hola! Qué bueno que escribís* 💙\n\n` +
+  `*Bio-Pass* es tu *pasaporte médico* que te acompaña siempre en el celular. 📱\n\n` +
+  `✨ *¿Qué hace por vos?*\n` +
+  `🚨 En una emergencia, quien te auxilie escanea tu *QR* y ve al instante tu info vital (grupo sanguíneo, alergias, contacto de emergencia). _Puede salvarte la vida._\n` +
+  `🩺 Reservás *citas con nuestros doctores* desde acá, con sus horarios disponibles.\n` +
+  `💊 Te *recordamos* tus medicamentos y turnos para que no te olvides.\n` +
+  `📂 Guardás tus *estudios y recetas* siempre a mano y protegidos.\n\n` +
+  `🔒 Tu información privada es *solo tuya*: la abrís con tu PIN, nadie más.\n\n` +
+  `⏱️ *Crear tu Bio-Pass toma menos de 3 minutos*, todo por este chat.\n\n` +
+  `_¿Empezamos? Elegí tu idioma:_\n` +
+  `*[1]* Español 🇪🇸  ·  *[2]* Guaraní 🇵🇾  ·  *[3]* Português 🇧🇷  ·  *[4]* English 🇬🇧`;
+
+/** Pedido de "más información / ¿qué es? / ¿cómo funciona?" (texto ya normalizado sin tildes). */
+function wantsBioPassInfo(c: string): boolean {
+  return /\b(informacion|info|saber mas|mas info|conocer|de que (se trata|va)|que es (bio|biopass|bio-?pass)|como funciona|me interesa|contame|contanos|cuentame|quiero saber|explicame|mas informacion)\b/.test(c);
 }
 
 /** Traduce por código de idioma explícito (ES/GN/PT/EN). PT/EN caen a ES si faltan. */
@@ -573,8 +598,13 @@ export class BotStateMachine {
       }
       const c0 = norm(cleanText);
       const isLangChoice0 = c0 === '1' || c0 === '2' || c0 === '3' || c0 === '4' || /espanol|guarani|portug|brasil|ingles|english/.test(c0);
+      // "deseo más información" / "¿qué es Bio-Pass?" (ej. el botón de WhatsApp de la web):
+      // respuesta cálida y simple, sin jerga técnica.
+      if (!isLangChoice0 && wantsBioPassInfo(c0)) {
+        return { replyText: BIOPASS_PRESENTACION };
+      }
       if (!isLangChoice0 && !isSmallTalk(cleanText) && cleanText.trim().length >= 4) {
-        const ai = await askNiro(cleanText, { scope: 'PRE_REGISTRO' });
+        const ai = await askNiro(cleanText, { scope: 'PRE_REGISTRO', lang: 'es' });
         if (ai) {
           return {
             replyText:
@@ -1073,8 +1103,12 @@ export class BotStateMachine {
             `*[1]* Español 🇪🇸\n*[2]* Guaraní 🇵🇾\n*[3]* Português 🇧🇷\n*[4]* English 🇬🇧`,
         };
       }
+      // "¿Qué es Bio-Pass?" / "deseo más información": respuesta cálida y simple (sin jerga).
+      if (!isLangChoice && wantsBioPassInfo(c)) {
+        return { replyText: BIOPASS_PRESENTACION };
+      }
       if (!isLangChoice && !isSmallTalk(cleanText) && cleanText.trim().length >= 4) {
-        const ai = await askNiro(cleanText, { scope: 'PRE_REGISTRO' });
+        const ai = await askNiro(cleanText, { scope: 'PRE_REGISTRO', lang });
         if (ai) {
           return {
             replyText:
@@ -3787,7 +3821,7 @@ export class BotStateMachine {
             case 'OTHER': {
               if (hardPending) break;
               await leaveSoftMode();
-              const ai = await askNiro(cleanText, { name: user.fullName || undefined, scope: 'MIEMBRO_ACTIVO' });
+              const ai = await askNiro(cleanText, { name: user.fullName || undefined, scope: 'MIEMBRO_ACTIVO', lang });
               if (ai) return { replyText: ai + tr('\n\n_Escribí *MENU* para ver las opciones._', '\n\n_Ehai *MENU*._') };
               return { replyText: activeMenu() };
             }
@@ -5877,7 +5911,7 @@ export class BotStateMachine {
       }
 
       {
-        const ai = await askNiro(cleanText, { name: user.fullName || undefined, scope: 'MIEMBRO_ACTIVO' });
+        const ai = await askNiro(cleanText, { name: user.fullName || undefined, scope: 'MIEMBRO_ACTIVO', lang });
         if (ai) return { replyText: ai + '\n\n_Escribí *MENU* para ver las opciones._' };
       }
 
