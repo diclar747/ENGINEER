@@ -166,9 +166,9 @@ export const config = {
         FINE: 0,
       },
       BR: {
-        MONTHLY: 15,    // R$ 15 / mes (Pix)
-        ANNUAL: 150,    // R$ 150 / 12 meses
-        FINE: 0,
+        MONTHLY: 14,    // R$ 14 / mes (Pix)
+        ANNUAL: 140,    // R$ 140 / 12 meses
+        FINE: 50,       // R$ 50 de multa (valor de referencia; aún no se cobra automáticamente)
       },
       USA: {
         MONTHLY: 2.6,   // U$ 2,60 / mes
