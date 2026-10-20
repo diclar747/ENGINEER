@@ -646,6 +646,37 @@ export class BotStateMachine {
       invitedBy = await ReferralService.attach(user.id, ReferralService.findCode(cleanText)).catch(() => null);
     }
 
+    // Meta-pregunta "¿estoy registrado?" / "¿tengo cuenta?" en CUALQUIER momento
+    // (incluso a mitad del registro): se contesta con el estado real, sin consumir el
+    // paso en curso. Antes, estando en un paso del registro (ej. subir cédula), esta
+    // pregunta se tomaba como dato y respondía "no pude leer tu cédula".
+    if (
+      !msg.mediaBuffer &&
+      cleanText &&
+      norm(cleanText).split(/\s+/).length <= 10 &&
+      /(\b(estoy|estas|ya\s+estoy|ya\s+estas)\s+(registrad|inscrit))|tengo\s+(una\s+)?cuenta|ya\s+(soy|estoy)\s+(socio|miembr|usuari|registrad)|si\s+estoy\s+registrad|estoy\s+registrad/.test(norm(cleanText))
+    ) {
+      const activeM = user.status === 'ACTIVE';
+      const inactive = user.status === 'EXPIRED' || user.status === 'CANCELLED' || user.status === 'PAUSED';
+      const ph = user.phoneNumber || '';
+      return {
+        replyText: activeM
+          ? tr(
+              `✅ *Sí, ya estás registrado.*\nEl número *${ph}* tiene una cuenta *ACTIVA* en Bio-Pass.\n\nIngresá en *bio-pass.cnid.com.py* con tu número y tu PIN. Escribí *MENU* para ver las opciones.`,
+              `✅ *Heẽ, reĩma registrado.* Pe número *${ph}* oguereko cuenta *ACTIVA*.`
+            )
+          : inactive
+            ? tr(
+                `📋 El número *${ph}* ya está registrado, pero la cuenta está *${user.status === 'PAUSED' ? 'EN PAUSA' : 'VENCIDA/INACTIVA'}*.\nEscribí *RENOVAR* para reactivarla.`,
+                `📋 Pe número *${ph}* oĩma registrado, ha cuenta ndoikovéima.`
+              )
+            : tr(
+                `📝 *Todavía no terminaste el registro.*\nEl número *${ph}* ya está empezado, pero falta completarlo (toma menos de 3 minutos). Seguí respondiendo acá para terminar — o escribí *2* para empezar de nuevo.`,
+                `📝 *Nerefinalizái gueteri ne registro.* Pe número *${ph}* oñepyrũma, péro ndaikatúi gueteri.`
+              ),
+      };
+    }
+
     // Comprobante de una transferencia / alias: se guarda en la orden pendiente y
     // se avisa a cobranzas. No activa solo: lo confirma una persona.
     const receiveProof = async (buffer: Buffer, filename?: string, mime?: string): Promise<BotResponse> => {
