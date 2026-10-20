@@ -3912,7 +3912,9 @@ export class BotStateMachine {
       // Consultas en lenguaje natural sobre medicación / turnos ("¿a qué hora tomo X?",
       // "¿qué estoy tomando?", "¿cuál es mi próxima toma?", "ya tomé", "¿mi próximo turno?").
       // Funciona en cualquier momento MENOS mientras se está completando un diálogo guiado.
-      if (!subMode.startsWith('ACTIVE_REMIND_') && !msg.mediaBuffer) {
+      // "perfil"/"ficha médica" es un pedido de VER el perfil (opción 4), no una consulta
+      // de citas/medicación: answerQuery tomaba el "médico" de "perfil médico" como turno.
+      if (!subMode.startsWith('ACTIVE_REMIND_') && !msg.mediaBuffer && !/\b(perfil|ficha)\b/.test(norm(cleanText))) {
         const answer = await MedicationReminderService.answerQuery(user.id, cleanText, lang);
         if (answer) return { replyText: answer };
       }
