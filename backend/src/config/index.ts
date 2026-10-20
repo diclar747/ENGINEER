@@ -157,8 +157,8 @@ export const config = {
     brasilPixKey: process.env.BRASIL_PIX_KEY || 'financeiro@bio-pass.com',
     usaPaypal: process.env.USA_PAYPAL || 'pay@bio-pass.cnid.com.py',
     usaZelle: process.env.USA_ZELLE || '',
-    // Paraguay en guaraníes. Brasil, resto de Sudamérica y EE.UU. en dólares.
-    // El plan anual cobra 10 meses (12 por el precio de 10).
+    // Paraguay en guaraníes. Brasil en reales (Pix / Mercado Pago). Resto de
+    // Sudamérica y EE.UU. en dólares. El plan anual cobra 10 meses (12 por 10).
     planPrices: {
       PY: {
         MONTHLY: 15000, // Gs. 15.000 / mes
@@ -166,8 +166,8 @@ export const config = {
         FINE: 0,
       },
       BR: {
-        MONTHLY: 2.6,   // U$ 2,60 / mes
-        ANNUAL: 26,     // U$ 26 / 12 meses
+        MONTHLY: 15,    // R$ 15 / mes (Pix)
+        ANNUAL: 150,    // R$ 150 / 12 meses
         FINE: 0,
       },
       USA: {
@@ -176,5 +176,14 @@ export const config = {
         FINE: 0,
       },
     },
+  },
+
+  // Promo de lanzamiento: los usuarios nuevos que se registran hasta esta fecha
+  // (inclusive) se activan GRATIS, con vigencia hasta la misma fecha. El día
+  // siguiente entran al flujo de cobranza normal. Editable sin redeploy desde
+  // /admin (AppSetting `promo.free_until`, YYYY-MM-DD) o con FREE_PROMO_UNTIL.
+  // Vaciá FREE_PROMO_UNTIL (o poné una fecha pasada) para apagar la promo.
+  promo: {
+    freeUntil: process.env.FREE_PROMO_UNTIL === undefined ? '2026-11-30' : process.env.FREE_PROMO_UNTIL.trim(),
   },
 };

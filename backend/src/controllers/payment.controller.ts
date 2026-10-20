@@ -1,7 +1,7 @@
 import crypto from 'crypto';
 import { Request, Response } from 'express';
 import { AuthenticatedRequest } from '../security/jwt';
-import { PaymentService, fmtGs, fmtUsd } from '../services/payment.service';
+import { PaymentService, fmtGs, fmtUsd, fmtBrl } from '../services/payment.service';
 import { BancardService } from '../services/bancard.service';
 import { PixService } from '../services/pix.service';
 import { prisma } from '../database/prisma';
@@ -73,6 +73,7 @@ export class PaymentController {
     const methods = await PaymentService.getPaymentMethods();
     const gs = fmtGs;
     const us = fmtUsd;
+    const br = fmtBrl;
     res.json({
       paraguay: {
         currency: 'PYG',
@@ -85,14 +86,14 @@ export class PaymentController {
         methods: ['Bancard · Tarjeta de crédito / débito / QR', `Transferencia al Alias ${methods.py.alias}`],
       },
       brasil: {
-        currency: 'USD',
-        gateway: 'BANK_TRANSFER',
+        currency: 'BRL',
+        gateway: config.pix.psp === 'mercadopago' && config.pix.mercadopagoToken ? 'MERCADOPAGO' : 'PIX',
         plans: {
-          monthly: { name: 'Plano Mensal', amount: p.BR.MONTHLY, formatted: us(p.BR.MONTHLY) },
-          annual: { name: 'Plano Anual', amount: p.BR.ANNUAL, formatted: us(p.BR.ANNUAL) },
-          fine: { name: 'Multa de Reativação', amount: p.BR.FINE, formatted: us(p.BR.FINE) },
+          monthly: { name: 'Plano Mensal', amount: p.BR.MONTHLY, formatted: br(p.BR.MONTHLY) },
+          annual: { name: 'Plano Anual', amount: p.BR.ANNUAL, formatted: br(p.BR.ANNUAL) },
+          fine: { name: 'Multa de Reativação', amount: p.BR.FINE, formatted: br(p.BR.FINE) },
         },
-        methods: ['PayPal', 'Zelle'],
+        methods: ['Pix (QR · copia e cola)'],
       },
       usa: {
         currency: 'USD',

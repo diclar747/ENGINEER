@@ -56,7 +56,9 @@ export const Payments: React.FC = () => {
   const isUSA = country === 'USA';
   const fb = isPY
     ? { annual: 'Gs. 150.000', monthly: 'Gs. 15.000', methods: ['Bancard · Tarjeta de crédito / débito / QR', 'Transferencia al Alias 363220'] }
-    : { annual: 'U$ 26.00', monthly: 'U$ 2.60', methods: ['PayPal', 'Zelle'] };
+    : isUSA
+      ? { annual: 'U$ 26.00', monthly: 'U$ 2.60', methods: ['PayPal', 'Zelle'] }
+      : { annual: 'R$ 150,00', monthly: 'R$ 15,00', methods: ['Pix (QR · copia e cola)'] };
   const plans = {
     flag: isPY ? '🇵🇾' : isUSA ? '🇺🇸' : '🇧🇷',
     annual: `${cc?.plans?.annual?.formatted || fb.annual} / ${isPY ? 'año' : isUSA ? 'year' : 'ano'}`,
@@ -73,7 +75,7 @@ export const Payments: React.FC = () => {
           <span>Suscripción y Pagos Bio-Pass</span>
         </h1>
         <p className="text-xs sm:text-sm text-fg-muted mt-1">
-          Paraguay: Bancard o transferencia por Alias. Brasil, resto de Sudamérica y EE.UU.: en dólares.
+          Paraguay: Bancard o transferencia por Alias. Brasil: Pix (QR). Resto de Sudamérica y EE.UU.: en dólares.
         </p>
       </div>
 

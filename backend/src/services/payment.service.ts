@@ -7,6 +7,7 @@ import { EmailService } from './email.service';
 import { StorageService } from '../storage/storage.service';
 import { ReferralService } from './referral.service';
 import { BancardService } from './bancard.service';
+import { PixService } from './pix.service';
 
 export interface CreateOrderParams {
   userId: string;
@@ -26,7 +27,7 @@ interface PlanPriceTable {
 
 /** Formatea el monto en la moneda del país. */
 function formatAmount(country: CreateOrderParams['country'], amount: number): string {
-  return country === 'PARAGUAY' ? fmtGs(amount) : fmtUsd(amount);
+  return country === 'PARAGUAY' ? fmtGs(amount) : country === 'BRASIL' ? fmtBrl(amount) : fmtUsd(amount);
 }
 
 /** Gs. con separador de miles fijo (no depende del ICU del contenedor). */
@@ -36,8 +37,11 @@ export function fmtGs(n: number): string {
 export function fmtUsd(n: number): string {
   return `U$ ${n.toFixed(2)}`;
 }
+export function fmtBrl(n: number): string {
+  return `R$ ${n.toFixed(2).replace('.', ',')}`;
+}
 export function fmtMoney(currency: string, n: number): string {
-  return currency === 'PYG' ? fmtGs(n) : fmtUsd(n);
+  return currency === 'PYG' ? fmtGs(n) : currency === 'BRL' ? fmtBrl(n) : fmtUsd(n);
 }
 
 /**
@@ -153,7 +157,8 @@ export class PaymentService {
       return (
         `💰 *Preços do Bio-Pass*\n\n` +
         `🇵🇾 *Paraguai:* ${fmtGs(p.PY.MONTHLY)} por mês, ou ${fmtGs(p.PY.ANNUAL)} por 12 meses.\n` +
-        `🌎 *Brasil, resto da América do Sul e EUA:* ${fmtUsd(p.USA.MONTHLY)} por mês, ou ${fmtUsd(p.USA.ANNUAL)} por 12 meses.\n\n` +
+        `🇧🇷 *Brasil:* ${fmtBrl(p.BR.MONTHLY)} por mês, ou ${fmtBrl(p.BR.ANNUAL)} por 12 meses (Pix).\n` +
+        `🌎 *Resto da América do Sul e EUA:* ${fmtUsd(p.USA.MONTHLY)} por mês, ou ${fmtUsd(p.USA.ANNUAL)} por 12 meses.\n\n` +
         `_No plano anual você paga 10 meses e usa 12._`
       );
     }
@@ -161,14 +166,16 @@ export class PaymentService {
       return (
         `💰 *Bio-Pass pricing*\n\n` +
         `🇵🇾 *Paraguay:* ${fmtGs(p.PY.MONTHLY)} per month, or ${fmtGs(p.PY.ANNUAL)} for 12 months.\n` +
-        `🌎 *Brazil, rest of South America and USA:* ${fmtUsd(p.USA.MONTHLY)} per month, or ${fmtUsd(p.USA.ANNUAL)} for 12 months.\n\n` +
+        `🇧🇷 *Brazil:* ${fmtBrl(p.BR.MONTHLY)} per month, or ${fmtBrl(p.BR.ANNUAL)} for 12 months (Pix).\n` +
+        `🌎 *Rest of South America and USA:* ${fmtUsd(p.USA.MONTHLY)} per month, or ${fmtUsd(p.USA.ANNUAL)} for 12 months.\n\n` +
         `_The annual plan charges 10 months for 12._`
       );
     }
     return (
       `💰 *Precios de Bio-Pass*\n\n` +
       `🇵🇾 *Paraguay:* ${fmtGs(p.PY.MONTHLY)} por mes, o ${fmtGs(p.PY.ANNUAL)} por 12 meses.\n` +
-      `🌎 *Brasil, resto de Sudamérica y EE.UU.:* ${fmtUsd(p.USA.MONTHLY)} por mes, o ${fmtUsd(p.USA.ANNUAL)} por 12 meses.\n\n` +
+      `🇧🇷 *Brasil:* ${fmtBrl(p.BR.MONTHLY)} por mes, o ${fmtBrl(p.BR.ANNUAL)} por 12 meses (Pix).\n` +
+      `🌎 *Resto de Sudamérica y EE.UU.:* ${fmtUsd(p.USA.MONTHLY)} por mes, o ${fmtUsd(p.USA.ANNUAL)} por 12 meses.\n\n` +
       `_En el plan anual pagás 10 meses y usás 12._\n` +
       `🎁 _Promo: traé un cliente y ganás 1 mes gratis._`
     );
@@ -245,9 +252,26 @@ export class PaymentService {
   }
 
   /** Bloque de texto "cómo pagar" que usan los avisos de cobranza y el bot. */
-  public static payBlock(order: { country: string; formattedAmount: string; referenceCode: string; paymentLink: string; aliasInfo?: string | null }, lang: string = 'es'): string {
+  public static payBlock(order: { country: string; formattedAmount: string; referenceCode: string; paymentLink: string; aliasInfo?: string | null; pixPayload?: string | null }, lang: string = 'es'): string {
     const l = (lang || 'es').toLowerCase();
     const alias = (order.aliasInfo || '').trim();
+    // Brasil con Pix: mostramos el "copia e cola" directo en el chat + el link al QR.
+    const pix = (order.country === 'BRASIL' && order.pixPayload ? order.pixPayload.trim() : '');
+    if (pix) {
+      const header =
+        l === 'pt'
+          ? `💰 *Valor:* ${order.formattedAmount}\n\n📲 *Pague com Pix* (copie o código e cole no app do seu banco):\n`
+          : l === 'en'
+            ? `💰 *Amount:* ${order.formattedAmount}\n\n📲 *Pay with Pix* (copy the code and paste it in your bank app):\n`
+            : `💰 *Monto:* ${order.formattedAmount}\n\n📲 *Pagá con Pix* (copiá el código y pegalo en tu app del banco):\n`;
+      const footer =
+        l === 'pt'
+          ? `\n\n🔳 *Ou escaneie o QR aqui:*\n${order.paymentLink}\n\n✅ _A ativação é automática assim que o Pix for confirmado._`
+          : l === 'en'
+            ? `\n\n🔳 *Or scan the QR here:*\n${order.paymentLink}\n\n✅ _Activation is automatic as soon as the Pix clears._`
+            : `\n\n🔳 *O escaneá el QR acá:*\n${order.paymentLink}\n\n✅ _La activación es automática apenas se acredita el Pix._`;
+      return `${header}\`\`\`${pix}\`\`\`${footer}`;
+    }
     if (order.country === 'PARAGUAY') {
       return (
         `💰 *Monto:* ${order.formattedAmount}\n\n` +
@@ -341,9 +365,9 @@ export class PaymentService {
     if (!user) throw new Error('User not found');
 
     const isPY = params.country === 'PARAGUAY';
-    // Todo lo que no es Paraguay (Brasil, resto de Sudamérica, EE.UU.) cobra en dólares.
-    const isUSA = !isPY;
-    const currency = isPY ? 'PYG' : 'USD';
+    const isBR = params.country === 'BRASIL';
+    // Paraguay en guaraníes; Brasil en reales (Pix / Mercado Pago); resto en dólares.
+    const currency = isPY ? 'PYG' : isBR ? 'BRL' : 'USD';
     // Precios editables desde el panel admin (AppSetting price.*), con fallback al config/env.
     const prices = await PaymentService.getPlanPrices();
     const P = isPY ? prices.PY : params.country === 'BRASIL' ? prices.BR : prices.USA;
@@ -373,16 +397,37 @@ export class PaymentService {
 
     const checkoutLink = `${config.frontendUrl}/checkout?ref=${referenceCode}`;
     let aliasInfo: string | undefined;
-    const pixPayload: string | undefined = undefined;
-    const pixQrImage: string | undefined = undefined;
+    let pixPayload: string | undefined = undefined;
+    let pixQrImage: string | undefined = undefined;
     let gatewayRef: string | undefined;
     let gateway: 'MERCADOPAGO' | 'PIX' | 'BANCARD' | 'BANK_TRANSFER' = 'BANK_TRANSFER';
     let paymentMethod = isPY ? 'ALIAS / TRANSFERENCIA' : 'PAYPAL / ZELLE';
     let externalRedirect: string | undefined;
-    const orderExpiry: Date | undefined = undefined;
+    let orderExpiry: Date | undefined = undefined;
 
     const methods = await PaymentService.getPaymentMethods();
     aliasInfo = await PaymentService.manualInstructions(params.country, referenceCode);
+    if (isBR) {
+      // Brasil cobra con Pix (Mercado Pago cuando PIX_PSP=mercadopago + token; si no, BR Code
+      // estático válido). Genera el QR + "copia e cola" que muestra la página /checkout y el bot.
+      // Un fallo del PSP NO rompe la orden: cae a instrucciones manuales (PayPal/Zelle/alias Pix).
+      try {
+        const charge = await PixService.createCharge({
+          amountBRL: baseAmount,
+          txid: referenceCode.replace(/[^A-Za-z0-9]/g, '').slice(0, 25),
+          description: `Bio-Pass ${params.plan}`,
+          payerEmail: user.email || undefined,
+        });
+        pixPayload = charge.payload;
+        pixQrImage = charge.qrImage;
+        gatewayRef = charge.gatewayRef;
+        orderExpiry = charge.expiresAt;
+        gateway = charge.provider === 'mercadopago' ? 'MERCADOPAGO' : 'PIX';
+        paymentMethod = charge.provider === 'mercadopago' ? 'Pix · Mercado Pago (QR)' : 'Pix (QR)';
+      } catch (err: any) {
+        console.error('[payment] no se pudo generar el cobro Pix de Brasil, cae a manual:', err?.message || err);
+      }
+    }
     if (isPY) {
       // Bancard vPOS es el procesador de Paraguay (reemplaza el portal winsap.com.py). El cliente
       // paga con tarjeta o QR en la pantalla alojada de Bancard; el webhook activa la cuenta.
@@ -520,10 +565,30 @@ export class PaymentService {
     const checkoutLink = `${config.frontendUrl}/checkout?ref=${referenceCode}`;
     const aliasInfo = await PaymentService.manualInstructions(country, referenceCode);
 
-    let gateway: 'BANCARD' | 'BANK_TRANSFER' = 'BANK_TRANSFER';
+    let gateway: 'MERCADOPAGO' | 'PIX' | 'BANCARD' | 'BANK_TRANSFER' = 'BANK_TRANSFER';
     let paymentMethod = country === 'PARAGUAY' ? 'ALIAS / TRANSFERENCIA' : 'PAYPAL / ZELLE';
     let gatewayRef: string | undefined;
     let externalRedirect: string | undefined;
+    let pixPayload: string | undefined;
+    let pixQrImage: string | undefined;
+
+    if (country === 'BRASIL') {
+      // Consulta médica en Brasil: cobro Pix (mismo mecanismo que la suscripción).
+      try {
+        const charge = await PixService.createCharge({
+          amountBRL: cost,
+          txid: referenceCode.replace(/[^A-Za-z0-9]/g, '').slice(0, 25),
+          description: `Consulta ${doctor.fullName}`.slice(0, 50),
+        });
+        pixPayload = charge.payload;
+        pixQrImage = charge.qrImage;
+        gatewayRef = charge.gatewayRef;
+        gateway = charge.provider === 'mercadopago' ? 'MERCADOPAGO' : 'PIX';
+        paymentMethod = charge.provider === 'mercadopago' ? 'Pix · Mercado Pago (QR)' : 'Pix (QR)';
+      } catch (err: any) {
+        console.error('[payment] consulta BR: no se pudo generar el Pix, cae a manual:', err?.message || err);
+      }
+    }
 
     if (country === 'PARAGUAY' && BancardService.enabled) {
       const checkout = await BancardService.createCheckout({
@@ -552,6 +617,8 @@ export class PaymentService {
         status: 'PENDING',
         aliasInfo,
         gatewayRef,
+        pixPayload,
+        pixQrImage,
         bancardProcessIds: gateway === 'BANCARD' ? JSON.stringify([shopProcessId]) : null,
         paymentLink: externalRedirect || checkoutLink,
       },
@@ -559,10 +626,11 @@ export class PaymentService {
 
     return PaymentService.payBlock({
       country,
-      formattedAmount: fmtMoney(currency === 'PYG' ? 'PYG' : 'USD', cost),
+      formattedAmount: fmtMoney(currency === 'BRL' ? 'BRL' : currency === 'USD' ? 'USD' : 'PYG', cost),
       referenceCode,
       paymentLink: checkoutLink,
       aliasInfo,
+      pixPayload,
     });
   }
 
@@ -731,5 +799,134 @@ export class PaymentService {
       data: { status: 'ACTIVE', ...(opts.retention === false ? {} : { retentionOfferUsedAt: new Date() }) },
     });
     return base;
+  }
+
+  /**
+   * Fin de la promo de lanzamiento (fin del día, zona del negocio). Editable sin
+   * redeploy desde AppSetting `promo.free_until` (YYYY-MM-DD); fallback env/config.
+   */
+  public static async freePromoUntil(): Promise<Date | null> {
+    let raw = config.promo.freeUntil;
+    try {
+      const row = await prisma.appSetting.findFirst({ where: { key: 'promo.free_until' } });
+      if (row?.value && /^\d{4}-\d{2}-\d{2}$/.test(row.value.trim())) raw = row.value.trim();
+    } catch {
+      /* usa fallback */
+    }
+    if (!raw || !/^\d{4}-\d{2}-\d{2}$/.test(raw)) return null; // promo apagada
+    const d = new Date(`${raw}T23:59:59`);
+    return Number.isNaN(d.getTime()) ? null : d;
+  }
+
+  /** ¿Estamos dentro de la ventana de la promo de lanzamiento (activación gratis)? */
+  public static async freePromoActive(): Promise<boolean> {
+    const until = await PaymentService.freePromoUntil();
+    return !!until && Date.now() <= until.getTime();
+  }
+
+  /**
+   * Activación GRATIS de la promo de lanzamiento: deja la cuenta ACTIVA sin cobro,
+   * con vigencia hasta el fin de la promo. Al vencer, `getRenewalOrder` cobra el
+   * precio real (no el 0 de la promo), así que el 1/dic entra al flujo normal de
+   * cobranza. Genera y manda el QR + Kit de Stickers, igual que un pago confirmado.
+   * Devuelve la fecha de vigencia y el texto de bienvenida (que el bot usa como respuesta).
+   */
+  public static async activateFreePromo(
+    userId: string,
+    country: CreateOrderParams['country'] = 'PARAGUAY',
+    lang: string = 'es'
+  ): Promise<{ until: Date; welcomeText: string }> {
+    const until = (await PaymentService.freePromoUntil()) || addPlanPeriod(new Date(), 'MONTHLY');
+    const currency = country === 'PARAGUAY' ? 'PYG' : country === 'BRASIL' ? 'BRL' : 'USD';
+
+    const existing = await PaymentService.currentSubscription(userId);
+    if (existing) {
+      await prisma.subscription.update({
+        where: { id: existing.id },
+        data: {
+          status: 'ACTIVE',
+          amount: 0,
+          country,
+          currency,
+          expiryDate: until,
+          finePending: false,
+          fineAmount: 0,
+          lastNotification: 'NONE',
+        },
+      });
+    } else {
+      await prisma.subscription.create({
+        data: { userId, plan: 'MONTHLY', country, currency, amount: 0, status: 'ACTIVE', expiryDate: until, lastNotification: 'NONE' },
+      });
+    }
+
+    const user = await prisma.user.update({
+      where: { id: userId },
+      data: { status: 'ACTIVE', onboardingState: 'ACTIVE_MEMBER' },
+      include: { organization: true },
+    });
+
+    const emergencyUrl = `${config.publicEmergencyBaseUrl}/${user.emergencyToken}`;
+    const destino = user.whatsappJid || user.phoneNumber;
+    const l = (lang || 'es').toLowerCase();
+    const localeTag = l === 'pt' ? 'pt-BR' : l === 'en' ? 'en-US' : 'es-PY';
+    const hasta = until.toLocaleDateString(localeTag, { timeZone: config.timezone, day: '2-digit', month: '2-digit', year: 'numeric' });
+
+    PushService.sendToUser(user.id, {
+      title: l === 'pt' ? '🎉 Bio-Pass ativo (grátis)' : l === 'en' ? '🎉 Bio-Pass active (free)' : '🎉 Bio-Pass activo (gratis)',
+      body:
+        l === 'pt'
+          ? `Seu Bio-Pass está ativo grátis até ${hasta}.`
+          : l === 'en'
+            ? `Your Bio-Pass is active for free until ${hasta}.`
+            : `Tu Bio-Pass está activo gratis hasta el ${hasta}.`,
+      tag: 'biopass-payment',
+      url: '/dashboard',
+    }).catch(() => {});
+
+    const welcomeText =
+      l === 'pt'
+        ? `🎉 *BIO-PASS ATIVADO — GRÁTIS!*\n\n` +
+          `Bem-vindo ao *Doorway Cortex Bio-Pass*, ${user.fullName || ''}.\n\n` +
+          `🎁 Pela *promoção de lançamento*, sua conta fica *100% grátis até ${hasta}*.\n` +
+          `✅ Seu código de emergência já está ativo.\n` +
+          `🌐 *Seu link público:* ${emergencyUrl}\n\n` +
+          `📄 *Seu Kit de Stickers (3x3 cm) vai aqui embaixo.*\n\n` +
+          `🔔 Ative as notificações: ${config.frontendUrl}/push/${user.emergencyToken}\n\n` +
+          `⚙️ Escreva *MENU* para ver todas as opções.`
+        : l === 'en'
+          ? `🎉 *BIO-PASS ACTIVATED — FREE!*\n\n` +
+            `Welcome to *Doorway Cortex Bio-Pass*, ${user.fullName || ''}.\n\n` +
+            `🎁 With the *launch promo*, your account is *100% free until ${hasta}*.\n` +
+            `✅ Your emergency code is now active.\n` +
+            `🌐 *Your public link:* ${emergencyUrl}\n\n` +
+            `📄 *Your Sticker Kit (3x3 cm) is attached below.*\n\n` +
+            `🔔 Enable notifications: ${config.frontendUrl}/push/${user.emergencyToken}\n\n` +
+            `⚙️ Type *MENU* to see all your options.`
+          : `🎉 *¡BIO-PASS ACTIVADO — GRATIS!*\n\n` +
+            `Bienvenido a *Doorway Cortex Bio-Pass*, ${user.fullName || ''}.\n\n` +
+            `🎁 Por la *promo de lanzamiento*, tu cuenta queda *100% gratis hasta el ${hasta}*.\n` +
+            `✅ Tu código de emergencia ya está activo.\n` +
+            `🌐 *Tu enlace público:* ${emergencyUrl}\n\n` +
+            `📄 *Tu Kit de Stickers (3x3 cm) va acá abajo, como archivo.*\n\n` +
+            `🔔 Activá notificaciones push: ${config.frontendUrl}/push/${user.emergencyToken}\n\n` +
+            `⚙️ Escribí *MENU* para ver todas tus opciones.`;
+
+    try {
+      const sticker = await QrPdfService.generateStickerPdf({
+        emergencyToken: user.emergencyToken,
+        userName: user.fullName || 'Usuario Bio-Pass',
+        bloodType: user.bloodType || 'RH Registrado',
+        organizationName: user.organization?.name,
+        organizationLogoUrl: user.organization?.logoUrl || undefined,
+      });
+      await whatsappBot
+        .sendDocument(destino, sticker.pdfBuffer, `Bio-Pass stickers ${user.fullName || ''}`.trim() + '.pdf', 'application/pdf', 'Kit de stickers 3x3 cm y QR')
+        .catch((e) => console.error('[promo] no se pudo mandar el PDF de stickers:', e?.message || e));
+    } catch (e: any) {
+      console.error('[promo] no se pudo generar el Kit de Stickers:', e?.message || e);
+    }
+
+    return { until, welcomeText };
   }
 }

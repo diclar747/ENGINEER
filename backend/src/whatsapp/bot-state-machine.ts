@@ -2,7 +2,7 @@ import path from 'path';
 import { prisma } from '../database/prisma';
 import { ZeroKnowledgeSecurity } from '../security/zero-knowledge';
 import { OcrAiService } from '../services/ocr-ai.service';
-import { PaymentService, fmtGs, fmtUsd } from '../services/payment.service';
+import { PaymentService, fmtGs, fmtUsd, fmtBrl } from '../services/payment.service';
 import { ReferralService } from '../services/referral.service';
 import { AccountPurgeService } from '../services/account-purge.service';
 import { BancardService } from '../services/bancard.service';
@@ -1830,16 +1830,24 @@ export class BotStateMachine {
       };
     }
 
-    // Menú de planes: Paraguay en guaraníes; Brasil, resto de Sudamérica y EE.UU. en dólares.
+    // Menú de planes: Paraguay en guaraníes; Brasil en reales (Pix) para quien elige portugués;
+    // resto de Sudamérica y EE.UU. en dólares. El [3]/[4] se cobra según el idioma elegido:
+    // portugués → Brasil (BRL/Pix), cualquier otro → USA (USD/PayPal-Zelle).
     const planMenu = async (): Promise<string> => {
       const pr = await PaymentService.getPlanPrices();
+      const isBrasil = lang === 'pt';
+      const intlTitle = isBrasil
+        ? tr('Brasil', 'Brasil', 'Brasil', 'Brazil')
+        : tr('Resto de Sudamérica y EE.UU.', 'Sudamérica ha EE.UU.', 'Resto da América do Sul e EUA', 'Rest of South America and USA');
+      const intlMonthly = isBrasil ? fmtBrl(pr.BR.MONTHLY) : fmtUsd(pr.USA.MONTHLY);
+      const intlAnnual = isBrasil ? fmtBrl(pr.BR.ANNUAL) : fmtUsd(pr.USA.ANNUAL);
       return (
         `🇵🇾 *Paraguay:*\n` +
         `*[1]* ${tr('Plan Mensual', 'Plan Mensual', 'Plano Mensal', 'Monthly Plan')} — ${fmtGs(pr.PY.MONTHLY)}\n` +
         `*[2]* ${tr('Plan Anual', 'Plan Anual', 'Plano Anual', 'Annual Plan')} — ${fmtGs(pr.PY.ANNUAL)} ${tr('(12 meses, pagás 10)', '(12 meses)', '(12 meses, paga 10)', '(12 months, pay 10)')}\n\n` +
-        `🌎 *${tr('Brasil, resto de Sudamérica y EE.UU.', 'Brasil, Sudamérica ha EE.UU.', 'Brasil, resto da América do Sul e EUA', 'Brazil, rest of South America and USA')}:*\n` +
-        `*[3]* ${tr('Plan Mensual', 'Plan Mensual', 'Plano Mensal', 'Monthly Plan')} — ${fmtUsd(pr.USA.MONTHLY)}\n` +
-        `*[4]* ${tr('Plan Anual', 'Plan Anual', 'Plano Anual', 'Annual Plan')} — ${fmtUsd(pr.USA.ANNUAL)} ${tr('(12 meses)', '(12 meses)', '(12 meses)', '(12 months)')}\n\n`
+        `${isBrasil ? '🇧🇷' : '🌎'} *${intlTitle}:*\n` +
+        `*[3]* ${tr('Plan Mensual', 'Plan Mensual', 'Plano Mensal', 'Monthly Plan')} — ${intlMonthly}${isBrasil ? ' (Pix)' : ''}\n` +
+        `*[4]* ${tr('Plan Anual', 'Plan Anual', 'Plano Anual', 'Annual Plan')} — ${intlAnnual} ${tr('(12 meses)', '(12 meses)', '(12 meses)', '(12 months)')}\n\n`
       );
     };
 
@@ -1856,6 +1864,14 @@ export class BotStateMachine {
             `Reply *I SAVED MY KEY* once you've written your Recovery Key somewhere safe.`
           ),
         };
+      }
+
+      // Promo de lanzamiento: activación GRATIS (sin pedir pago) hasta la fecha de corte.
+      if (await PaymentService.freePromoActive()) {
+        const promoCountry: 'PARAGUAY' | 'BRASIL' | 'USA' = lang === 'pt' ? 'BRASIL' : lang === 'en' ? 'USA' : 'PARAGUAY';
+        const { welcomeText } = await PaymentService.activateFreePromo(user.id, promoCountry, lang);
+        await updateState('ACTIVE_MEMBER', {});
+        return { replyText: welcomeText };
       }
 
       const menu = await planMenu();
@@ -1889,6 +1905,14 @@ export class BotStateMachine {
 
     // STEP 8: PAYMENT PLAN SELECTION & ORDER GENERATION
     if (state === 'STEP8_PAYMENT') {
+      // Promo de lanzamiento activa: no se cobra, se activa gratis (cubre a quien quedó
+      // parado en este paso antes de que empezara la promo).
+      if (await PaymentService.freePromoActive()) {
+        const promoCountry: 'PARAGUAY' | 'BRASIL' | 'USA' = lang === 'pt' ? 'BRASIL' : lang === 'en' ? 'USA' : 'PARAGUAY';
+        const { welcomeText } = await PaymentService.activateFreePromo(user.id, promoCountry, lang);
+        await updateState('ACTIVE_MEMBER', {});
+        return { replyText: welcomeText };
+      }
       // Comprobante mandado antes de elegir plan: no hay orden todavía.
       const pick = cleanText.replace(/[^0-9]/g, '');
       if (!/^[1-6]$/.test(pick) || cleanText.length > 3) {
@@ -1986,11 +2010,17 @@ export class BotStateMachine {
               `\n\n` +
               PaymentService.payBlock(
                 {
-                  country: lastOrder.currency === 'PYG' ? 'PARAGUAY' : 'USA',
-                  formattedAmount: lastOrder.currency === 'PYG' ? fmtGs(lastOrder.amount) : fmtUsd(lastOrder.amount),
+                  country: lastOrder.currency === 'PYG' ? 'PARAGUAY' : lastOrder.currency === 'BRL' ? 'BRASIL' : 'USA',
+                  formattedAmount:
+                    lastOrder.currency === 'PYG'
+                      ? fmtGs(lastOrder.amount)
+                      : lastOrder.currency === 'BRL'
+                        ? fmtBrl(lastOrder.amount)
+                        : fmtUsd(lastOrder.amount),
                   referenceCode: lastOrder.referenceCode,
                   paymentLink: `${config.frontendUrl}/checkout?ref=${lastOrder.referenceCode}`,
                   aliasInfo: lastOrder.aliasInfo,
+                  pixPayload: lastOrder.pixPayload,
                 },
                 lang
               ),
