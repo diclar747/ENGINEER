@@ -151,6 +151,44 @@ function wantsBioPassInfo(c: string): boolean {
   return /\b(informacion|info|saber mas|mas info|conocer|de que (se trata|va)|que es (bio|biopass|bio-?pass)|como funciona|me interesa|contame|contanos|cuentame|quiero saber|explicame|mas informacion)\b/.test(c);
 }
 
+/**
+ * Detecta un pedido de VER el catálogo: "¿qué especialidades hay?" (→ 'specialties')
+ * o "¿qué doctores/médicos tienen?" / "pasame los doctores" (→ 'doctors'). null si no aplica.
+ * `c` ya viene normalizado (minúsculas, sin tildes). No matchea un pedido de RESERVAR puntual.
+ */
+function catalogListMode(c: string): 'specialties' | 'doctors' | null {
+  const verb = /\b(que|cuale?s?|hay|tienen|ten[eé]s|lista|listar|mostr\w*|ver|pasame|pasar|dame|dispon\w*|conoce\w*|hay\s+alguno?s?)\b/;
+  const askSpec = /\bespecialidad\w*\b/.test(c) && (verb.test(c) || /\bespecialidad\w*\s*\??$/.test(c));
+  const booking = /\b(reservar|turno con|cita con|quiero un|necesito un|con el|con la|agendar)\b/.test(c);
+  const askDocs = /\b(doctor\w*|medico\w*|profesional\w*)\b/.test(c) && verb.test(c) && !booking;
+  if (askSpec) return 'specialties';
+  if (askDocs) return 'doctors';
+  return null;
+}
+
+/** Texto del catálogo de doctores: lista de especialidades, o lista de doctores. null si no hay. */
+async function doctorCatalogText(mode: 'specialties' | 'doctors'): Promise<string | null> {
+  const docs = await DoctorService.findBySpecialty(null);
+  if (!docs.length) return null;
+  const specs = Array.from(new Set(docs.flatMap((d) => DoctorService.parseSpecialties(d.specialties)))).sort((a, b) => a.localeCompare(b, 'es'));
+  if (mode === 'specialties') {
+    return (
+      `🩺 *Especialidades disponibles (${specs.length}):*\n\n` +
+      specs.map((s) => `• ${s}`).join('\n') +
+      `\n\n_Para reservar, decime la especialidad — ej: *"necesito un cardiólogo"* — o escribí *DOCTOR*._`
+    );
+  }
+  const list = docs
+    .slice(0, 25)
+    .map((d, i) => `*${i + 1}.* 🩺 *${d.fullName}* — ${DoctorService.parseSpecialties(d.specialties).join(', ') || '—'} · ${DoctorService.formatMoney(d.consultationCost, d.currency)}`)
+    .join('\n');
+  return (
+    `🩺 *Nuestros doctores (${docs.length}):*\n\n` +
+    list +
+    `\n\n_Para reservar con alguno, escribí *DOCTOR* o la especialidad (ej: "quiero un cardiólogo")._`
+  );
+}
+
 /** Traduce por código de idioma explícito (ES/GN/PT/EN). PT/EN caen a ES si faltan. */
 function trLang(l: string, m: { es: string; gn: string; pt?: string; en?: string }): string {
   switch ((l || 'ES').toUpperCase()) {
@@ -602,6 +640,14 @@ export class BotStateMachine {
       // respuesta cálida y simple, sin jerga técnica.
       if (!isLangChoice0 && wantsBioPassInfo(c0)) {
         return { replyText: BIOPASS_PRESENTACION };
+      }
+      // "¿qué especialidades/doctores hay?" (aún sin registrarse) → mostramos el catálogo.
+      if (!isLangChoice0) {
+        const m0 = catalogListMode(c0);
+        if (m0) {
+          const cat = await doctorCatalogText(m0);
+          if (cat) return { replyText: `${cat}\n\n_Para reservar necesitás registrarte (menos de 3 minutos). Elegí tu idioma:_\n${LANG_MENU0}` };
+        }
       }
       if (!isLangChoice0 && !isSmallTalk(cleanText) && cleanText.trim().length >= 4) {
         const ai = await askNiro(cleanText, { scope: 'PRE_REGISTRO', lang: 'es' });
@@ -3424,6 +3470,15 @@ export class BotStateMachine {
       // cardiólogo", "quiero reservar con un dentista") o es la palabra suelta
       // DOCTOR / RESERVAR. Si nombran un médico que NO está en el catálogo (sin
       // especialidad reconocida), no se toca: lo maneja el flujo de turno libre de siempre.
+      // "¿Qué especialidades hay?" / "pasame los doctores" → listar el catálogo (antes de la IA).
+      if (!hardPending && !msg.mediaBuffer && cleanText) {
+        const mode = catalogListMode(norm(cleanText));
+        if (mode) {
+          const catalog = await doctorCatalogText(mode);
+          if (catalog) { await leaveSoftMode(); return { replyText: catalog }; }
+        }
+      }
+
       if (!hardPending && !msg.mediaBuffer && cleanText) {
         const lo = norm(cleanText);
         // Desde el submenú [6] Citas y turnos, "1" = reservar con un doctor del catálogo.
