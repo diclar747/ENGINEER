@@ -166,6 +166,25 @@ function catalogListMode(c: string): 'specialties' | 'doctors' | null {
   return null;
 }
 
+/** "¿Cómo funciona la reserva?" / "¿cómo saco un turno?" (pregunta informativa, NO iniciar el flujo). */
+function wantsHowToReserve(c: string): boolean {
+  return (
+    /\bcomo\b/.test(c) &&
+    /\b(funciona|reserv\w*|agend\w*|sacar|saco|hago|puedo|hace|se saca|se reserva)\b/.test(c) &&
+    /\b(reserv\w*|turno|cita|doctor\w*|medico\w*|especialidad\w*)\b/.test(c) &&
+    !/\b(mis?|tengo|cuando|cuale?s?|ya tengo)\b/.test(c)
+  );
+}
+
+const COMO_RESERVAR_TEXT =
+  `🩺 *Reservar un turno con un doctor es muy fácil:*\n\n` +
+  `1️⃣ Decime la *especialidad* (ej: _"necesito un cardiólogo"_) o escribí *DOCTOR* para ver la lista.\n` +
+  `2️⃣ Elegís el *doctor* y el *día*.\n` +
+  `3️⃣ Te muestro los *horarios libres* y elegís la hora.\n` +
+  `4️⃣ *Confirmás* ✅. Si el doctor cobra, te paso el *link de pago* (tarjeta o QR por Bancard).\n\n` +
+  `🔔 Después te recuerdo antes de la cita, y el doctor también queda avisado.\n\n` +
+  `_¿Querés reservar ahora? Escribí *DOCTOR* o la especialidad que buscás._`;
+
 /** Texto del catálogo de doctores: lista de especialidades, o lista de doctores. null si no hay. */
 async function doctorCatalogText(mode: 'specialties' | 'doctors'): Promise<string | null> {
   const docs = await DoctorService.findBySpecialty(null);
@@ -3470,6 +3489,12 @@ export class BotStateMachine {
       // cardiólogo", "quiero reservar con un dentista") o es la palabra suelta
       // DOCTOR / RESERVAR. Si nombran un médico que NO está en el catálogo (sin
       // especialidad reconocida), no se toca: lo maneja el flujo de turno libre de siempre.
+      // "¿Cómo funciona la reserva de turno?" → EXPLICAR (no iniciar el flujo pidiendo fecha/hora).
+      if (!hardPending && !msg.mediaBuffer && cleanText && wantsHowToReserve(norm(cleanText))) {
+        await leaveSoftMode();
+        return { replyText: COMO_RESERVAR_TEXT };
+      }
+
       // "¿Qué especialidades hay?" / "pasame los doctores" → listar el catálogo (antes de la IA).
       if (!hardPending && !msg.mediaBuffer && cleanText) {
         const mode = catalogListMode(norm(cleanText));
